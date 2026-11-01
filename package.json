@@ -1,0 +1,9 @@
+{
+  "name": "agenten-probe",
+  "private": true,
+  "description": "Testumgebung für den Ablauf Issue, Agent, Pull Request, Tests, Freigabe. Kein Produktcode.",
+  "scripts": {
+    "test": "node --test",
+    "build": "node --check src/rechne.js"
+  }
+}
