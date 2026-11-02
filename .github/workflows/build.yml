@@ -1,11 +1,12 @@
 name: Build
 
+# Version 2026-11-02-b: kein Überspringen mehr im Entwurf.
 # Gleiche Auslöser und Regeln wie tests.yml (Erklärung dort).
 
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
     paths-ignore: ['**.md']
@@ -19,13 +20,20 @@ permissions:
 
 jobs:
   build:
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Workflow-Version belegen
+        shell: bash
+        run: |
+          echo "Workflow-Version: build.yml 2026-11-02-b"
+          echo "Geprüfter Stand: ${{ github.sha }}"
+          echo "Prüfsumme der ausgeführten Datei:"
+          tr -d '\r' < .github/workflows/build.yml | sha256sum
 
       - name: Nur .md-Dateien geändert?
         id: art
