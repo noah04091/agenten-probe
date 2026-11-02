@@ -2,4 +2,4 @@
 
 Testumgebung für den Ablauf Issue, Agent, Pull Request, Tests, Freigabe.
 
-Hinweis T20: Variante A. Diese Fassung kommt aus dem PR-Branch.
+Hinweis T20: Variante B. Diese Fassung kommt über main.
