@@ -1,0 +1,3 @@
+# agenten-probe
+
+Testumgebung für den Ablauf Issue, Agent, Pull Request, Tests, Freigabe.
