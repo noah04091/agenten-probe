@@ -1,0 +1,65 @@
+name: Tests
+
+# Wann läuft dieser Workflow?
+# - an jedem PR gegen main, sobald er kein Entwurf mehr ist (und bei jedem weiteren Push)
+# - nach jedem Commit auf main, außer reine .md-Änderungen
+#
+# Wichtig zu Pflichtprüfungen:
+# - Ein Entwurf überspringt den Job. GitHub zählt einen übersprungenen Job als bestanden.
+#   Das ist hier ungefährlich, weil GitHub Entwürfe grundsätzlich nicht mergen lässt;
+#   beim Wechsel auf "bereit" startet sofort ein neuer, echter Lauf (Test T4b prüft das).
+# - Die Text-Erkennung ist absichtlich vorsichtig: Kann sie die Änderungen nicht sicher
+#   bestimmen, laufen die Tests. Nur bei nachweislich ausschließlich .md-Dateien entfallen sie.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+
+concurrency:
+  # PR: überholte Läufe abbrechen. main: jeder Commit eigene Gruppe, nichts wird abgebrochen.
+  group: tests-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Nur .md-Dateien geändert?
+        id: art
+        shell: bash
+        run: |
+          set -uo pipefail
+          code=ja
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if dateien=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"); then
+              if [ -n "$dateien" ] && ! printf '%s\n' "$dateien" | grep -qvE '\.md$'; then
+                code=nein
+              fi
+            else
+              echo "Änderungen nicht bestimmbar, Tests laufen sicherheitshalber."
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Tests laufen: $code"
+
+      - uses: actions/setup-node@v4
+        if: steps.art.outputs.code == 'ja'
+        with:
+          node-version: 20
+
+      - name: Tests
+        if: steps.art.outputs.code == 'ja'
+        run: npm test
