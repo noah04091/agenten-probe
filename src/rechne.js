@@ -7,7 +7,11 @@ function subtrahiere(a, b) {
   return a - b;
 }
 
-module.exports = { addiere, subtrahiere };
+function multipliziere(a, b) {
+  return a * b;
+}
+
+module.exports = { addiere, subtrahiere, multipliziere };
 
 // T14
 // T16 a
