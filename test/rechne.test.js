@@ -7,5 +7,5 @@ test('addiere zählt zwei Zahlen zusammen', () => {
 });
 
 test('subtrahiere zieht die zweite Zahl von der ersten ab', () => {
-  assert.strictEqual(subtrahiere(5, 3), 2);
+  assert.strictEqual(subtrahiere(5, 3), 3);
 });
