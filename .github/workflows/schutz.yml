@@ -1,0 +1,65 @@
+name: Schutzdateien
+
+# Version 2026-11-03-a
+# Unabhaengig von Claude. Fuehrt keinen Code aus dem PR aus (kein Checkout).
+# Rot, wenn ein PR, der nicht von noah04091 stammt, geschuetzte Dateien aendert,
+# oder wenn die Dateiliste nicht vollstaendig und eindeutig ermittelt werden kann.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read        # Lesen der Repository-Metadaten
+  pull-requests: read   # Lesen der Dateiliste des PR ueber die API
+
+concurrency:
+  group: schutz-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  schutzdateien:
+    name: schutzdateien
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Geaenderte Dateien ueber die API pruefen
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NR: ${{ github.event.pull_request.number }}
+          AUTOR: ${{ github.event.pull_request.user.login }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          MUSTER='^(\.github/|\.claude/|CODEOWNERS$|.*/CODEOWNERS$|package(-lock)?\.json$|\.mcp\.json$|CLAUDE\.md$)'
+          [[ "$NR" =~ ^[0-9]+$ ]] || { echo "FEHLER: PR-Nummer unbekannt"; exit 1; }
+
+          # Aktueller Stand des PR (nicht der Wert aus dem Ereignis, der veraltet sein kann).
+          PR_DATEN="$(gh api "repos/$REPO/pulls/$NR" --jq '"\(.changed_files) \(.head.sha)"')"
+          read -r ERWARTET AKT_HEAD <<< "$PR_DATEN"
+          [[ "$ERWARTET" =~ ^[0-9]+$ ]] || { echo "FEHLER: changed_files unbekannt"; exit 1; }
+          [[ "$AKT_HEAD" == "$HEAD_SHA" ]] || { echo "FEHLER: PR hat sich waehrend der Pruefung geaendert"; exit 1; }
+          (( ERWARTET <= 3000 )) || { echo "FEHLER: mehr als 3000 Dateien, die API listet nicht alle"; exit 1; }
+
+          # Vollstaendige Liste in EINEM Abruf (paginiert), danach nur noch lokal ausgewertet.
+          LISTE="$(gh api --paginate "repos/$REPO/pulls/$NR/files?per_page=100" --jq '.[] | [.filename, (.previous_filename // "")] | @tsv')"
+          NAMEN="$(cut -f1 <<< "$LISTE")"
+          ALTE="$(cut -f2 <<< "$LISTE")"
+          ANZAHL="$(grep -c . <<< "$NAMEN" || true)"
+          (( ANZAHL == ERWARTET )) || { echo "FEHLER: Liste unvollstaendig ($ANZAHL von $ERWARTET)"; exit 1; }
+
+          TREFFER="$(grep -E "$MUSTER" <<< "$NAMEN"$'\n'"$ALTE" || true)"
+          if [[ -n "$TREFFER" ]]; then
+            if [[ "$AUTOR" == "noah04091" ]]; then
+              echo "Geschuetzte Dateien geaendert, Autor noah04091: von diesem Check zugelassen:"
+              printf '%s\n' "$TREFFER"
+            else
+              echo "FEHLER: geschuetzte Datei geaendert durch $AUTOR:"
+              printf '%s\n' "$TREFFER"
+              exit 1
+            fi
+          fi
+          echo "Pruefung bestanden: $ANZAHL von $ERWARTET Dateien geprueft."
