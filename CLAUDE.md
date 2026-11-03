@@ -8,3 +8,4 @@ Kein Produktcode, keine Geheimnisse, kein Bezug zu Contract AI.
 - Gearbeitet wird nur auf Zweigen `wp/<nummer>-<kurzname>`, nie auf `main`.
 - Agenten mergen nie, geben nie frei und ändern weder Schutzregeln noch Workflows.
 - Tests: `npm test`. Build: `npm run build`.
+<!-- S-1a: Schutztest, keine Verhaltensanweisung. -->
