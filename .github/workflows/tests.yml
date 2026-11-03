@@ -1,17 +1,8 @@
 name: Tests
 
-# Version 2026-11-02-b: kein Überspringen mehr im Entwurf.
-#
-# Wann läuft dieser Workflow?
-# - an jedem PR gegen main, bei jedem Push, auch im Entwurf
-# - nach jedem Commit auf main, außer reine .md-Änderungen
-#
-# Warum kein Überspringen im Entwurf: GitHub zählt einen übersprungenen Job als bestanden.
-# Dann wäre ein PR kurz nach "bereit" mergebar, ohne dass Tests gelaufen sind (Test T4b).
-# So hat jeder Stand ein echtes Ergebnis.
-#
-# Die Text-Erkennung ist vorsichtig: Kann sie die Änderungen nicht sicher bestimmen,
-# laufen die Tests. Nur bei nachweislich ausschließlich .md-Dateien entfallen sie.
+# Version 2026-11-03-a
+# Laeuft bei jedem PR gegen main und bei jedem Push auf main. Keine Sonderlogik fuer Dateitypen.
+# Ein fehlschlagender Schritt macht den Job "tests" rot.
 
 on:
   pull_request:
@@ -19,56 +10,46 @@ on:
     types: [opened, synchronize, reopened]
   push:
     branches: [main]
-    paths-ignore: ['**.md']
 
 concurrency:
-  # PR: überholte Läufe abbrechen. main: jeder Commit eigene Gruppe, nichts wird abgebrochen.
   group: tests-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
-  contents: read
+  contents: read   # nur Lesen fuer den Checkout
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    name: tests
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout ohne gespeicherte Zugangsdaten
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Workflow-Version belegen
+      - name: Workflow-Version belegen und Git-Zugangsdaten-Konfiguration suchen
         shell: bash
         run: |
-          echo "Workflow-Version: tests.yml 2026-11-02-b"
-          echo "Geprüfter Stand: ${{ github.sha }}"
-          echo "Prüfsumme der ausgeführten Datei:"
+          set -euo pipefail
+          echo "Workflow-Version: tests.yml 2026-11-03-a"
+          echo "Gepruefter Stand: ${GITHUB_SHA}"
           tr -d '\r' < .github/workflows/tests.yml | sha256sum
-
-      - name: Nur .md-Dateien geändert?
-        id: art
-        shell: bash
-        run: |
-          set -uo pipefail
-          code=ja
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            if dateien=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"); then
-              if [ -n "$dateien" ] && ! printf '%s\n' "$dateien" | grep -qvE '\.md$'; then
-                code=nein
-              fi
-            else
-              echo "Änderungen nicht bestimmbar, Tests laufen sicherheitshalber."
-            fi
+          # Misst nur: sieht git (inkl. eingebundener Dateien) einen Auth-Header oder Credential-Helper?
+          gefunden="$(git config --includes --show-origin --get-regexp '^(http\..*\.extraheader|credential\..*|include\.path|includeif\..*)$' || true)"
+          if [ -n "$gefunden" ]; then
+            echo "FEHLER: Git-Zugangsdaten-Konfiguration gefunden:"
+            printf '%s\n' "$gefunden" | sed -E 's/(AUTHORIZATION: basic ).*/\1***/I'
+            exit 1
           fi
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "Tests laufen: $code"
+          echo "Keine Git-Zugangsdaten-Konfiguration gefunden."
 
-      - uses: actions/setup-node@v4
-        if: steps.art.outputs.code == 'ja'
+      - name: Node einrichten
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Tests
-        if: steps.art.outputs.code == 'ja'
+        shell: bash
         run: npm test
