@@ -5,7 +5,6 @@ function addiere(a, b) {
 
 function subtrahiere(a, b) {
   return a - b;
-}
 
 module.exports = { addiere, subtrahiere };
 
