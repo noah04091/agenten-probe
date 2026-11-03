@@ -13,3 +13,4 @@ module.exports = { addiere, subtrahiere };
 // T16 a
 // T16 b
 // T13: Test nachtraeglicher Aenderungen
+// CI-3: Gemischte Markdown- und Codeaenderung
