@@ -1,6 +1,6 @@
 
 # Claude-Bot: Sicherheitsprobe
-# Phase 1: Ohne Claude, ohne Secrets und ohne Schreibrechte.
+# Phase 2: GitHub-Issue lesen, ohne Claude oder Schreibrechte.
 
 name: Claude-Bot Sicherheitsprobe
 
@@ -11,8 +11,10 @@ on:
     paths:
       - .github/workflows/claude-bot.yml
 
-# GitHub-Token ohne Repository-Berechtigungen.
-permissions: {}
+# Nur Lesezugriff auf GitHub-Issues.
+# Alle anderen Repository-Rechte sind deaktiviert.
+permissions:
+  issues: read
 
 jobs:
   sicherheitsprobe:
@@ -21,7 +23,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Sicheren Test ausfuehren
+      - name: Sicherheitsbedingungen pruefen
         shell: bash
         run: |
           set -euo pipefail
@@ -29,7 +31,27 @@ jobs:
           test "$GITHUB_REPOSITORY" = "noah04091/agenten-probe"
           test "$GITHUB_REF" = "refs/heads/wp/26-cloud-agent"
 
-          echo "Claude-Bot Sicherheitsprobe erfolgreich."
-          echo "Keine Secrets verwendet."
+          echo "Repository und Branch korrekt."
+
+      - name: GitHub-Issue 26 nur lesend pruefen
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          NUMMER="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/26" \
+            --jq '.number')"
+
+          STATUS="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/26" \
+            --jq '.state')"
+
+          test "$NUMMER" = "26"
+          test "$STATUS" = "open"
+
+          echo "GitHub-Issue #26 erfolgreich gelesen."
+          echo "Status: $STATUS"
+          echo "Keine Repository-Aenderungen vorgenommen."
           echo "Kein Claude-API-Aufruf."
-          echo "Keine Repository-Dateien veraendert."
