@@ -1,0 +1,91 @@
+
+# Claude-Bot: Sicherheitsprobe
+# Phase 3: Kontrollierter Issue-Ausloeser.
+# Keine Secrets, kein Claude und keine Schreibrechte.
+
+name: Claude-Bot Sicherheitsprobe
+
+on:
+  # Test auf unserem Entwicklungsbranch.
+  push:
+    branches:
+      - wp/26-cloud-agent
+    paths:
+      - .github/workflows/claude-bot.yml
+
+  # Spaeter: Start durch ein Issue-Label.
+  # Funktioniert erst, wenn diese Datei auf main liegt.
+  issues:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  sicherheitsprobe:
+    name: Sicherheitsprobe
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    permissions:
+      issues: read
+
+    steps:
+      - name: Repository und Branch pruefen
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "noah04091/agenten-probe"
+          test "$GITHUB_REF" = "refs/heads/wp/26-cloud-agent"
+          echo "Sicherheitsbedingungen erfuellt."
+
+      - name: Test-Issue 26 lesen
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          STATUS="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/26" \
+            --jq '.state')"
+
+          test "$STATUS" = "open"
+          echo "Issue #26 erfolgreich gelesen."
+          echo "Keine Schreibrechte und keine Secrets."
+
+  issue_startprobe:
+    name: Kontrollierter Issue-Start
+    if: >-
+      github.event_name == 'issues' &&
+      github.actor == 'noah04091' &&
+      github.repository == 'noah04091/agenten-probe' &&
+      github.event.label.name == 'bot-auftrag' &&
+      github.event.issue.state == 'open'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    permissions:
+      issues: read
+
+    steps:
+      - name: Freigegebenes Issue ueberpruefen
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          [[ "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]
+
+          STATUS="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" \
+            --jq '.state')"
+
+          test "$STATUS" = "open"
+
+          echo "Freigegebenes Issue #${ISSUE_NUMBER} erkannt."
+          echo "Freigabe durch noah04091 geprueft."
+          echo "Noch kein Claude-Start."
+          echo "Keine Schreibrechte und keine Secrets."
