@@ -1,0 +1,35 @@
+
+# Claude-Bot: Sicherheitsprobe
+# Phase 1: Ohne Claude, ohne Secrets und ohne Schreibrechte.
+
+name: Claude-Bot Sicherheitsprobe
+
+on:
+  push:
+    branches:
+      - wp/26-cloud-agent
+    paths:
+      - .github/workflows/claude-bot.yml
+
+# GitHub-Token ohne Repository-Berechtigungen.
+permissions: {}
+
+jobs:
+  sicherheitsprobe:
+    name: Sicherheitsprobe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Sicheren Test ausfuehren
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = "noah04091/agenten-probe"
+          test "$GITHUB_REF" = "refs/heads/wp/26-cloud-agent"
+
+          echo "Claude-Bot Sicherheitsprobe erfolgreich."
+          echo "Keine Secrets verwendet."
+          echo "Kein Claude-API-Aufruf."
+          echo "Keine Repository-Dateien veraendert."
