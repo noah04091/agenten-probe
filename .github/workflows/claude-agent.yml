@@ -1,0 +1,91 @@
+
+# Claude-Agent: kontrollierter Start
+# Phase 1: Freigabe testen, noch ohne Claude-Aufruf.
+
+name: Claude-Agent Freigabetest
+
+on:
+  # Test der Konfiguration auf dem Entwicklungsbranch
+  push:
+    branches:
+      - wp/26-cloud-agent-impl
+    paths:
+      - .github/workflows/claude-agent.yml
+
+  # Spaeterer Start ueber ein freigegebenes Issue
+  issues:
+    types: [labeled]
+
+# Standardmaessig keine Repository-Rechte
+permissions: {}
+
+concurrency:
+  group: claude-agent-${{ github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  konfigurationstest:
+    name: Konfiguration pruefen
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Sicheren Test ausfuehren
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = \
+            "noah04091/agenten-probe"
+
+          test "$GITHUB_REF" = \
+            "refs/heads/wp/26-cloud-agent-impl"
+
+          echo "Konfigurationstest erfolgreich."
+          echo "Keine Secrets gelesen."
+          echo "Kein Claude-Aufruf."
+          echo "Keine Codeaenderungen."
+
+  agentenfreigabe:
+    name: Persoenliche Agentenfreigabe
+
+    if: >-
+      github.event_name == 'issues' &&
+      github.repository == 'noah04091/agenten-probe' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'noah04091' &&
+      github.event.label.name == 'bot-auftrag' &&
+      github.event.issue.state == 'open'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    # Hier greift unsere persoenliche Freigabe
+    environment:
+      name: claude-bot
+
+    permissions:
+      issues: read
+
+    steps:
+      - name: Auftrag nur lesend kontrollieren
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          [[ "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]
+
+          STATUS="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" \
+            --jq '.state')"
+
+          test "$STATUS" = "open"
+
+          echo "Issue #${ISSUE_NUMBER} erkannt."
+          echo "Persoenliche Freigabe erfolgt."
+          echo "Noch kein Claude-Aufruf."
+          echo "Keine Codeaenderungen."
