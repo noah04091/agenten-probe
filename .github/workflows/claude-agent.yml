@@ -84,6 +84,12 @@ jobs:
             --jq '.state')"
 
           test "$STATUS" = "open"
+          
+          LABEL_OK="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" \
+            --jq '[.labels[].name] | index("bot-auftrag") != null')"
+          test "$LABEL_OK" = "true"
+
 
           echo "Issue #${ISSUE_NUMBER} erkannt."
           echo "Persoenliche Freigabe erfolgt."
