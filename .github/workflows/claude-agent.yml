@@ -139,7 +139,7 @@ jobs:
           repositories: agenten-probe
 
           permission-contents: write
-          permission-issues: write
+          permission-issues: read
           permission-pull-requests: write
 
       # --------------------------------------
