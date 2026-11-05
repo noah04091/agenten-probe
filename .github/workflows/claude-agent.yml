@@ -1,0 +1,152 @@
+
+# Claude-Agent: kontrollierter Start
+# Phase 2: GitHub-App-Authentifizierung vorbereiten.
+# Noch kein Claude-Aufruf und keine Codeaenderungen.
+
+name: Claude-Agent Freigabetest
+
+on:
+  # Konfiguration auf dem Entwicklungsbranch testen
+  push:
+    branches:
+      - wp/26-cloud-agent-impl
+    paths:
+      - .github/workflows/claude-agent.yml
+
+  # Start durch ausdruecklich freigegebenes Issue
+  issues:
+    types: [labeled]
+
+# Standardmaessig keine Repository-Berechtigungen
+permissions: {}
+
+concurrency:
+  group: claude-agent-${{ github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+
+  # ==========================================
+  # JOB 1: Sicherer Konfigurationstest
+  # ==========================================
+
+  konfigurationstest:
+    name: Konfiguration pruefen
+
+    if: github.event_name == 'push'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Sicheren Test ausfuehren
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = \
+            "noah04091/agenten-probe"
+
+          test "$GITHUB_REF" = \
+            "refs/heads/wp/26-cloud-agent-impl"
+
+          echo "Konfigurationstest erfolgreich."
+          echo "Keine Secrets gelesen."
+          echo "Kein Claude-Aufruf."
+          echo "Keine Codeaenderungen."
+
+  # ==========================================
+  # JOB 2: Persoenlich freigegebener Agentenstart
+  # ==========================================
+
+  agentenfreigabe:
+    name: Persoenliche Agentenfreigabe
+
+    if: >-
+      github.event_name == 'issues' &&
+      github.repository == 'noah04091/agenten-probe' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'noah04091' &&
+      github.event.label.name == 'bot-auftrag' &&
+      github.event.issue.state == 'open'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    # Erfordert die persoenliche GitHub-Freigabe
+    environment:
+      name: claude-bot
+
+    permissions:
+      issues: read
+
+    steps:
+
+      # --------------------------------------
+      # SCHRITT 1: Issue und Label kontrollieren
+      # --------------------------------------
+
+      - name: Auftrag nur lesend kontrollieren
+        shell: bash
+
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+
+        run: |
+          set -euo pipefail
+
+          # Issue-Nummer validieren
+          [[ "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]
+
+          # Aktuellen Issue-Status abfragen
+          STATUS="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" \
+            --jq '.state')"
+
+          test "$STATUS" = "open"
+
+          # Start-Label erneut kontrollieren
+          LABEL_OK="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" \
+            --jq '[.labels[].name] | index("bot-auftrag") != null')"
+
+          test "$LABEL_OK" = "true"
+
+          echo "Issue #${ISSUE_NUMBER} erkannt."
+          echo "Issue ist weiterhin offen."
+          echo "Start-Label ist weiterhin vorhanden."
+          echo "Persoenliche Freigabe erfolgt."
+
+      # --------------------------------------
+      # SCHRITT 2: GitHub-App-Token erstellen
+      # --------------------------------------
+
+      - name: GitHub-App-Token lesend erstellen
+        id: app_token
+
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+          owner: noah04091
+          repositories: agenten-probe
+
+          permission-issues: read
+
+      # --------------------------------------
+      # SCHRITT 3: Sicheren Abschluss protokollieren
+      # --------------------------------------
+
+      - name: Sicherheitsprobe abschliessen
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "GitHub-App-Authentifizierung abgeschlossen."
+          echo "Keine Token-Werte ausgegeben."
+          echo "Noch kein Claude-Aufruf."
+          echo "Keine Codeaenderungen."
+          echo "Keine Aenderungen an main."
