@@ -1,6 +1,6 @@
 
-# Sicherer Minimaltest für zwei GitHub-Actions-Jobs.
-# Kein Claude, keine Secrets, keine Schreibrechte.
+# Diagnose: Sichere Artefaktuebertragung zwischen zwei Jobs.
+# Kein Claude, keine Secrets, keine GitHub-Schreibrechte.
 
 name: Code-Pilot Startdiagnose
 
@@ -13,25 +13,61 @@ permissions: {}
 
 jobs:
   diagnose_start:
-    name: Ersten Job starten
+    name: Testpaket erzeugen und hochladen
+
     if: >-
       github.repository == 'noah04091/agenten-probe' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.head.ref == 'wp/26-agent-code-pilot' &&
       github.event.pull_request.user.login == 'noah04091'
+
     runs-on: ubuntu-24.04
     timeout-minutes: 5
 
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+
     steps:
-      - name: Start bestaetigen
-        run: echo "Job 1 erfolgreich."
+      - name: Harmlose Testdatei erzeugen
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'code-pilot-diagnose\n' > transfer-test.txt
+
+      - name: Testdatei als Artefakt hochladen
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: code-pilot-diagnose-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transfer-test.txt
+          if-no-files-found: error
+          retention-days: 1
 
   diagnose_folge:
-    name: Zweiten Job starten
+    name: Testpaket empfangen und pruefen
     needs: diagnose_start
+
     runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
-      - name: Start bestaetigen
-        run: echo "Job 2 erfolgreich."
+      - name: Artefakt anhand seiner ID herunterladen
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.diagnose_start.outputs.artifact_id }}
+          path: ${{ runner.temp }}/diagnose
+          digest-mismatch: error
+
+      - name: Heruntergeladene Datei pruefen
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DATEI="$RUNNER_TEMP/diagnose/transfer-test.txt"
+
+          test -f "$DATEI"
+          test "$(cat "$DATEI")" = "code-pilot-diagnose"
+
+          echo "Artefakt erfolgreich uebertragen."
+          echo "Beide Jobs erfolgreich."
+          echo "Keine produktiven Aenderungen."
