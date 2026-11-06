@@ -1,0 +1,64 @@
+
+# Erster Isolationstest fuer den Code-Pilot.
+# Noch kein Claude-Aufruf, kein Artefakttransfer, keine Veroeffentlichung.
+name: Code-Pilot Isolationstest
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  isolationstest:
+    name: isolationstest
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'wp/26-agent-code-pilot'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Repository ohne gespeicherte Zugangsdaten laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Container-Image laden
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull node:24-bookworm
+          docker image inspect node:24-bookworm \
+            --format '{{json .RepoDigests}}'
+
+      - name: Build und Tests isoliert ausfuehren
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 128 \
+            --memory 512m \
+            --cpus 1 \
+            --user 1000:1000 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=128m,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/work,readonly" \
+            --workdir /work \
+            --env HOME=/tmp \
+            --env NPM_CONFIG_CACHE=/tmp/npm-cache \
+            node:24-bookworm \
+            bash -euo pipefail -c '
+              test -z "${GH_TOKEN:-}"
+              test -z "${GITHUB_TOKEN:-}"
+              test -z "${ANTHROPIC_API_KEY:-}"
+              test -z "${BOT_APP_PRIVATE_KEY:-}"
+
+              npm test
+              npm run build
+            '
