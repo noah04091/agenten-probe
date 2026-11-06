@@ -1,0 +1,189 @@
+
+# Code-Pilot: Kontrollierte Paketuebergabe
+# Zwei getrennte Jobs, ohne Claude und ohne GitHub-Schreibrechte.
+# Keine produktiven Aenderungen, keine automatische Veroeffentlichung.
+
+name: Code-Pilot Paket-Transferprobe
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: code-pilot-transfer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  paket_erstellen:
+    name: Kontrolliertes Paket erstellen
+
+    if: >-
+      github.repository == 'noah04091/agenten-probe' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'wp/26-agent-code-pilot' &&
+      github.event.pull_request.user.login == 'noah04091'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    outputs:
+      base_sha: ${{ steps.prepare.outputs.base_sha }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Node 24 einrichten
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+
+      - name: Harmloses Testpaket vorbereiten
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = \
+            "noah04091/agenten-probe"
+
+          BASE_SHA="$(git rev-parse HEAD)"
+          test "$BASE_SHA" = "$GITHUB_SHA"
+
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+
+          # Ausschliesslich zwei Kommentarzeilen anhaengen.
+          # Keine produktive Funktionsaenderung.
+          printf '\n// Code-Pilot Transferprobe\n' \
+            >> src/rechne.js
+
+          printf '\n// Code-Pilot Transferprobe\n' \
+            >> test/rechne.test.js
+
+          # Unabhaengige Dateipruefung und Paketerstellung.
+          node scripts/agent-code-package.mjs \
+            create "$BASE_SHA"
+
+          test -s "$RUNNER_TEMP/code-pilot-package.json"
+
+          echo "Testpaket erfolgreich vorbereitet."
+
+      - name: Geprueftes Paket hochladen
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: code-pilot-transfer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/code-pilot-package.json
+          if-no-files-found: error
+          retention-days: 1
+
+  paket_pruefen:
+    name: Paket unabhaengig empfangen und testen
+    needs: paket_erstellen
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    env:
+      IMAGE: node@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40
+
+    steps:
+      - name: Frische Arbeitskopie laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Node 24 einrichten
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+
+      - name: Paket anhand seiner Artefakt-ID herunterladen
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.paket_erstellen.outputs.artifact_id }}
+          path: ${{ runner.temp }}
+          digest-mismatch: error
+
+      - name: Paket unabhaengig pruefen und uebernehmen
+        shell: bash
+        env:
+          BASE_SHA: ${{ needs.paket_erstellen.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+          test -s "$RUNNER_TEMP/code-pilot-package.json"
+
+          # Das Paket wird vor und nach dem Schreiben geprueft.
+          # Bei jeder Ablehnung endet der Job sofort.
+          node scripts/agent-code-package.mjs \
+            apply "$BASE_SHA"
+
+          git diff --check
+
+          echo "Paket sicherheitsgeprueft uebernommen."
+
+      - name: Festgelegtes Docker-Image laden
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+
+      - name: Tests und Build isoliert ausfuehren
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            --pull=never \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 128 \
+            --memory 512m \
+            --cpus 1 \
+            --user 1000:1000 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=128m,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/work,readonly" \
+            --workdir /work \
+            --env HOME=/tmp \
+            --env NPM_CONFIG_CACHE=/tmp/npm-cache \
+            --env CI=true \
+            "$IMAGE" \
+            bash -euo pipefail -c '
+              test -z "${GH_TOKEN:-}"
+              test -z "${GITHUB_TOKEN:-}"
+              test -z "${ANTHROPIC_API_KEY:-}"
+              test -z "${BOT_APP_PRIVATE_KEY:-}"
+
+              test ! -S /var/run/docker.sock
+
+              npm test
+              npm run build
+
+              echo "Paket-Transferprobe erfolgreich."
+            '
+
+      - name: Sicherheitsprobe bestaetigen
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Zwei getrennte Jobs erfolgreich."
+          echo "Paket uebertragen und geprueft."
+          echo "Tests und Build isoliert bestanden."
+          echo "Kein Claude-Aufruf."
+          echo "Keine GitHub-Schreibrechte."
+          echo "Kein automatischer Merge."

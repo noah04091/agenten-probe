@@ -1,0 +1,51 @@
+
+# Diagnose: Artefakt-Upload isoliert testen.
+# Kein Claude, keine Secrets, keine GitHub-Schreibrechte.
+
+name: Code-Pilot Startdiagnose
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  diagnose_start:
+    name: Artefakt-Upload isoliert testen
+
+    if: >-
+      github.repository == 'noah04091/agenten-probe' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'wp/26-agent-code-pilot' &&
+      github.event.pull_request.user.login == 'noah04091'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Harmlose Testdatei erstellen
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'code-pilot-diagnose\n' > transfer-test.txt
+
+      - name: Testdatei hochladen
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: code-pilot-upload-${{ github.run_id }}
+          path: transfer-test.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  diagnose_folge:
+    name: Zweiten Job ohne Download testen
+    needs: diagnose_start
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Jobstart bestaetigen
+        run: echo "Zweiter Job erfolgreich gestartet."
