@@ -1,0 +1,37 @@
+
+# Sicherer Minimaltest für zwei GitHub-Actions-Jobs.
+# Kein Claude, keine Secrets, keine Schreibrechte.
+
+name: Code-Pilot Startdiagnose
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  diagnose_start:
+    name: Ersten Job starten
+    if: >-
+      github.repository == 'noah04091/agenten-probe' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'wp/26-agent-code-pilot' &&
+      github.event.pull_request.user.login == 'noah04091'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Start bestaetigen
+        run: echo "Job 1 erfolgreich."
+
+  diagnose_folge:
+    name: Zweiten Job starten
+    needs: diagnose_start
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Start bestaetigen
+        run: echo "Job 2 erfolgreich."
