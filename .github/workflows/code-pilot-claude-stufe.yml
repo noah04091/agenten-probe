@@ -303,9 +303,44 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
 
-    permissions: {}
+    permissions:
+      contents: read
+      issues: read
 
     steps:
+      - name: Unveraenderten main-Stand laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Node 24 einrichten
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+
+      - name: Issue-Freigabe unmittelbar vor Veroeffentlichung pruefen
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = \
+            "noah04091/agenten-probe"
+
+          test "$GITHUB_EVENT_NAME" = "issues"
+          test "$GITHUB_REF" = "refs/heads/main"
+
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+          node scripts/agent-code-issue-live-check.mjs
+
+          echo "Aktueller Issue-Status geprueft."
+          echo "main-Ausgangspunkt unveraendert."
+          echo "Keine Schreibrechte vergeben."
+
       - name: Vorgaengerjobs kontrollieren
         shell: bash
         env:
