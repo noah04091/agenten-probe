@@ -1,0 +1,100 @@
+
+# Code-Pilot: Sichere Auftragsannahme vorbereiten.
+# Nur Sicherheitsprobe im Entwicklungsbranch.
+# Kein Claude, keine Secrets, keine Schreiboperationen.
+
+name: Code-Pilot Auftragsannahme
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: code-pilot-auftrag-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auftragspruefung:
+    name: Code-Auftrag sicher pruefen
+
+    if: >-
+      github.repository == 'noah04091/agenten-probe' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'wp/26-agent-code-pilot' &&
+      github.event.pull_request.user.login == 'noah04091'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      issues: read
+
+    steps:
+      - name: Repository ohne gespeicherte Zugangsdaten laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Node 24 einrichten
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+
+      - name: Auftragsannahme und Live-Pruefung testen
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node --test \
+            test/agent-code-issue-route.test.mjs \
+            test/agent-code-issue-live-check.test.mjs
+
+          echo "Sicherheitstests bestanden."
+
+      - name: Issue 38 ohne Startfreigabe bestaetigen
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = \
+            "noah04091/agenten-probe"
+
+          ISSUE_JSON="$(
+            gh api "repos/$GITHUB_REPOSITORY/issues/38"
+          )"
+
+          jq -e '
+            .number == 38 and
+            .state == "open" and
+            .user.login == "noah04091" and
+            (
+              .labels
+              | map(.name)
+              | index("agent:code-pilot")
+            ) != null and
+            (
+              .labels
+              | map(.name)
+              | index("bot-auftrag")
+            ) == null
+          ' <<< "$ISSUE_JSON" > /dev/null
+
+          echo "Issue 38 ist korrekt vorbereitet."
+          echo "Keine Startfreigabe vorhanden."
+          echo "Kein Claude-Aufruf ausgefuehrt."
+          echo "Keine GitHub-Schreiboperation."
+
+      - name: Sicherheitsprobe abschliessen
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Auftragsannahme erfolgreich geprueft."
+          echo "Echter Code-Agent bleibt deaktiviert."
+          echo "Kein automatischer Merge."
