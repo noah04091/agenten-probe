@@ -187,5 +187,59 @@ jobs:
           echo "Kein Claude-Aufruf."
           echo "Keine GitHub-Schreibrechte."
           echo "Kein automatischer Merge."
+          
   freigabe_sperrprobe:
     name: Veroeffentlichungsstufe sicher pruefen
+    
+    needs:
+      - paket_erstellen
+      - paket_pruefen
+
+    if: >-
+      github.repository == 'noah04091/agenten-probe' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'wp/26-agent-code-pilot' &&
+      github.event.pull_request.user.login == 'noah04091'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    permissions: {}
+
+    env:
+      BASE_SHA: ${{ needs.paket_erstellen.outputs.base_sha }}
+      ARTIFACT_ID: ${{ needs.paket_erstellen.outputs.artifact_id }}
+
+    steps:
+      - name: Freigabevoraussetzungen kontrollieren
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = \
+            "noah04091/agenten-probe"
+
+          test "$GITHUB_EVENT_NAME" = "pull_request"
+
+          [[ "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$BASE_SHA" = "$GITHUB_SHA"
+
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+
+          echo "Paketpruefung erfolgreich abgeschlossen."
+          echo "Gepruefte Paket-ID vorhanden."
+          echo "Ausgangscommit stimmt ueberein."
+          echo "Freigabestufe darf vorbereitet werden."
+
+      - name: Veroeffentlichung bleibt deaktiviert
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Sicherheitsprobe erfolgreich."
+          echo "Kein GitHub-App-Schreib-Token erstellt."
+          echo "Kein Branch erstellt."
+          echo "Kein Pull Request erstellt."
+          echo "Kein automatischer Merge."
+
