@@ -363,6 +363,44 @@ jobs:
           echo "Beide Vorgaengerjobs erfolgreich."
           echo "Veroeffentlichungsstufe freigegeben."
 
+      - name: Unveraenderliches Codepaket erneut herunterladen
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: code-pilot-agent-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}
+          digest-mismatch: error
+
+      - name: Codepaket vor Freigabe unabhaengig validieren
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = \
+            "noah04091/agenten-probe"
+          test "$GITHUB_EVENT_NAME" = "issues"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -s "$RUNNER_TEMP/code-pilot-package.json"
+
+          # Aus dem gleichen Lauf wie die erfolgreiche isolierte Pruefung.
+          # Dateipfade, Hashes, Umfang und Ausgangscommit werden
+          # von unserem unveraenderten Pruefskript verifiziert.
+          node scripts/agent-code-package.mjs apply "$GITHUB_SHA"
+          git diff --check
+
+          echo "Codepaket fuer die Freigabestufe erneut geprueft."
+
+      - name: Issue-Freigabe nach Paketpruefung erneut bestaetigen
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          node scripts/agent-code-issue-live-check.mjs
+
+          echo "Issue und main unmittelbar vor der Sperrstufe geprueft."
+
       - name: Veroeffentlichung bleibt deaktiviert
         shell: bash
         run: |
