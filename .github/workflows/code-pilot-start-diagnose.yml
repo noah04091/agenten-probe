@@ -1,6 +1,7 @@
 
 # Diagnose: Artefakt-Upload isoliert testen.
 # Kein Claude, keine Secrets, keine GitHub-Schreibrechte.
+# Erneuter Test nach Aktualisierung der Actions-Freigabeliste.
 
 name: Code-Pilot Startdiagnose
 
