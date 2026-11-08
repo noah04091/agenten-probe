@@ -187,3 +187,5 @@ jobs:
           echo "Kein Claude-Aufruf."
           echo "Keine GitHub-Schreibrechte."
           echo "Kein automatischer Merge."
+  freigabe_sperrprobe:
+    name: Veroeffentlichungsstufe sicher pruefen
