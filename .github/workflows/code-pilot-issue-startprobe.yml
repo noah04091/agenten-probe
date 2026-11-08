@@ -1,0 +1,122 @@
+
+# Code-Pilot: Kontrollierter Issue-Ausloeser.
+# Vorbereitung ohne Claude, Secrets oder Schreibrechte.
+# Echter Issue-Start erst nach separater Freigabe.
+
+name: Code-Pilot Issue-Startprobe
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+  issues:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  konfiguration_pruefen:
+    name: Issue-Ausloeser im Pull Request pruefen
+
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.repository == 'noah04091/agenten-probe' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'wp/26-agent-code-pilot' &&
+      github.event.pull_request.user.login == 'noah04091'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Repository ohne gespeicherte Zugangsdaten laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Node 24 einrichten
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+
+      - name: Ereignispruefung und Live-Pruefung testen
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node --test \
+            test/agent-code-issue-route.test.mjs \
+            test/agent-code-issue-live-check.test.mjs
+
+          echo "Issue-Ausloeser erfolgreich getestet."
+          echo "Kein echtes Issue gestartet."
+          echo "Kein Claude-Aufruf."
+
+  issue_startprobe:
+    name: Echtes Issue-Ereignis sicher pruefen
+
+    if: >-
+      github.event_name == 'issues' &&
+      github.repository == 'noah04091/agenten-probe' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'noah04091' &&
+      github.event.sender.login == 'noah04091' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'bot-auftrag' &&
+      github.event.issue.number == 38 &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.user.login == 'noah04091' &&
+      contains(github.event.issue.labels.*.name, 'agent:code-pilot')
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      issues: read
+
+    steps:
+      - name: main ohne gespeicherte Zugangsdaten laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Node 24 einrichten
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+
+      - name: Auftrag und aktuellen main-Stand live pruefen
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = \
+            "noah04091/agenten-probe"
+
+          test "$GITHUB_REF" = "refs/heads/main"
+
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          node scripts/agent-code-issue-live-check.mjs
+
+          echo "Issue-Auftrag erfolgreich geprueft."
+
+      - name: Ausfuehrung sicher beenden
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Issue-Startprobe bestanden."
+          echo "Claude wurde nicht gestartet."
+          echo "Keine GitHub-Schreibrechte."
+          echo "Kein Branch erstellt."
+          echo "Kein Pull Request erstellt."
+          echo "Kein automatischer Merge."
