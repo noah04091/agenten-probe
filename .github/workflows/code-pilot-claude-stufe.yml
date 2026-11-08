@@ -281,3 +281,60 @@ jobs:
           echo "Keine GitHub-Schreibrechte."
           echo "Keine Veroeffentlichung."
           echo "Kein automatischer Merge."
+
+  veroeffentlichung_vorbereiten:
+    name: Sichere Code-Veroeffentlichung vorbereiten
+
+    needs:
+      - claude_generator
+      - codepaket_pruefen
+
+    if: >-
+      needs.claude_generator.result == 'success' &&
+      needs.codepaket_pruefen.result == 'success' &&
+      github.event_name == 'issues' &&
+      github.repository == 'noah04091/agenten-probe' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'noah04091' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'bot-auftrag' &&
+      github.event.issue.number == 38
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    permissions: {}
+
+    steps:
+      - name: Vorgaengerjobs kontrollieren
+        shell: bash
+        env:
+          GENERATOR_STATUS: ${{ needs.claude_generator.result }}
+          PRUEFUNG_STATUS: ${{ needs.codepaket_pruefen.result }}
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = \
+            "noah04091/agenten-probe"
+
+          test "$GITHUB_EVENT_NAME" = "issues"
+          test "$GITHUB_REF" = "refs/heads/main"
+
+          test "$GENERATOR_STATUS" = "success"
+          test "$PRUEFUNG_STATUS" = "success"
+
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+
+          echo "Beide Vorgaengerjobs erfolgreich."
+          echo "Veroeffentlichungsstufe freigegeben."
+
+      - name: Veroeffentlichung bleibt deaktiviert
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Keine Schreibberechtigungen."
+          echo "Kein GitHub-App-Token."
+          echo "Kein Branch erstellt."
+          echo "Kein Pull Request erstellt."
+          echo "Kein automatischer Merge."
