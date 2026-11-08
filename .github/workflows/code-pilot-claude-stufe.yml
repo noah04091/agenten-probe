@@ -175,3 +175,109 @@ jobs:
           path: ${{ runner.temp }}/code-pilot-package.json
           if-no-files-found: error
           retention-days: 1
+
+  codepaket_pruefen:
+    name: Claude-Codepaket unabhaengig pruefen
+
+    needs: claude_generator
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    permissions: {}
+
+    env:
+      IMAGE: node@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40
+
+    steps:
+      - name: Frische Arbeitskopie laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Node 24 einrichten
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24'
+
+      - name: Codepaket herunterladen
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: code-pilot-agent-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}
+          digest-mismatch: error
+
+      - name: Paket unabhaengig validieren
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = \
+            "noah04091/agenten-probe"
+
+          test "$GITHUB_EVENT_NAME" = "issues"
+          test "$GITHUB_REF" = "refs/heads/main"
+
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -s "$RUNNER_TEMP/code-pilot-package.json"
+
+          node scripts/agent-code-package.mjs \
+            apply "$GITHUB_SHA"
+
+          git diff --check
+
+          echo "Claude-Codepaket unabhaengig geprueft."
+
+      - name: Festgelegtes Docker-Image laden
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+
+      - name: Tests und Build isoliert ausfuehren
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            --pull=never \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 128 \
+            --memory 512m \
+            --cpus 1 \
+            --user 1000:1000 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=128m,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/work,readonly" \
+            --workdir /work \
+            --env HOME=/tmp \
+            --env NPM_CONFIG_CACHE=/tmp/npm-cache \
+            --env CI=true \
+            "$IMAGE" \
+            bash -euo pipefail -c '
+              test -z "${GH_TOKEN:-}"
+              test -z "${GITHUB_TOKEN:-}"
+              test -z "${ANTHROPIC_API_KEY:-}"
+              test -z "${BOT_APP_PRIVATE_KEY:-}"
+
+              test ! -S /var/run/docker.sock
+
+              npm test
+              npm run build
+
+              echo "Isolierte Codepruefung erfolgreich."
+            '
+
+      - name: Pruefung abschliessen
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Codepaket erfolgreich geprueft."
+          echo "Keine Secrets im Testcontainer."
+          echo "Keine GitHub-Schreibrechte."
+          echo "Keine Veroeffentlichung."
+          echo "Kein automatischer Merge."
