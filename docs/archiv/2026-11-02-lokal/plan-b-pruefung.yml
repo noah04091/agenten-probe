@@ -1,0 +1,101 @@
+name: Pruefung
+
+# VORSCHLAG, ersetzt build.yml und tests.yml. Hochladen nach .github/workflows/pruefung.yml
+#
+# Warum: GitHub zählt einen übersprungenen Job als bestanden. Mit build/tests als Pflicht
+# war ein PR deshalb im Entwurf und in den ersten Sekunden nach "bereit" mergebar (Test T4b).
+#
+# Lösung "sperrt im Zweifel": Pflichtprüfung ist nur noch der Job "pruefung-ok".
+# Er läuft IMMER und ist nur grün, wenn build UND tests wirklich erfolgreich waren.
+# Im Entwurf werden build und tests übersprungen (keine Rechenzeit), "pruefung-ok" meldet dann
+# ROT ("Entwurf, noch nicht geprüft"). Kosten: rund 1 Minute je Push im Entwurf.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+
+concurrency:
+  group: pruefung-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  art:
+    name: art
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.art.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Nur .md-Dateien geändert?
+        id: art
+        shell: bash
+        run: |
+          set -uo pipefail
+          code=ja
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if dateien=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"); then
+              if [ -n "$dateien" ] && ! printf '%s\n' "$dateien" | grep -qvE '\.md$'; then
+                code=nein
+              fi
+            else
+              echo "Änderungen nicht bestimmbar, Prüfungen laufen sicherheitshalber."
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Prüfungen laufen: $code"
+
+  build:
+    needs: art
+    if: needs.art.outputs.code == 'ja'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm run build
+
+  tests:
+    needs: art
+    if: needs.art.outputs.code == 'ja'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm test
+
+  pruefung-ok:
+    # Die EINZIGE Pflichtprüfung. Läuft immer, auch wenn alles andere übersprungen wurde.
+    name: pruefung-ok
+    needs: [art, build, tests]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ergebnis bewerten
+        shell: bash
+        run: |
+          art="${{ needs.art.result }}"; build="${{ needs.build.result }}"; tests="${{ needs.tests.result }}"; code="${{ needs.art.outputs.code }}"
+          echo "art=$art build=$build tests=$tests code=$code"
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.draft }}" = "true" ]; then
+            echo "::error::Entwurf, noch nicht geprüft. Erst mit 'bereit' laufen die Prüfungen."; exit 1
+          fi
+          if [ "$art" != "success" ]; then echo "::error::Vorprüfung nicht erfolgreich ($art)."; exit 1; fi
+          if [ "$code" = "nein" ]; then echo "Nur .md-Dateien geändert, Build und Tests nicht nötig."; exit 0; fi
+          if [ "$build" = "success" ] && [ "$tests" = "success" ]; then echo "Build und Tests erfolgreich."; exit 0; fi
+          echo "::error::Build ($build) oder Tests ($tests) nicht erfolgreich."; exit 1
