@@ -290,7 +290,10 @@ jobs:
       - claude_generator
       - codepaket_pruefen
 
+    # Zweite unabhaengige harte Freigabesperre fuer die Schreibstufe.
+    # Auch beim spaeteren Generator-Test wird nichts veroeffentlicht.
     if: >-
+      false &&
       needs.claude_generator.result == 'success' &&
       needs.codepaket_pruefen.result == 'success' &&
       github.event_name == 'issues' &&
@@ -303,6 +306,9 @@ jobs:
 
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+
+    environment:
+      name: claude-bot
 
     permissions:
       contents: read
@@ -402,13 +408,34 @@ jobs:
 
           echo "Issue und main unmittelbar vor der Sperrstufe geprueft."
 
-      - name: Veroeffentlichung bleibt deaktiviert
+      - name: Kurzlebiges GitHub-App-Token fuer Draft-PR erstellen
+        id: app_token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: noah04091
+          repositories: agenten-probe
+          permission-contents: write
+          permission-issues: read
+          permission-pull-requests: write
+
+      - name: Geprueften Code als Draft-PR veroeffentlichen
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          CODE_PILOT_PUBLISH_ENABLED: 'true'
+          CODE_PILOT_PUBLISH_CONFIRM: 'issue-38-draft-only'
         run: |
           set -euo pipefail
 
-          echo "Keine Schreibberechtigungen."
-          echo "Kein GitHub-App-Token."
-          echo "Kein Branch erstellt."
-          echo "Kein Pull Request erstellt."
-          echo "Kein automatischer Merge."
+          test "$GITHUB_REPOSITORY" = "noah04091/agenten-probe"
+          test "$GITHUB_EVENT_NAME" = "issues"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          # Das unveraenderte Paket wurde zuvor erneut validiert.
+          # Das Skript validiert Dateien, Issue und main noch einmal.
+          node scripts/agent-code-publish.mjs --publish
+
+          echo "Nur Draft-PR, kein automatischer Merge."
