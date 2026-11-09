@@ -1,0 +1,63 @@
+name: Build
+
+# Version 2026-11-02-b: kein Überspringen mehr im Entwurf.
+# Gleiche Auslöser und Regeln wie tests.yml (Erklärung dort).
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+
+concurrency:
+  group: build-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Workflow-Version belegen
+        shell: bash
+        run: |
+          echo "Workflow-Version: build.yml 2026-11-02-b"
+          echo "Geprüfter Stand: ${{ github.sha }}"
+          echo "Prüfsumme der ausgeführten Datei:"
+          tr -d '\r' < .github/workflows/build.yml | sha256sum
+
+      - name: Nur .md-Dateien geändert?
+        id: art
+        shell: bash
+        run: |
+          set -uo pipefail
+          code=ja
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if dateien=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"); then
+              if [ -n "$dateien" ] && ! printf '%s\n' "$dateien" | grep -qvE '\.md$'; then
+                code=nein
+              fi
+            else
+              echo "Änderungen nicht bestimmbar, Build läuft sicherheitshalber."
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Build läuft: $code"
+
+      - uses: actions/setup-node@v4
+        if: steps.art.outputs.code == 'ja'
+        with:
+          node-version: 20
+
+      - name: Build
+        if: steps.art.outputs.code == 'ja'
+        run: npm run build

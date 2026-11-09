@@ -1,0 +1,17 @@
+diff --git a/.claude/skills/paket-fertig/SKILL.md b/.claude/skills/paket-fertig/SKILL.md
+index 3dc73fe..3c04f76 100644
+--- a/.claude/skills/paket-fertig/SKILL.md
++++ b/.claude/skills/paket-fertig/SKILL.md
+@@ -15,4 +15,12 @@ disable-model-invocation: true
+ 6. **Zur Freigabe markieren:** `gh pr edit --add-label wartet-auf-noah` und am Issue kurz melden: "PR #<n> bereit zur Freigabe".
+ 7. Danach **nichts mehr pushen**, außer Noah verlangt eine Änderung. Jeder neue Push macht eine Freigabe ungültig.
+ 
++## Verbindlich: den Zweig aktualisiert immer der Agent, nie Noah
++Ist `main` weiter als der PR-Zweig, aktualisiert **der Agent** den Zweig selbst:
++`git fetch origin && git merge origin/main` (Konflikte lösen, Tests lokal), dann `git push`, dann auf grüne Prüfungen warten
++und Noah erneut um Freigabe bitten.
++**Noah wird nie gebeten, den Knopf „Update branch“ zu drücken.** Grund: Wer zuletzt pusht, kann diesen Stand nach der
++Schutzregel ("letzter Push muss von jemand anderem freigegeben werden") nicht selbst freigeben. Drückt Noah den Knopf,
++könnte nur noch der Bot freigeben. Das darf nie passieren, die Endfreigabe liegt bei Noah.
++
+ **Niemals:** selbst mergen oder freigeben.
