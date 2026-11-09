@@ -1,0 +1,247 @@
+diff --git a/.github/workflows/code-pilot-trockenlauf.yml b/.github/workflows/code-pilot-trockenlauf.yml
+new file mode 100644
+index 0000000..baae528
+--- /dev/null
++++ b/.github/workflows/code-pilot-trockenlauf.yml
+@@ -0,0 +1,241 @@
++# Code-Pilot Trockenlauf (A2): Job 2 und Job 3 ohne Claude.
++# Festes Testpaket statt Claude, keine Secrets, keine Schreibrechte,
++# kein Environment, keine Kosten. Job 3 laeuft gegen ein nachgebautes
++# GitHub im Speicher und schreibt nichts auf GitHub.
++
++name: Code-Pilot Trockenlauf
++
++on:
++  pull_request:
++    branches: [main]
++    types: [opened, synchronize, reopened]
++
++permissions: {}
++
++concurrency:
++  group: code-pilot-trockenlauf-${{ github.event.pull_request.number }}
++  cancel-in-progress: true
++
++jobs:
++  testpaket_erzeugen:
++    name: Trockenlauf Testpaket statt Claude
++
++    if: >-
++      github.repository == 'noah04091/agenten-probe' &&
++      github.event.pull_request.head.repo.full_name == github.repository
++
++    runs-on: ubuntu-24.04
++    timeout-minutes: 10
++
++    permissions: {}
++
++    outputs:
++      base_sha: ${{ steps.paket.outputs.base_sha }}
++
++    steps:
++      - name: Repository laden
++        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
++        with:
++          persist-credentials: false
++          ref: ${{ github.sha }}
++
++      - name: Node 24 einrichten
++        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
++        with:
++          node-version: '24'
++
++      - name: Wachen pruefen
++        shell: bash
++        run: |
++          set -euo pipefail
++
++          # Keine Rechte, kein Claude, gleich mit dem echten Job 2.
++          node scripts/agent-code-dryrun.mjs guard
++
++      - name: Feste Testaenderung einspielen und Paket erzeugen
++        id: paket
++        shell: bash
++        run: |
++          set -euo pipefail
++
++          test "$GITHUB_REPOSITORY" = "noah04091/agenten-probe"
++          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
++          test -z "$(git status --porcelain=v1 --untracked-files=all)"
++
++          node scripts/agent-code-dryrun.mjs prepare
++          node scripts/agent-code-package.mjs create "$GITHUB_SHA"
++          test -s "$RUNNER_TEMP/code-pilot-package.json"
++
++          echo "base_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
++          echo "Testpaket erzeugt, kein Claude-Aufruf."
++
++      - name: Testpaket hochladen
++        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
++        with:
++          name: code-pilot-trockenlauf-${{ github.run_id }}-${{ github.run_attempt }}
++          path: ${{ runner.temp }}/code-pilot-package.json
++          if-no-files-found: error
++          retention-days: 1
++
++  codepaket_pruefen:
++    name: Trockenlauf Job 2 Codepaket pruefen
++
++    needs: testpaket_erzeugen
++
++    runs-on: ubuntu-24.04
++    timeout-minutes: 15
++
++    permissions: {}
++
++    outputs:
++      package_sha256: ${{ steps.paket_hash.outputs.package_sha256 }}
++
++    env:
++      IMAGE: node@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40
++      BASE_SHA: ${{ needs.testpaket_erzeugen.outputs.base_sha }}
++
++    steps:
++      - name: Frische Arbeitskopie laden
++        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
++        with:
++          persist-credentials: false
++          ref: ${{ github.sha }}
++
++      - name: Node 24 einrichten
++        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
++        with:
++          node-version: '24'
++
++      - name: Codepaket herunterladen
++        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
++        with:
++          name: code-pilot-trockenlauf-${{ github.run_id }}-${{ github.run_attempt }}
++          path: ${{ runner.temp }}
++          digest-mismatch: error
++
++      - name: Paket unabhaengig validieren
++        shell: bash
++        run: |
++          set -euo pipefail
++
++          [[ "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
++          test "$BASE_SHA" = "$GITHUB_SHA"
++          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
++          test -s "$RUNNER_TEMP/code-pilot-package.json"
++
++          node scripts/agent-code-package.mjs \
++            apply "$GITHUB_SHA"
++
++          git diff --check
++
++      - name: Festgelegtes Docker-Image laden und Digest kontrollieren
++        shell: bash
++        run: |
++          set -euo pipefail
++          docker pull "$IMAGE"
++          DIGESTS="$(docker image inspect "$IMAGE" --format '{{json .RepoDigests}}')"
++          [[ "$DIGESTS" == *"$IMAGE"* ]]
++
++      - name: Tests und Build isoliert ausfuehren
++        shell: bash
++        run: |
++          set -euo pipefail
++
++          docker run --rm \
++            --pull=never \
++            --network none \
++            --read-only \
++            --cap-drop ALL \
++            --security-opt no-new-privileges \
++            --pids-limit 128 \
++            --memory 512m \
++            --cpus 1 \
++            --user 1000:1000 \
++            --tmpfs /tmp:rw,nosuid,nodev,size=128m,mode=1777 \
++            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/work,readonly" \
++            --workdir /work \
++            --env HOME=/tmp \
++            --env NPM_CONFIG_CACHE=/tmp/npm-cache \
++            --env CI=true \
++            "$IMAGE" \
++            bash -euo pipefail -c '
++              test -z "${GH_TOKEN:-}"
++              test -z "${GITHUB_TOKEN:-}"
++              test -z "${ANTHROPIC_API_KEY:-}"
++              test -z "${BOT_APP_PRIVATE_KEY:-}"
++
++              test ! -S /var/run/docker.sock
++
++              npm test
++              node scripts/agent-code-acceptance.mjs
++              npm run build
++
++              echo "Isolierte Codepruefung erfolgreich."
++            '
++
++      - name: Pruefung abschliessen
++        id: paket_hash
++        shell: bash
++        run: |
++          set -euo pipefail
++
++          PAKET_HASH="$(sha256sum "$RUNNER_TEMP/code-pilot-package.json" | cut -d' ' -f1)"
++          [[ "$PAKET_HASH" =~ ^[a-f0-9]{64}$ ]]
++          echo "package_sha256=$PAKET_HASH" >> "$GITHUB_OUTPUT"
++          echo "Gepruefter Paket-Hash: $PAKET_HASH"
++
++  veroeffentlichung_trocken:
++    name: Trockenlauf Job 3 ohne Schreibrechte
++
++    needs:
++      - testpaket_erzeugen
++      - codepaket_pruefen
++
++    runs-on: ubuntu-24.04
++    timeout-minutes: 10
++
++    permissions: {}
++
++    env:
++      BASE_SHA: ${{ needs.testpaket_erzeugen.outputs.base_sha }}
++      CODE_PILOT_PACKAGE_SHA256: ${{ needs.codepaket_pruefen.outputs.package_sha256 }}
++
++    steps:
++      - name: Frische Arbeitskopie laden
++        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
++        with:
++          persist-credentials: false
++          ref: ${{ github.sha }}
++
++      - name: Node 24 einrichten
++        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
++        with:
++          node-version: '24'
++
++      - name: Unveraendertes Codepaket erneut herunterladen
++        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
++        with:
++          name: code-pilot-trockenlauf-${{ github.run_id }}-${{ github.run_attempt }}
++          path: ${{ runner.temp }}
++          digest-mismatch: error
++
++      - name: Codepaket vor der Veroeffentlichung erneut validieren
++        shell: bash
++        run: |
++          set -euo pipefail
++
++          [[ "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
++          [[ "$CODE_PILOT_PACKAGE_SHA256" =~ ^[a-f0-9]{64}$ ]]
++          test "$BASE_SHA" = "$GITHUB_SHA"
++          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
++
++          node scripts/agent-code-package.mjs apply "$GITHUB_SHA"
++          git diff --check
++
++      - name: Echten Veroeffentlicher gegen nachgebautes GitHub ausfuehren
++        shell: bash
++        run: |
++          set -euo pipefail
++
++          # Kein Token im Umfeld; das Skript verweigert sonst den Lauf.
++          node scripts/agent-code-dryrun.mjs publish
