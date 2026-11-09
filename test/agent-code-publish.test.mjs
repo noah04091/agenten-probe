@@ -140,6 +140,9 @@ function mockGitHub(sha, blobs, options = {}) {
     truncated = false,
     duplicateEntry = false,
     tipRefWrong = false,
+    prThrows = false,
+    prBadResponse = false,
+    refCreateThrows = false,
   } = options;
 
   const calls = [];
@@ -237,6 +240,12 @@ function mockGitHub(sha, blobs, options = {}) {
     }
 
     if (method === 'POST' && path === 'git/refs') {
+      if (refCreateThrows) {
+        // GitHub legt den Branch an, die Antwort geht aber verloren.
+        branchExists = true;
+        throw new Error('Zeitlimit');
+      }
+
       if (refCreateFails) {
         // Schlimmster Fall: der Ref existiert schon, sogar mit derselben
         // Spitze, und es gibt keinen PR. Trotzdem ist er nicht aus diesem Lauf.
@@ -278,13 +287,19 @@ function mockGitHub(sha, blobs, options = {}) {
       });
     }
 
+    // Schlimmster Fall bei jeder PR-Stoerung: GitHub hat den PR trotzdem
+    // angelegt, die PR-Liste unten zeigt ihn aber noch nicht.
     if (method === 'POST' && path === 'pulls') {
+      if (prThrows) {
+        throw new Error('Zeitlimit');
+      }
+
       if (failPr) {
         return fail(500);
       }
 
       return ok({
-        draft: true,
+        draft: !prBadResponse,
         base: { ref: 'main' },
         head: { ref: BRANCH },
         html_url: `https://github.com/${REPO}/pull/999`,
@@ -539,11 +554,16 @@ test('A1b: Paket fuer einen anderen Ausgangscommit wird abgelehnt', async () => 
 });
 
 // A1a: keine verwaisten Branches.
+// Geloescht wird nur, wenn die PR-Anfrage noch NICHT abgeschickt wurde.
 
-test('A1a: Abbruch nach Branch-Erstellung loescht genau den eigenen Branch', async () => {
-  const r = await run({ failPr: true });
+test('A1a: Abbruch vor der PR-Anfrage loescht genau den eigenen Branch', async () => {
+  const r = await run({ badDiff: true });
 
-  assert.match(r.error?.message ?? '', /GitHub hat Anfrage abgelehnt: POST pulls/);
+  assert.match(r.error?.message ?? '', /Remote-Diff verletzt die Dateigrenzen/);
+  assert.equal(
+    r.calls.filter(x => x.method === 'POST' && x.path === 'pulls').length,
+    0
+  );
 
   assert.deepEqual(
     r.deletes.map(x => x.path),
@@ -551,18 +571,44 @@ test('A1a: Abbruch nach Branch-Erstellung loescht genau den eigenen Branch', asy
   );
 
   assert.equal(r.comments.length, 1);
-  assert.match(r.comments[0].body.body, /geloescht/);
+  assert.match(r.comments[0].body.body, /wurde geloescht/);
   assert.match(r.comments[0].body.body, new RegExp(BRANCH));
-  assert.ok(r.lines.some(line => /geloescht/.test(line)));
+  assert.ok(r.lines.some(line => /wurde geloescht/.test(line)));
 });
 
-test('A1a: unerlaubter Remote-Diff raeumt den eigenen Branch auf', async () => {
-  const r = await run({ badDiff: true });
+test('A1a: PR-Anfrage abgelehnt, Branch bleibt stehen', async () => {
+  const r = await run({ failPr: true });
 
-  assert.deepEqual(
-    r.deletes.map(x => x.path),
-    [`git/refs/heads/${BRANCH}`]
-  );
+  assert.match(r.error?.message ?? '', /GitHub hat Anfrage abgelehnt: POST pulls/);
+  assert.equal(r.deletes.length, 0);
+  assert.equal(r.comments.length, 1);
+  assert.match(r.comments[0].body.body, /nicht geloescht/);
+  assert.match(r.comments[0].body.body, /Pull-Request-Anfrage/);
+  assert.ok(r.lines.some(line => /nicht geloescht.*Pull-Request-Anfrage/s.test(line)));
+});
+
+test('A1a: PR-Anfrage ohne Antwort, Branch bleibt stehen', async () => {
+  const r = await run({ prThrows: true });
+
+  assert.match(r.error?.message ?? '', /GitHub-Anfrage fehlgeschlagen: POST pulls/);
+  assert.equal(r.deletes.length, 0);
+  assert.match(r.comments[0]?.body.body ?? '', /nicht geloescht/);
+});
+
+test('A1a: ungueltige PR-Bestaetigung, Branch bleibt stehen', async () => {
+  const r = await run({ prBadResponse: true });
+
+  assert.match(r.error?.message ?? '', /Draft-PR-Bestaetigung ungueltig/);
+  assert.equal(r.deletes.length, 0);
+  assert.match(r.comments[0]?.body.body ?? '', /nicht geloescht/);
+});
+
+test('A1a: Branch-Anlage ohne Antwort, nichts wird geloescht', async () => {
+  const r = await run({ refCreateThrows: true });
+
+  assert.match(r.error?.message ?? '', /POST git\/refs/);
+  assert.equal(r.deletes.length, 0);
+  assert.match(r.comments[0]?.body.body ?? '', /nicht geloescht/);
 });
 
 test('A1a: fremde Branch-Spitze, Branch bleibt stehen', async () => {
@@ -585,16 +631,16 @@ test('A1a: mehrdeutige Branch-Referenz, Branch bleibt stehen', async () => {
 });
 
 test('A1a: vorhandener PR, Branch bleibt stehen', async () => {
-  const r = await run({ failPr: true, existingPr: true });
+  const r = await run({ badDiff: true, existingPr: true });
 
   assert.equal(r.deletes.length, 0);
   assert.equal(r.comments.length, 1);
   assert.match(r.comments[0].body.body, /nicht geloescht/);
-  assert.match(r.comments[0].body.body, /Pull Request/);
+  assert.match(r.comments[0].body.body, /bereits einen Pull Request/);
 });
 
 test('A1a: PR-Liste nicht lesbar, Branch bleibt stehen', async () => {
-  const r = await run({ failPr: true, listPrFails: true });
+  const r = await run({ badDiff: true, listPrFails: true });
 
   assert.equal(r.deletes.length, 0);
   assert.match(r.comments[0]?.body.body ?? '', /nicht geloescht/);
@@ -629,9 +675,9 @@ test('A1a: Kommentar nutzt eigenes Token, alles andere das App-Token', async () 
 });
 
 test('A1a: gescheiterter Kommentar aendert weder Aufraeumen noch Fehler', async () => {
-  const r = await run({ failPr: true, commentFails: true });
+  const r = await run({ badDiff: true, commentFails: true });
 
-  assert.match(r.error?.message ?? '', /GitHub hat Anfrage abgelehnt: POST pulls/);
+  assert.match(r.error?.message ?? '', /Remote-Diff verletzt die Dateigrenzen/);
   assert.equal(r.deletes.length, 1);
   assert.ok(r.lines.some(line => /Kommentar/.test(line)));
 });

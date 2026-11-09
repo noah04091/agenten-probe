@@ -260,6 +260,7 @@ export async function publishCodePilot(
   const branchRef = `refs/heads/${plan.branch}`;
   let branchAttempted = false;
   let branchCreated = false;
+  let prRequested = false;
 
   try {
     branchAttempted = true;
@@ -320,6 +321,10 @@ export async function publishCodePilot(
       refuse('Zielbranch wurde zwischenzeitlich geaendert');
     }
 
+    // Ab hier ist unklar, ob GitHub einen PR anlegt (Fehler, Zeitlimit,
+    // verlorene Antwort). Danach wird der Branch nie mehr geloescht.
+    prRequested = true;
+
     const pr = await api('pulls', 'POST', {
       title: 'feat: Multiplikation durch Code-Pilot (Issue #38)',
       head: plan.branch,
@@ -376,6 +381,12 @@ export async function publishCodePilot(
 
       if (!branchCreated) {
         return 'die Anlage des Branches in diesem Lauf ist nicht bestaetigt';
+      }
+
+      // Unklarer Zustand: GitHub kann den PR trotz Fehler angelegt haben,
+      // die PR-Liste zeigt ihn eventuell erst spaeter. Dann nie loeschen.
+      if (prRequested) {
+        return 'die Pull-Request-Anfrage wurde bereits abgeschickt und es ist nicht sicher, dass GitHub keinen Pull Request angelegt hat';
       }
 
       const tipResponse = await send(`git/ref/heads/${plan.branch}`);

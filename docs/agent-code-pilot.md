@@ -81,24 +81,50 @@ Ein automatischer Merge ist ausgeschlossen.
 
 Scheitert die Veröffentlichung nach dem Anlegen des Branches, wird er nur gelöscht, wenn alle
 Bedingungen belegt sind: Name exakt `wp/38-code-pilot-<run_id>-<attempt>`, Anlage in diesem Lauf
-von GitHub bestätigt, Spitze genau der Commit dieses Laufs, kein Pull Request zu diesem Branch
-(auch kein geschlossener). Sonst bleibt der Branch stehen. In beiden Fällen stehen Grund und
-Ergebnis im Log und als Kommentar im Issue. Das Aufräumen wirft nie und ersetzt nie den
-ursprünglichen Fehler; der Lauf endet immer rot.
+von GitHub bestätigt, **die Pull-Request-Anfrage wurde noch nicht abgeschickt**, Spitze genau der
+Commit dieses Laufs, kein Pull Request zu diesem Branch (auch kein geschlossener). Sonst bleibt
+der Branch stehen. In beiden Fällen stehen Grund und Ergebnis im Log und als Kommentar im Issue.
+Das Aufräumen wirft nie und ersetzt nie den ursprünglichen Fehler; der Lauf endet immer rot.
+
+Grundsatz: **Ein unklarer Zustand führt nie zum Löschen.** Sobald `POST pulls` abgeschickt ist,
+kann GitHub den PR angelegt haben, auch bei Fehlermeldung, Zeitlimit oder ungültiger Antwort, und
+die PR-Liste zeigt ihn eventuell erst später. Ab diesem Punkt bleibt der Branch immer stehen.
+Dasselbe gilt, wenn das Anlegen des Branches ohne Antwort bleibt oder GitHub einen HTTP-Fehler meldet.
 
 Bekannte Grenzen:
 - Zwischen Prüfung der Spitze und Löschen liegt ein kurzes Zeitfenster, das die REST-API nicht
-  atomar schließen kann. Den Branch-Namen kennt nur dieser Lauf.
-- Meldet `POST pulls` einen Fehler, obwohl GitHub den PR angelegt hat, und zeigt die PR-Liste ihn
-  noch nicht, würde der Branch gelöscht und der Draft-PR damit geschlossen. `main` bleibt unberührt.
+  atomar schließen kann. Ein Dritter müsste genau in diesen Millisekunden einen PR öffnen.
+- Scheitert der Lauf nach der PR-Anfrage, bleibt ein Branch eventuell ohne PR stehen. Das ist
+  gewollt (lieber ein Branch zu viel als ein verlorener PR) und steht im Issue-Kommentar.
 - Bricht der Runner selbst ab (Zeitlimit, manueller Abbruch), läuft kein Aufräumen. Der Branch
   bleibt dann ohne Kommentar stehen; gelöscht wird nichts.
 - Der Issue-Kommentar braucht im Workflow `issues: write` für das Job-Token und
   `CODE_PILOT_COMMENT_TOKEN`. Ohne das steht der Grund nur im Log.
 
-Die nötige Workflow-Verdrahtung (Hash aus Job 2, Kommentar-Token) liegt als Vorschlag in
-`docs/a1-workflow-patch.diff`. Agenten dürfen `.github/` nicht ändern, Noah wendet ihn an mit
-`git apply docs/a1-workflow-patch.diff` und löscht die Datei danach.
+### 7.3 Workflow-Verdrahtung und CI (Integration in PR #37)
+
+Die Workflow-Verdrahtung (Hash aus Job 2, Kommentar-Token, drei zusätzliche Prüfungen im
+Integrationstest) liegt bis zur Anwendung als `docs/a1-workflow-patch.diff` bereit. Agenten
+dürfen `.github/` nicht ändern, deshalb wendet Noah sie mit seinem eigenen Konto an. Der Patch
+lässt beide `false &&`-Sperren unverändert. Ohne Patch bricht Job 3 bewusst ab, weil der Hash
+fehlt.
+
+Alle Pflichtprüfungen (`tests`, `build`, `schutzdateien`, die Code-Pilot-Prüfungen) laufen nur bei
+PRs gegen `main`. Die vollständige CI für A1 entsteht deshalb auf PR #37: Jeder Push auf
+`wp/26-agent-code-pilot` löst sie dort aus. Ein PR gegen den Branch von #37 bekommt keine CI.
+
+Schritte für Noah:
+1. PR #40 in `wp/26-agent-code-pilot` übernehmen (Merge im GitHub-Fenster).
+2. Lokal mit eigenem Konto: `git switch wp/26-agent-code-pilot`, `git pull --ff-only`,
+   `git apply --check docs/a1-workflow-patch.diff` (meldet es einen Fehler, liegt die Workflow-Datei
+   meist mit CRLF statt LF vor: dann nichts erzwingen, sondern stoppen), dann
+   `git apply docs/a1-workflow-patch.diff`
+   und `git rm docs/a1-workflow-patch.diff`.
+3. Prüfen: `grep -c '^      false &&$' .github/workflows/code-pilot-claude-stufe.yml` muss `2`
+   liefern, `npm test` und `npm run build` grün.
+4. Nur `.github/workflows/code-pilot-claude-stufe.yml` und die gelöschte Patch-Datei committen und
+   pushen. Danach auf PR #37 alle Prüfungen abwarten; der Integrationstest prüft dort die Sperren
+   und die neue Verdrahtung.
 
 ## 8. Erfolgskriterien
 
