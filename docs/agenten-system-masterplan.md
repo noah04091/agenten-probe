@@ -132,8 +132,10 @@ A von Anfang an ohne Festverdrahtung auf einzelne Issues gebaut (Paket A6).
 `code-pilot-claude-stufe.yml`: `false &&` in Job 1 (Zeile 118) und Job 3 (Zeile 358) sowie die Prüfung
 `hardGate` im Integrationstest (Zeilen 75 bis 80). Die zwei Freigabevariablen `CODE_PILOT_PUBLISH_*` in
 Job 3 (Zeilen 490 und 491) sind bereits gesetzt und keine Aktivierungsstelle mehr. Der Workflow liegt
-auf `main`, wie für Issue-Ereignisse nötig. Danach bleiben zwei menschliche Freigaben je Lauf: das
-Environment `claude-bot` (Reviewer `noah04091`, nur Branch `main`) für Job 1 und erneut für Job 3.
+auf `main`, wie für Issue-Ereignisse nötig. Danach bleibt die menschliche Freigabe im Environment
+`claude-bot` (Reviewer `noah04091`, nur Branch `main`). Job 1 und Job 3 nutzen beide dieses
+Environment; ob GitHub dafür zwei getrennte Freigaben verlangt, ist nicht belegt und wird in A5
+kontrolliert.
 
 **A4 vorbereitet:** Die beiden `false &&` werden durch den Schalter `vars.CODE_PILOT_ENABLED == 'true' &&`
 ersetzt, der Integrationstest läuft bei jedem PR aus diesem Repository und ruft
@@ -185,7 +187,7 @@ Lokale Vorschläge archiviert (`docs/archiv/2026-11-02-lokal/`), lokale Sicherun
 | A2 Konsolidieren ✅ 09.11. | Trockenlauf prüft Job 2 und 3 ohne Claude | erfüllt: PR #41 und `92a9fc6`, auf GitHub grün (Lauf 42691955117), Zuordnungsliste in `docs/agent-code-pilot.md` 7.4; alte Proben werden erst nach A5 entfernt |
 | A3 Auf main ✅ 09.11. | PR #37 gemergt, Sperren aktiv | erfüllt: `aa3646d`, `build` und `tests` auf `main` grün, Issue #38 nicht gestartet |
 | A4 Entsperren (vorbereitet) | Schalter statt `false &&`, Integrationstest bei jedem PR, Prüfung auch in `npm test`; Patch von Noah per dokumentierter Admin-Ausnahme | Diff nur in `code-pilot-claude-stufe.yml` an Integrationstest und den zwei Sperren; Integrationstest läuft auf dem A4-PR und ist grün; Claude-Jobs übersprungen; `CODE_PILOT_ENABLED` vor und nach dem Merge nicht gesetzt |
-| A5 Erster Lauf | Label an #38, Noah bestätigt | Draft-PR der App mit genau `src/rechne.js` und `test/rechne.test.js`, CI grün, Kosten höchstens 1,50 $ |
+| A5 Erster Lauf | Label an #38, Noah bestätigt | Draft-PR der App mit genau `src/rechne.js` und `test/rechne.test.js`, CI grün, Kosten höchstens 1,50 $. Vorher geprüft: Schreibrechte des Bot-Kontos auf Repository-Variablen. Im Lauf kontrolliert: ob Job 3 eine eigene Environment-Freigabe anfordert |
 
 ### Phase 3: Ziel A vollständig
 | Paket | Ergebnis | Abnahme |
@@ -230,7 +232,7 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 | 09.11. | Workflow-Änderungen aus Agentenarbeit liefert der Bot als Patch, Noah wendet sie mit eigenem Konto an | Agenten ändern `.github/` nie selbst (`schutzdateien`, Repo-`CLAUDE.md`) |
 | 09.11. | **Freigabeweg (R8), Weg A:** Änderungen an geschützten Dateien per dokumentierter Admin-Ausnahme, nur für genau diese Änderung, nach Prüfung durch ChatGPT und einen unabhängigen Claude-Prüfer, mit Eintrag in dieser Tabelle. Keine Abschwächung von `schutzdateien`, keine künstlichen Freigaben | Noah ist einziger Code-Owner; ein regulärer Weg existiert für diese Dateien nicht |
 | 09.11. | **Langfristig Weg B:** eine zweite, tatsächlich unabhängige Person als Code-Owner für geschützte Dateien, vor dem produktiven Einsatz (spätestens B7) | echte Vier-Augen-Prüfung statt Ausnahmen |
-| 09.11. | **A4-Schalter:** `vars.CODE_PILOT_ENABLED == 'true'` statt `false &&`; nach dem Merge bleibt die Variable ungesetzt | Abschalten ohne Merge und ohne Ausnahme; der Schalter ersetzt nicht die Freigabe im Environment |
+| 09.11. | **A4-Schalter:** `vars.CODE_PILOT_ENABLED == 'true'` statt `false &&`; nach dem Merge bleibt die Variable ungesetzt | Abschalten ohne Merge und ohne Ausnahme. Der Schalter ist ein Betriebsschalter, keine Autorisierung: dass nur Noah ihn setzen kann, ist nicht belegt (Schreibrechte des Bot-Kontos vor A5 prüfen). Autorisierung bleibt die Freigabe im Environment. Der Fingerabdruck im Prüfskript erkennt Abweichungen, ersetzt aber nicht Noahs Codeprüfung |
 
 ## 11. Offene Entscheidungen für Noah
 

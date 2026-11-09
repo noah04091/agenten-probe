@@ -170,8 +170,17 @@ Aufräumen selbst ist durch die Unit-Tests in `test/agent-code-publish.test.mjs`
 Job 1 und Job 3 beginnen nach A4 mit `vars.CODE_PILOT_ENABLED == 'true' &&` statt `false &&`.
 Ist die Repository-Variable nicht gesetzt oder nicht `true`, starten beide Jobs nicht. GitHub
 vergleicht dabei ohne Rücksicht auf Groß- und Kleinschreibung, auch `TRUE` schaltet also ein.
-Ist sie gesetzt, braucht jeder Lauf trotzdem Noahs Freigabe im Environment `claude-bot`, für
-Job 1 und erneut für Job 3.
+Ist sie gesetzt, braucht jeder Lauf trotzdem Noahs Freigabe im Environment `claude-bot`.
+
+**Was der Schalter ist und was nicht:** `CODE_PILOT_ENABLED` ist ein Betriebs- und Abschaltschalter.
+Er ist **nicht** nachgewiesenermaßen nur von Noah änderbar: Das Bot-Konto hat Schreibrecht auf das
+Repository, und ob es Repository-Variablen setzen kann, ist nicht geprüft. Das wird vor A5 geprüft.
+Die entscheidende zusätzliche Autorisierung bleibt Noahs Freigabe im Environment `claude-bot`.
+
+**Zwei Jobs, ein Environment:** Job 1 und Job 3 nutzen beide `claude-bot`. Daraus folgt noch nicht
+belegt, dass GitHub dafür zwei getrennte Freigaben verlangt; das ist bisher nicht beobachtet. Ob
+Job 3 eine eigene Freigabe anfordert, wird beim echten A5-Lauf kontrolliert. Bis dahin gilt nur die
+Freigabe vor Job 1 als sicher.
 
 **Prüfung:** `scripts/agent-code-activation-check.mjs` kennt zwei sichere Zustände: harte Sperre
 (`false &&`) oder Schalter. Es prüft außerdem, dass Bedingungen, Rechte, Environment, Secrets,
@@ -181,7 +190,10 @@ im Integrationstest des Workflows mit `--switch` und in `npm test`, also in der 
 `tests`. Ein übersprungener Integrationstest kann deshalb nie allein als Nachweis gelten.
 Letzte Schranke ist ein Fingerabdruck (SHA-256) der ganzen Workflow-Datei: Erlaubt sind genau die
 gesperrte Fassung und die Schalter-Fassung. Jede andere Änderung macht `tests` rot, bis der
-Fingerabdruck im Prüfskript sichtbar angepasst und im Review geprüft ist.
+Fingerabdruck im Prüfskript sichtbar angepasst und im Review geprüft ist. Der Fingerabdruck schützt
+vor **unbemerkten** Abweichungen, ist aber **keine unabhängige Sicherheitsgrenze**: Wer in einem PR
+zugleich Workflow und Prüfskript ändert, kann beide passend machen. `scripts/` ist nicht durch
+`schutzdateien` geschützt. Noahs persönliche Codeprüfung jedes PR bleibt deshalb erforderlich.
 
 **Ablauf A4:**
 1. Bot-PR mit Prüfskript, Tests, Doku und `docs/a4-workflow-patch.diff`. Ändert keine
@@ -217,8 +229,8 @@ nennt `BOT_APP_CLIENT_ID`.
 2. Laufende Läufe **separat abbrechen**, denn die Variable hält einen schon laufenden Job nicht an:
    `gh run list --repo noah04091/agenten-probe --workflow code-pilot-claude-stufe.yml --status in_progress`
    und `--status waiting`, dann `gh run cancel <run-id> --repo noah04091/agenten-probe`.
-3. Wartet ein Lauf auf die Freigabe im Environment: ablehnen. Job 3 braucht immer eine eigene
-   Freigabe, ohne sie entsteht kein Branch und kein PR.
+3. Wartet ein Lauf auf die Freigabe im Environment: ablehnen. Ob Job 3 eine eigene Freigabe
+   anfordert, ist erst nach A5 belegt. Bis dahin nicht darauf verlassen, sondern den Lauf abbrechen.
 4. Zusätzlich möglich: Label `bot-auftrag` an #38 entfernen. Die Live-Prüfung in Job 3 bricht
    dann vor jedem Schreiben ab.
 
