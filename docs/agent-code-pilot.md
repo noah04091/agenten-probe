@@ -103,28 +103,67 @@ Bekannte Grenzen:
 
 ### 7.3 Workflow-Verdrahtung und CI (Integration in PR #37)
 
-Die Workflow-Verdrahtung (Hash aus Job 2, Kommentar-Token, drei zusätzliche Prüfungen im
-Integrationstest) liegt bis zur Anwendung als `docs/a1-workflow-patch.diff` bereit. Agenten
-dürfen `.github/` nicht ändern, deshalb wendet Noah sie mit seinem eigenen Konto an. Der Patch
-lässt beide `false &&`-Sperren unverändert. Ohne Patch bricht Job 3 bewusst ab, weil der Hash
-fehlt.
+Erledigt mit Commit `f192b2a`: Hash aus Job 2, Kommentar-Token und die drei zusätzlichen Prüfungen
+im Integrationstest. Beide `false &&`-Sperren sind unverändert. Pflichtprüfungen laufen nur bei
+PRs gegen `main`; die CI für Arbeit am Code-Pilot entsteht deshalb auf PR #37.
 
-Alle Pflichtprüfungen (`tests`, `build`, `schutzdateien`, die Code-Pilot-Prüfungen) laufen nur bei
-PRs gegen `main`. Die vollständige CI für A1 entsteht deshalb auf PR #37: Jeder Push auf
-`wp/26-agent-code-pilot` löst sie dort aus. Ein PR gegen den Branch von #37 bekommt keine CI.
+### 7.4 Trockenlauf von Job 2 und Job 3 (A2)
 
-Schritte für Noah:
-1. PR #40 in `wp/26-agent-code-pilot` übernehmen (Merge im GitHub-Fenster).
-2. Lokal mit eigenem Konto: `git switch wp/26-agent-code-pilot`, `git pull --ff-only`,
-   `git apply --check docs/a1-workflow-patch.diff` (meldet es einen Fehler, liegt die Workflow-Datei
-   meist mit CRLF statt LF vor: dann nichts erzwingen, sondern stoppen), dann
-   `git apply docs/a1-workflow-patch.diff`
-   und `git rm docs/a1-workflow-patch.diff`.
-3. Prüfen: `grep -c '^      false &&$' .github/workflows/code-pilot-claude-stufe.yml` muss `2`
-   liefern, `npm test` und `npm run build` grün.
-4. Nur `.github/workflows/code-pilot-claude-stufe.yml` und die gelöschte Patch-Datei committen und
-   pushen. Danach auf PR #37 alle Prüfungen abwarten; der Integrationstest prüft dort die Sperren
-   und die neue Verdrahtung.
+`code-pilot-trockenlauf.yml` prüft bei jedem PR gegen `main` aus diesem Repository Job 2 und
+Job 3 ohne Claude. Er hat `permissions: {}`, keine Secrets, kein Environment und kein Token und
+kostet nichts (öffentliches Repository).
+
+1. **Testpaket statt Claude:** `agent-code-dryrun.mjs prepare` spielt die feste Multiplikation
+   ein (hat `main` sie nach A5 schon, nur je eine Kommentarzeile), `agent-code-package.mjs create`
+   erzeugt das Paket, Upload als Artefakt.
+2. **Job 2:** frische Kopie, Download per Artefaktname mit Digest-Prüfung wie im echten Job 2,
+   `agent-code-package.mjs apply`, Docker ohne Netz mit `npm test`, Abnahmetest und Build, dann
+   der Paket-Hash als Job-Ausgabe. Zusätzlich zum echten Job 2 wird der Image-Digest nach dem
+   `docker pull` kontrolliert (aus der Isolationsprobe übernommen).
+3. **Job 3 trocken:** frische Kopie, Paket erneut laden und prüfen, dann
+   `agent-code-dryrun.mjs publish`. Das ruft den echten `publishCodePilot` mit dem Hash aus Job 2
+   gegen ein strenges, nachgebautes GitHub im Speicher auf. Jeder Aufruf muss genau der nächste
+   erwartete sein, und jeder Schreibaufruf muss genau den richtigen Inhalt tragen: Baum mit
+   `base_tree` des Ausgangscommits und genau den zwei Dateien, Commit mit dem Ausgangscommit als
+   einzigem Vorgänger, Branch mit dem berechneten Namen auf dem neuen Commit, PR als Entwurf von
+   diesem Branch gegen `main`. Sonst wird der Aufruf nicht beantwortet und der Lauf bricht ab.
+   Danach drei Gegenproben, die jeweils abbrechen müssen: falscher Hash (0 Anfragen),
+   manipuliertes Byte im Paket (0 Anfragen), unerwarteter Aufruf direkt nach dem Anlegen des
+   Branches (danach wird nichts mehr beantwortet, also kein PR und kein Löschen). Echte
+   Netzaufrufe sind gesperrt, und mit einem Token im Umfeld verweigert das Skript den Lauf.
+
+**Wachen:** `agent-code-dryrun.mjs guard` lässt den Trockenlauf rot werden, wenn sein Workflow
+Secrets, Schreib- oder Leserechte über `{}` hinaus, ein Environment, Claude, ein App-Token, einen
+Token-Ausdruck, `continue-on-error`, `exit`, `set +`, `|| true` oder eine zusätzliche
+`if`-Bedingung (auch an einem Schritt) enthält, wenn `persist-credentials: false` fehlt, wenn ein
+`run`-Block nicht mit `set -euo pipefail` beginnt, wenn ein Prüfschritt fehlt oder doppelt ist,
+wenn er Dateien zurücksetzt, oder wenn Docker-Image, Docker-Aufruf, Hash-Berechnung oder
+Paketprüfung vom echten Job 2 abweichen. Schreibaufrufe mit Zusatzfeldern (etwa ein fremder
+`author`) weist der Nachbau ab. Nach dem Abbruch in der vierten Gegenprobe muss der
+Veröffentlicher genau aufräumen wollen (Spitze lesen, Issue-Kommentar), ein `DELETE` ist dort ein
+Fehler. Die Wache schützt vor Abweichung und Versehen. Eine
+Sicherheitsgrenze ist sie nicht, denn ein PR kann den Workflow selbst ändern; diese Grenze bilden
+`schutzdateien` und Noahs Freigabe. Die beiden `false &&`-Sperren zählt weiterhin der
+Integrationstest in `code-pilot-claude-stufe.yml`, nicht diese Wache. A4 muss sie deshalb nicht
+anfassen.
+
+**Was der Trockenlauf nicht prüft:** den echten Start über das Issue-Ereignis, die Live-Prüfung
+gegen das echte Issue #38, das App-Token, den Download per Name im echten Lauf, den Abbruchpfad
+mit Aufräumen gegen echtes GitHub und echtes GitHub-Verhalten überhaupt. Das zeigt erst A5. Das
+Aufräumen selbst ist durch die Unit-Tests in `test/agent-code-publish.test.mjs` belegt.
+
+**Zuordnung der bisherigen Probe-Workflows** (entfernt werden sie erst nach A5, Paket A8):
+
+| Probe | Prüfung | Abgedeckt durch |
+|---|---|---|
+| `code-pilot-isolation` | Image per Digest, Docker ohne Netz und Rechte, keine Geheimnisse, `npm test`, Build | Trockenlauf Job 2 (gleicher Docker-Aufruf, Digest-Kontrolle übernommen) |
+| `code-pilot-transfer` | Paket erzeugen, Upload, Download mit Digest-Prüfung, `apply`, `git diff --check`, Docker | Trockenlauf Job 1 und 2 (Download per Name wie im echten Job 2 statt per ID) |
+| `code-pilot-transfer` (Sperrprobe) | Ausgangscommit gleich `GITHUB_SHA`, Artefakt vorhanden | Trockenlauf Job 2 und 3 (`BASE_SHA`-Prüfung, `apply` scheitert ohne Paket) |
+| `code-pilot-abnahme-transferprobe` | feste Multiplikation, sauberer Ausgangsstand, Abnahmetest im Container | Trockenlauf Job 1 und 2 |
+| `code-pilot-auftrag-probe` | Unit-Tests Auftragsannahme und Live-Prüfung | `npm test` (`tests.yml`) und Integrationstest |
+| `code-pilot-auftrag-probe` | live: #38 offen, von Noah, `agent:code-pilot`, **noch kein** `bot-auftrag` | **bleibt separat** bis A5; wird mit A5 absichtlich falsch |
+| `code-pilot-issue-startprobe` | Unit-Tests Ereignisprüfung | `npm test` |
+| `code-pilot-issue-startprobe` | echtes `issues: labeled` auf `main` mit Live-Prüfung | **bleibt separat**; auf einem PR nicht nachstellbar. Derselbe Prüfschritt (`agent-code-issue-live-check.mjs`) steckt in Job 1 und Job 3 des Claude-Workflows |
 
 ## 8. Erfolgskriterien
 
