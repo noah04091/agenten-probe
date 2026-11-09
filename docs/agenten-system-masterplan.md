@@ -115,7 +115,7 @@ A von Anfang an ohne Festverdrahtung auf einzelne Issues gebaut (Paket A6).
 | Baustein | Stand | Ort |
 |---|---|---|
 | CI und Schutz | funktioniert | `build.yml`, `tests.yml`, `schutz.yml`, `CODEOWNERS`, Rulesets |
-| Bot-Konto | Rechte richtig, **Token abgelaufen** (R7) | `noah04091-agent` |
+| Bot-Konto | funktioniert, Token am 09.11. erneuert, Anmeldung als `noah04091-agent` geprüft (R7) | `noah04091-agent` |
 | GitHub-App, kurzlebige Tokens | funktioniert | `noah04091-agenten-probe-cloud-bot` |
 | Agent für Markdown-Testdateien | funktioniert echt (PR #32, #36) | `claude-agent.yml` auf main, Label `agent:test-note` |
 | Code-Pilot (3 Jobs) | vorbereitet, gesperrt, nie gelaufen | PR #37, `code-pilot-claude-stufe.yml` |
@@ -137,7 +137,7 @@ muss auf `main` liegen, weil Issue-Ereignisse nur Workflows auf `main` starten.
 | R4 | Zwei Agenten-Workflows lauschen auf dieselben Label-Ereignisse | niedrig | alten Agenten nach Ziel A stilllegen (A8) |
 | R5 | Sitzungen mit Noahs Admin-Token können die Freigaberegel umgehen | mittel | Schreiben nur im Bot-Terminal, Repo-Terminal nur lesend |
 | R6 | Admin-Ausnahme in `main-freigabe` | bewusst | nötig, weil Noah einziger Code-Owner ist und eigene PRs nicht selbst freigeben kann |
-| R7 | Bot-Token ist ein klassisches Token mit kurzer Laufzeit; das vom 02.11. ist am 09.11. abgelaufen | mittel | erneuern, Ablaufdatum hier eintragen; langfristig auch das Bot-Terminal über kurzlebige App-Tokens |
+| R7 | Bot-Token ist ein klassisches Token (nur `public_repo`) mit begrenzter Laufzeit. Das erste vom 02.11. lief am 09.11. ab; erneuert am 09.11., läuft laut GitHub am 09.12.2026 um 14:43 UTC ab | mittel | rechtzeitig vor Ablauf erneuern; langfristig auch das Bot-Terminal über kurzlebige App-Tokens |
 
 ### Aufgabe A1a: keine verwaisten Branches (R1)
 Scheitert Job 3 nach dem Anlegen des Branches, darf er **nur unter allen diesen Bedingungen** aufräumen:
@@ -165,7 +165,7 @@ Lokale Vorschläge archiviert (`docs/archiv/2026-11-02-lokal/`), lokale Sicherun
 ### Phase 2: Erster echter Code-Lauf (Ziel A, MVP)
 | Paket | Ergebnis | Abnahme |
 |---|---|---|
-| A0 Bot-Zugang | neues Bot-Token, Ablaufdatum in R7 | `gh api user` im Bot-Terminal meldet `noah04091-agent` |
+| A0 Bot-Zugang ✅ 09.11. | neues Bot-Token, Ablaufdatum in R7 | erfüllt: `gh api user` meldet `noah04091-agent`, PR #39 wurde damit erstellt |
 | A1 Härten | A1a und A1b umgesetzt | Tests wie in Abschnitt 7, vorher rot, nachher grün |
 | A2 Konsolidieren | Probe-Workflows zu einem kostenlosen Trockenlauf zusammengeführt, der Job 2 und 3 ohne Claude prüft | jede Prüfung der alten Proben ist im Trockenlauf oder einem Unit-Test nachweisbar (Zuordnungsliste im PR); alte Proben werden erst nach A5 entfernt |
 | A3 Auf main | PR #37 durch Noah gemergt, Sperren noch aktiv | Workflow auf main, alle Checks grün |
@@ -213,7 +213,7 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 ## 11. Offene Entscheidungen für Noah
 
 1. Die lokale Skill-Regel „Den Zweig aktualisiert immer der Agent, nie Noah“ (liegt als Patch im Archiv) aktiv übernehmen?
-2. Laufzeit des neuen Bot-Tokens (Empfehlung 30 Tage statt 7).
+2. ~~Laufzeit des neuen Bot-Tokens~~ entschieden 09.11.: 30 Tage, siehe R7.
 
 ## 12. Einstieg für eine neue Claude-Code-Sitzung
 
