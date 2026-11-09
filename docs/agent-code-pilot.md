@@ -165,6 +165,70 @@ Aufräumen selbst ist durch die Unit-Tests in `test/agent-code-publish.test.mjs`
 | `code-pilot-issue-startprobe` | Unit-Tests Ereignisprüfung | `npm test` |
 | `code-pilot-issue-startprobe` | echtes `issues: labeled` auf `main` mit Live-Prüfung | **bleibt separat**; auf einem PR nicht nachstellbar. Derselbe Prüfschritt (`agent-code-issue-live-check.mjs`) steckt in Job 1 und Job 3 des Claude-Workflows |
 
+### 7.5 Aktivierung über einen Schalter (A4)
+
+Job 1 und Job 3 beginnen nach A4 mit `vars.CODE_PILOT_ENABLED == 'true' &&` statt `false &&`.
+Ist die Repository-Variable nicht gesetzt oder nicht `true`, starten beide Jobs nicht. GitHub
+vergleicht dabei ohne Rücksicht auf Groß- und Kleinschreibung, auch `TRUE` schaltet also ein.
+Ist sie gesetzt, braucht jeder Lauf trotzdem Noahs Freigabe im Environment `claude-bot`, für
+Job 1 und erneut für Job 3.
+
+**Prüfung:** `scripts/agent-code-activation-check.mjs` kennt zwei sichere Zustände: harte Sperre
+(`false &&`) oder Schalter. Es prüft außerdem, dass Bedingungen, Rechte, Environment, Secrets,
+Claude-Budget und Ablauf von Job 1 bis 3 unverändert sind, und dass der Integrationstest bei
+**jedem** PR aus diesem Repository läuft (vorher nur für den Branch von PR #37). Es läuft zweimal:
+im Integrationstest des Workflows mit `--switch` und in `npm test`, also in der Pflichtprüfung
+`tests`. Ein übersprungener Integrationstest kann deshalb nie allein als Nachweis gelten.
+Letzte Schranke ist ein Fingerabdruck (SHA-256) der ganzen Workflow-Datei: Erlaubt sind genau die
+gesperrte Fassung und die Schalter-Fassung. Jede andere Änderung macht `tests` rot, bis der
+Fingerabdruck im Prüfskript sichtbar angepasst und im Review geprüft ist.
+
+**Ablauf A4:**
+1. Bot-PR mit Prüfskript, Tests, Doku und `docs/a4-workflow-patch.diff`. Ändert keine
+   geschützte Datei, Noah gibt ihn regulär als Code-Owner frei.
+2. Noah prüft `CODE_PILOT_ENABLED` (siehe unten), wendet den Patch mit eigenem Konto auf einem
+   eigenen Branch an, löscht die Patch-Datei und öffnet einen PR. Merge über die dokumentierte
+   Admin-Ausnahme (Masterplan Abschnitt 10), weil Noah den eigenen PR nicht freigeben kann.
+3. Nach dem Merge: Nachweis, dass die Pipeline aus ist (siehe unten). Eingeschaltet wird erst mit
+   Noahs Go für A5.
+
+**Vor dem Merge prüfen, dass der Schalter aus ist:**
+Auf beiden Ebenen muss `404 Not Found` kommen:
+- `gh api repos/noah04091/agenten-probe/actions/variables/CODE_PILOT_ENABLED`
+- `gh api repos/noah04091/agenten-probe/environments/claude-bot/variables/CODE_PILOT_ENABLED`
+
+Gegenprobe, dass die Abfrage überhaupt etwas sieht (muss einen Treffer liefern):
+`gh api repos/noah04091/agenten-probe/environments/claude-bot/variables --jq '.variables[].name'`
+nennt `BOT_APP_CLIENT_ID`.
+
+**Nach dem Merge nachweisen, dass die Pipeline aus ist:**
+- Auf `main` steht der Schalter genau zweimal und kein `false &&`:
+  `node scripts/agent-code-activation-check.mjs --switch`.
+- `CODE_PILOT_ENABLED` liefert weiter `404`.
+- Live-Probe ohne Kosten, nur mit Noahs ausdrücklichem Go: Label `bot-auftrag` an #38 setzen.
+  Erwartet: „Claude erzeugt Codepaket“ und „Sichere Code-Veröffentlichung“ übersprungen, keine
+  Freigabeanfrage im Environment. Danach das Label wieder entfernen.
+
+**Notabschaltung:**
+1. Variable ausschalten:
+   `gh variable set CODE_PILOT_ENABLED --body false --repo noah04091/agenten-probe`
+   (oder löschen). Neue Läufe starten Job 1 nicht mehr. Die Variable nie im Environment
+   `claude-bot` anlegen. Ob sie dort im Job-`if` wirken würde, ist nicht geprüft.
+2. Laufende Läufe **separat abbrechen**, denn die Variable hält einen schon laufenden Job nicht an:
+   `gh run list --repo noah04091/agenten-probe --workflow code-pilot-claude-stufe.yml --status in_progress`
+   und `--status waiting`, dann `gh run cancel <run-id> --repo noah04091/agenten-probe`.
+3. Wartet ein Lauf auf die Freigabe im Environment: ablehnen. Job 3 braucht immer eine eigene
+   Freigabe, ohne sie entsteht kein Branch und kein PR.
+4. Zusätzlich möglich: Label `bot-auftrag` an #38 entfernen. Die Live-Prüfung in Job 3 bricht
+   dann vor jedem Schreiben ab.
+
+Ob eine während eines Laufs geänderte Variable den späteren Start von Job 3 noch verhindert, ist
+nicht geprüft. Verlässlich sind Abbruch und Ablehnung der Freigabe.
+
+Der alte Markdown-Agent (`claude-agent.yml`, Label `agent:test-note`) hängt nicht an diesem
+Schalter. Er bleibt bis A8 bestehen und braucht weiter Noahs Freigabe im Environment. Issue #38
+trägt sein Label nicht.
+
 ## 8. Erfolgskriterien
 
 Der Pilot ist erfolgreich, wenn:

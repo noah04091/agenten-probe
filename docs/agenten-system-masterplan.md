@@ -135,6 +135,11 @@ Job 3 (Zeilen 490 und 491) sind bereits gesetzt und keine Aktivierungsstelle meh
 auf `main`, wie für Issue-Ereignisse nötig. Danach bleiben zwei menschliche Freigaben je Lauf: das
 Environment `claude-bot` (Reviewer `noah04091`, nur Branch `main`) für Job 1 und erneut für Job 3.
 
+**A4 vorbereitet:** Die beiden `false &&` werden durch den Schalter `vars.CODE_PILOT_ENABLED == 'true' &&`
+ersetzt, der Integrationstest läuft bei jedem PR aus diesem Repository und ruft
+`scripts/agent-code-activation-check.mjs --switch` auf. Dieselbe Prüfung läuft in `npm test`. Patch,
+Ablauf, Prüfung des Schalters und Notabschaltung: `docs/agent-code-pilot.md` Abschnitt 7.5.
+
 ## 7. Offene Risiken und technische Schulden
 
 | # | Punkt | Gewicht | Geplante Lösung |
@@ -145,7 +150,7 @@ Environment `claude-bot` (Reviewer `noah04091`, nur Branch `main`) für Job 1 un
 | R4 | Zwei Agenten-Workflows lauschen auf dieselben Label-Ereignisse | niedrig | alten Agenten nach Ziel A stilllegen (A8) |
 | R5 | Sitzungen mit Noahs Admin-Token können die Freigaberegel umgehen | mittel | Schreiben nur im Bot-Terminal, Repo-Terminal nur lesend |
 | R6 | Admin-Ausnahme in `main-freigabe` | bewusst | nötig, weil Noah einziger Code-Owner ist und eigene PRs nicht selbst freigeben kann. Bisher zweimal genutzt (PR #39, PR #37), siehe Abschnitt 10 |
-| R8 | Jede Änderung an `.github/`, `CODEOWNERS`, `package.json` oder `CLAUDE.md` lässt sich nur per Admin-Ausnahme mergen: Ein Bot-PR scheitert an `schutzdateien`, ein PR von Noah an der Code-Owner-Freigabe (er kann den eigenen PR nicht freigeben). Gewöhnliche Agenten-PRs (nur Code) sind davon nicht betroffen, die gibt Noah regulär frei | hoch für Ziel B | Entscheidung vor A4, siehe Abschnitt 11 Punkt 3; Plattform so bauen, dass Agentenarbeit nie geschützte Dateien braucht |
+| R8 | Jede Änderung an `.github/`, `CODEOWNERS`, `package.json` oder `CLAUDE.md` lässt sich nur per Admin-Ausnahme mergen: Ein Bot-PR scheitert an `schutzdateien`, ein PR von Noah an der Code-Owner-Freigabe (er kann den eigenen PR nicht freigeben). Gewöhnliche Agenten-PRs (nur Code) sind davon nicht betroffen, die gibt Noah regulär frei | hoch für Ziel B | entschieden: Weg A jetzt, Weg B vor B7 (Abschnitt 10). Plattform so bauen, dass Agentenarbeit nie geschützte Dateien braucht, etwa Auftragsprofile (A6) in einem eigenen Ordner unter `CODEOWNERS`, aber außerhalb von `schutzdateien` |
 | R7 | Bot-Token ist ein klassisches Token (nur `public_repo`) mit begrenzter Laufzeit. Das erste vom 02.11. lief am 09.11. ab; erneuert am 09.11., läuft laut GitHub am 09.12.2026 um 14:43 UTC ab | mittel | rechtzeitig vor Ablauf erneuern; langfristig auch das Bot-Terminal über kurzlebige App-Tokens |
 
 ### Aufgabe A1a: keine verwaisten Branches (R1)
@@ -179,7 +184,7 @@ Lokale Vorschläge archiviert (`docs/archiv/2026-11-02-lokal/`), lokale Sicherun
 | A1 Härten ✅ 09.11. | A1a und A1b umgesetzt | erfüllt: PR #40 und `f192b2a`, neue Tests vorher rot, 19 Mutationen rot, CI auf PR #37 grün |
 | A2 Konsolidieren ✅ 09.11. | Trockenlauf prüft Job 2 und 3 ohne Claude | erfüllt: PR #41 und `92a9fc6`, auf GitHub grün (Lauf 42691955117), Zuordnungsliste in `docs/agent-code-pilot.md` 7.4; alte Proben werden erst nach A5 entfernt |
 | A3 Auf main ✅ 09.11. | PR #37 gemergt, Sperren aktiv | erfüllt: `aa3646d`, `build` und `tests` auf `main` grün, Issue #38 nicht gestartet |
-| A4 Entsperren | kleiner PR, nur die drei Aktivierungsstellen (Abschnitt 6); Freigabeweg nach Entscheidung in Abschnitt 11 Punkt 3 | Diff zeigt nur diese Stellen, Claude-Jobs bleiben auf dem PR selbst übersprungen |
+| A4 Entsperren (vorbereitet) | Schalter statt `false &&`, Integrationstest bei jedem PR, Prüfung auch in `npm test`; Patch von Noah per dokumentierter Admin-Ausnahme | Diff nur in `code-pilot-claude-stufe.yml` an Integrationstest und den zwei Sperren; Integrationstest läuft auf dem A4-PR und ist grün; Claude-Jobs übersprungen; `CODE_PILOT_ENABLED` vor und nach dem Merge nicht gesetzt |
 | A5 Erster Lauf | Label an #38, Noah bestätigt | Draft-PR der App mit genau `src/rechne.js` und `test/rechne.test.js`, CI grün, Kosten höchstens 1,50 $ |
 
 ### Phase 3: Ziel A vollständig
@@ -223,16 +228,17 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 | 09.11. | **Ausnahme-Merge PR #39** (Masterplan, Autor Bot) durch Noah über die Admin-Ausnahme von `main-freigabe`, ohne hinterlegtes Review | einmalig; regulär wäre hier eine Freigabe durch Noah als Code-Owner möglich gewesen, da der Bot Autor war |
 | 09.11. | **Ausnahme-Merge PR #37** (Code-Pilot, Autor Noah, ändert `.github/`) durch Noah über die Admin-Ausnahme, ohne hinterlegtes Review | einmalig und unvermeidbar: Noah ist Autor und einziger Code-Owner und kann den eigenen PR nicht freigeben (R8) |
 | 09.11. | Workflow-Änderungen aus Agentenarbeit liefert der Bot als Patch, Noah wendet sie mit eigenem Konto an | Agenten ändern `.github/` nie selbst (`schutzdateien`, Repo-`CLAUDE.md`) |
+| 09.11. | **Freigabeweg (R8), Weg A:** Änderungen an geschützten Dateien per dokumentierter Admin-Ausnahme, nur für genau diese Änderung, nach Prüfung durch ChatGPT und einen unabhängigen Claude-Prüfer, mit Eintrag in dieser Tabelle. Keine Abschwächung von `schutzdateien`, keine künstlichen Freigaben | Noah ist einziger Code-Owner; ein regulärer Weg existiert für diese Dateien nicht |
+| 09.11. | **Langfristig Weg B:** eine zweite, tatsächlich unabhängige Person als Code-Owner für geschützte Dateien, vor dem produktiven Einsatz (spätestens B7) | echte Vier-Augen-Prüfung statt Ausnahmen |
+| 09.11. | **A4-Schalter:** `vars.CODE_PILOT_ENABLED == 'true'` statt `false &&`; nach dem Merge bleibt die Variable ungesetzt | Abschalten ohne Merge und ohne Ausnahme; der Schalter ersetzt nicht die Freigabe im Environment |
 
 ## 11. Offene Entscheidungen für Noah
 
 1. Die lokale Skill-Regel „Den Zweig aktualisiert immer der Agent, nie Noah“ (liegt als Patch im Archiv) aktiv übernehmen?
 2. ~~Laufzeit des neuen Bot-Tokens~~ entschieden 09.11.: 30 Tage, siehe R7.
-3. Freigabeweg für Änderungen an geschützten Dateien (R8), Voraussetzung für A4: dokumentierte
-   Admin-Ausnahme nur für diese Dateien, oder eine zweite vertrauenswürdige Person als Code-Owner
-   für `.github/`. Der A4-Plan vergleicht die Wege.
-4. A4-Schalter: `false &&` ersatzlos entfernen, oder durch eine Repository-Variable ersetzen, die nur
-   Noah setzen kann (Abschalten ohne neuen Merge). Der A4-Plan vergleicht beides.
+3. ~~Freigabeweg für geschützte Dateien (R8)~~ entschieden 09.11., siehe Abschnitt 10.
+4. ~~A4-Schalter~~ entschieden 09.11.: Repository-Variable `CODE_PILOT_ENABLED`, siehe Abschnitt 10.
+5. Wer wird die zweite unabhängige Review-Person (Weg B), und bis wann? Spätestens vor B7.
 
 ## 12. Einstieg für eine neue Claude-Code-Sitzung
 

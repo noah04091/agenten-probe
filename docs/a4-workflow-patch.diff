@@ -1,0 +1,118 @@
+diff --git a/.github/workflows/code-pilot-claude-stufe.yml b/.github/workflows/code-pilot-claude-stufe.yml
+index 4765c00..6aed5b8 100644
+--- a/.github/workflows/code-pilot-claude-stufe.yml
++++ b/.github/workflows/code-pilot-claude-stufe.yml
+@@ -1,7 +1,7 @@
+ 
+-# Code-Pilot: Claude-Generator vorbereiten.
+-# Claude bleibt durch eine feste Sperre deaktiviert.
+-# Keine automatische Veroeffentlichung.
++# Code-Pilot: Claude-Generator, Pruefung und Draft-PR-Veroeffentlichung.
++# Claude startet nur mit gesetztem Schalter (Repository-Variable) und Freigabe im Environment.
++# Keine automatische Veroeffentlichung, kein automatischer Merge.
+ 
+ name: Code-Pilot Claude-Stufe
+ 
+@@ -22,9 +22,7 @@ jobs:
+     if: >-
+       github.event_name == 'pull_request' &&
+       github.repository == 'noah04091/agenten-probe' &&
+-      github.event.pull_request.head.repo.full_name == github.repository &&
+-      github.event.pull_request.head.ref == 'wp/26-agent-code-pilot' &&
+-      github.event.pull_request.user.login == 'noah04091'
++      github.event.pull_request.head.repo.full_name == github.repository
+ 
+     runs-on: ubuntu-24.04
+     timeout-minutes: 10
+@@ -54,68 +52,20 @@ jobs:
+             test/agent-code-issue-route.test.mjs \
+             test/agent-code-issue-live-check.test.mjs
+ 
+-          # Beide Jobs muessen bis zur Freigabe hart gesperrt bleiben.
+-          node --input-type=module <<'NODE'
+-          import assert from 'node:assert/strict';
+-          import { readFileSync } from 'node:fs';
+-
+-          const yaml = readFileSync(
+-            '.github/workflows/code-pilot-claude-stufe.yml', 'utf8'
+-          );
+-
+-          const generatorStart = yaml.indexOf('\n  claude_generator:');
+-          const checkStart = yaml.indexOf('\n  codepaket_pruefen:');
+-          const publisherStart = yaml.indexOf('\n  veroeffentlichung_vorbereiten:');
+-
+-          assert.ok(generatorStart > 0 && checkStart > generatorStart);
+-          assert.ok(publisherStart > checkStart);
+-
+-          const generator = yaml.slice(generatorStart, checkStart);
+-          const publisher = yaml.slice(publisherStart);
+-          const hardGate = '    if: >-\n      false &&\n';
+-
+-          assert.ok(generator.includes(hardGate),
+-            'Claude-Generator muss hart gesperrt bleiben');
+-          assert.ok(publisher.includes(hardGate),
+-            'Draft-PR-Publisher muss hart gesperrt bleiben');
+-
+-          assert.ok(publisher.includes(
+-            'node scripts/agent-code-package.mjs apply'),
+-            'Publisher muss das Paket erneut validieren');
+-          assert.ok(publisher.includes(
+-            'node scripts/agent-code-issue-live-check.mjs'),
+-            'Publisher muss die aktuelle Issue-Freigabe pruefen');
+-          assert.ok(publisher.includes(
+-            'actions/create-github-app-token@'),
+-            'Publisher muss ein kurzlebiges App-Token nutzen');
+-          assert.ok(publisher.includes(
+-            'node scripts/agent-code-publish.mjs --publish'),
+-            'Publisher muss das gepruefte Skript verwenden');
+-          assert.ok(publisher.includes(
+-            'CODE_PILOT_PACKAGE_SHA256: $' + '{{ needs.codepaket_pruefen.outputs.package_sha256 }}'),
+-            'Publisher muss den Paket-Hash aus Job 2 erhalten');
+-          assert.ok(yaml.includes(
+-            'package_sha256: $' + '{{ steps.paket_hash.outputs.package_sha256 }}'),
+-            'Job 2 muss den Paket-Hash ausgeben');
+-          assert.ok(publisher.includes(
+-            'CODE_PILOT_COMMENT_TOKEN: $' + '{{ github.token }}'),
+-            'Publisher muss Abbruchgruende im Issue melden koennen');
+-
+-          console.log('Zwei harte Aktivierungssperren nachgewiesen.');
+-          console.log('Paketpruefung und Draft-Publisher eingebunden.');
+-          NODE
+-
+-          echo "Claude-Stufe vorbereitet."
+-          echo "Claude bleibt deaktiviert."
++          # A4: Job 1 und Job 3 nur mit Schalter und Environment-Freigabe,
++          # alle uebrigen Sicherheitsbedingungen unveraendert.
++          node scripts/agent-code-activation-check.mjs --switch
++
++          echo "Claude-Stufe geprueft."
++          echo "Start nur mit Schalter und Freigabe im Environment."
+ 
+   claude_generator:
+     name: Claude erzeugt Codepaket
+ 
+-    # HARTE SPERRE:
+-    # Dieser Job darf aktuell unter keinen Umstaenden starten.
+-    # Erst nach abgeschlossener Sicherheitsintegration entfernen.
++    # SCHALTER (A4): startet nur, wenn Noah die Repository-Variable
++    # gesetzt hat, und danach nur mit seiner Freigabe im Environment.
+     if: >-
+-      false &&
++      vars.CODE_PILOT_ENABLED == 'true' &&
+       github.event_name == 'issues' &&
+       github.repository == 'noah04091/agenten-probe' &&
+       github.ref == 'refs/heads/main' &&
+@@ -352,10 +302,10 @@ jobs:
+       - claude_generator
+       - codepaket_pruefen
+ 
+-    # Zweite unabhaengige harte Freigabesperre fuer die Schreibstufe.
+-    # Auch beim spaeteren Generator-Test wird nichts veroeffentlicht.
++    # SCHALTER (A4), fuer die Schreibstufe ein zweites Mal geprueft.
++    # Danach erneut Noahs Freigabe im Environment.
+     if: >-
+-      false &&
++      vars.CODE_PILOT_ENABLED == 'true' &&
+       needs.claude_generator.result == 'success' &&
+       needs.codepaket_pruefen.result == 'success' &&
+       github.event_name == 'issues' &&
