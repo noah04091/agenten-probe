@@ -1,0 +1,129 @@
+
+# Code-Pilot: Isolierter Sicherheits- und Funktionstest
+#
+# Ausschliesslich Testrepository noah04091/agenten-probe.
+# Kein Claude-Aufruf, kein Artefakttransfer, keine Veroeffentlichung.
+# Keine Geheimnisse oder GitHub-Schreibberechtigungen im Testjob.
+# Docker-Image ist unveraenderlich ueber SHA-256 gepinnt.
+
+name: Code-Pilot Isolationstest
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+# Keine GitHub-API-Berechtigungen fuer diesen Workflow.
+permissions: {}
+
+# Veraltete Tests desselben Pull Requests abbrechen.
+concurrency:
+  group: code-pilot-isolation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  isolationstest:
+    name: isolationstest
+
+    # Nur der ausdruecklich zugelassene Entwicklungsbranch
+    # im eigenen Testrepository.
+    if: >-
+      github.repository == 'noah04091/agenten-probe' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'wp/26-agent-code-pilot' &&
+      github.event.pull_request.user.login == 'noah04091'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    # Fest gepinntes Docker-Image.
+    # Digest stammt aus dem erfolgreich geprueften Testlauf.
+    env:
+      IMAGE: node@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40
+
+    steps:
+      - name: Repository ohne gespeicherte Zugangsdaten laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Docker-Image laden und Digest kontrollieren
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Lade fest gepinntes Docker-Image."
+
+          docker pull "$IMAGE"
+
+          DIGESTS="$(
+            docker image inspect "$IMAGE" \
+              --format '{{json .RepoDigests}}'
+          )"
+
+          [[ "$DIGESTS" == *"$IMAGE"* ]] || {
+            echo "FEHLER: Erwarteter Image-Digest fehlt."
+            exit 1
+          }
+
+          echo "Docker-Image erfolgreich verifiziert."
+          echo "$DIGESTS"
+
+      - name: Build und Tests isoliert ausfuehren
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Starte eingeschraenkten Testcontainer."
+
+          docker run --rm \
+            --pull=never \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 128 \
+            --memory 512m \
+            --cpus 1 \
+            --user 1000:1000 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=128m,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/work,readonly" \
+            --workdir /work \
+            --env HOME=/tmp \
+            --env NPM_CONFIG_CACHE=/tmp/npm-cache \
+            --env CI=true \
+            "$IMAGE" \
+            bash -euo pipefail -c '
+
+              echo "Kontrolliere die Testumgebung."
+
+              # Keine bekannten Geheimnisvariablen.
+              test -z "${GH_TOKEN:-}"
+              test -z "${GITHUB_TOKEN:-}"
+              test -z "${ANTHROPIC_API_KEY:-}"
+              test -z "${BOT_APP_PRIVATE_KEY:-}"
+
+              # Kein Docker-Socket im Testcontainer.
+              test ! -S /var/run/docker.sock
+
+              echo "Sicherheitskontrollen bestanden."
+
+              echo "Fuehre automatisierte Tests aus."
+              npm test
+
+              echo "Fuehre Build aus."
+              npm run build
+
+              echo "Isolationstest erfolgreich abgeschlossen."
+            '
+
+      - name: Erfolgreichen Testlauf bestaetigen
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Code-Pilot Isolationstest bestanden."
+          echo "Keine Claude-Ausfuehrung."
+          echo "Keine GitHub-Schreiboperation."
+          echo "Kein automatischer Merge."
