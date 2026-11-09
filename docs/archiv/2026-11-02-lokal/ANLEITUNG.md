@@ -3,7 +3,7 @@
 Ein Pull Request mit beiden Dateien. Die Schutzregel bleibt unverändert, `main` wird erst durch deinen Merge geändert.
 
 ## Schritt 1: build.yml ersetzen und Entwurfs-PR anlegen
-1. Datei `C:\Users\liebo\Documents\agenten-probe\vorschlag\build.yml` im Editor öffnen, `Strg+A`, `Strg+C`.
+1. Datei `<lokaler Ordner>\vorschlag\build.yml` im Editor öffnen, `Strg+A`, `Strg+C`.
 2. Im Browser öffnen: https://github.com/noah04091/agenten-probe/edit/main/.github/workflows/build.yml
 3. Im Editorfeld `Strg+A`, dann `Strg+V`.
 4. Oben rechts **Commit changes…** → **Create a new branch for this commit and start a pull request** → Zweigname `wf/ohne-entwurf-skip` → **Propose changes**.
@@ -11,7 +11,7 @@ Ein Pull Request mit beiden Dateien. Die Schutzregel bleibt unverändert, `main`
    (Absichtlich als Entwurf: so prüft der PR gleich mit, dass im Entwurf nicht mehr übersprungen wird.)
 
 ## Schritt 2: tests.yml auf demselben Zweig ersetzen
-1. Datei `C:\Users\liebo\Documents\agenten-probe\vorschlag\tests.yml` im Editor öffnen, `Strg+A`, `Strg+C`.
+1. Datei `<lokaler Ordner>\vorschlag\tests.yml` im Editor öffnen, `Strg+A`, `Strg+C`.
 2. Im Browser öffnen: https://github.com/noah04091/agenten-probe/edit/wf/ohne-entwurf-skip/.github/workflows/tests.yml
 3. `Strg+A`, `Strg+V`, **Commit changes…** → **Commit directly to the `wf/ohne-entwurf-skip` branch** → **Commit changes**.
 

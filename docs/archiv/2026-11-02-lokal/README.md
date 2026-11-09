@@ -14,11 +14,13 @@ damit die Historie nicht verloren geht. **Nichts davon ist aktiv.** Workflows wi
 | `FREIGABE-PFLICHT.md`, `schutz-mit-freigabe.json` | Vorschlag Freigabe-Pflicht über klassischen Branch-Schutz | überholt durch die Rulesets `main-pruefungen` und `main-freigabe` |
 | `paket-fertig-SKILL.md.patch` | Regel „Den Zweig aktualisiert immer der Agent, nie Noah“ | **nicht angewendet**, offene Entscheidung im Masterplan Abschnitt 11 |
 
-Prüfsummen (SHA-256), gleich mit den lokalen Originalen und der Sicherung
-`Documents/agenten-probe-sicherung_2026-11-09/`:
+Prüfsummen (SHA-256) der Dateien in diesem Ordner. Sie sind gleich mit den lokalen Originalen in
+`Documents/agenten-probe-sicherung_2026-11-09/`, außer bei `ANLEITUNG.md`: Dort sind für die
+öffentliche Fassung zwei lokale Windows-Pfade durch `<lokaler Ordner>` ersetzt. Das Original hat die
+Prüfsumme `fa4db094dbdd96b04a7c03d7c6effb58e81cc71c3a2217124c93b49c900856a5` und liegt unverändert in der Sicherung.
 
 ```
-fa4db094dbdd96b04a7c03d7c6effb58e81cc71c3a2217124c93b49c900856a5  ANLEITUNG.md
+4e19b21d77bacf96de13786af6b326e05392fb5876283b4f41ba9328a3608499  ANLEITUNG.md
 723e05c8017ca77a970fb17586af0976366950748ea9bf8f1660842d731e9014  FREIGABE-PFLICHT.md
 19ed371a65976647136bbe54bc35bb72609e101946d3bca38f08bd8db996c17f  build.yml
 4c21c8280c058e59891488b2da99006eac6ddac6f2667cf8d1770df0261915c3  nachweis.js
