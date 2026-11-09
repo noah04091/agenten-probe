@@ -54,6 +54,48 @@ jobs:
             test/agent-code-issue-route.test.mjs \
             test/agent-code-issue-live-check.test.mjs
 
+          # Beide Jobs muessen bis zur Freigabe hart gesperrt bleiben.
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+
+          const yaml = readFileSync(
+            '.github/workflows/code-pilot-claude-stufe.yml', 'utf8'
+          );
+
+          const generatorStart = yaml.indexOf('\n  claude_generator:');
+          const checkStart = yaml.indexOf('\n  codepaket_pruefen:');
+          const publisherStart = yaml.indexOf('\n  veroeffentlichung_vorbereiten:');
+
+          assert.ok(generatorStart > 0 && checkStart > generatorStart);
+          assert.ok(publisherStart > checkStart);
+
+          const generator = yaml.slice(generatorStart, checkStart);
+          const publisher = yaml.slice(publisherStart);
+          const hardGate = '    if: >-\n      false &&\n';
+
+          assert.ok(generator.includes(hardGate),
+            'Claude-Generator muss hart gesperrt bleiben');
+          assert.ok(publisher.includes(hardGate),
+            'Draft-PR-Publisher muss hart gesperrt bleiben');
+
+          assert.ok(publisher.includes(
+            'node scripts/agent-code-package.mjs apply'),
+            'Publisher muss das Paket erneut validieren');
+          assert.ok(publisher.includes(
+            'node scripts/agent-code-issue-live-check.mjs'),
+            'Publisher muss die aktuelle Issue-Freigabe pruefen');
+          assert.ok(publisher.includes(
+            'actions/create-github-app-token@'),
+            'Publisher muss ein kurzlebiges App-Token nutzen');
+          assert.ok(publisher.includes(
+            'node scripts/agent-code-publish.mjs --publish'),
+            'Publisher muss das gepruefte Skript verwenden');
+
+          console.log('Zwei harte Aktivierungssperren nachgewiesen.');
+          console.log('Paketpruefung und Draft-Publisher eingebunden.');
+          NODE
+
           echo "Claude-Stufe vorbereitet."
           echo "Claude bleibt deaktiviert."
 
