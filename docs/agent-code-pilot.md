@@ -67,6 +67,39 @@ Der Agent erhält einen eigenen Entwicklungsbranch und einen Draft-Pull-Request.
 
 Ein automatischer Merge ist ausgeschlossen.
 
+### 7.1 Geprüft ist gleich veröffentlicht (A1b)
+
+- Job 2 reicht den SHA-256 des geprüften Pakets als `CODE_PILOT_PACKAGE_SHA256` an Job 3 weiter.
+- `scripts/agent-code-publish.mjs` rechnet den Hash des geladenen Pakets nach und vergleicht die
+  Paketinhalte Byte für Byte mit der Arbeitskopie. Bei Abweichung oder fehlendem Hash geht keine
+  einzige Anfrage an GitHub.
+- Nach dem Anlegen des Git-Baums liest das Skript den Baum rekursiv und vergleicht die Blob-SHAs
+  beider Dateien mit den lokal berechneten (`git hash-object`-Rechnung). Erst danach entsteht ein
+  Commit. Der Remote-Diff prüft zusätzlich den Blob-SHA jeder Datei, nicht nur den Namen.
+
+### 7.2 Keine verwaisten Branches (A1a)
+
+Scheitert die Veröffentlichung nach dem Anlegen des Branches, wird er nur gelöscht, wenn alle
+Bedingungen belegt sind: Name exakt `wp/38-code-pilot-<run_id>-<attempt>`, Anlage in diesem Lauf
+von GitHub bestätigt, Spitze genau der Commit dieses Laufs, kein Pull Request zu diesem Branch
+(auch kein geschlossener). Sonst bleibt der Branch stehen. In beiden Fällen stehen Grund und
+Ergebnis im Log und als Kommentar im Issue. Das Aufräumen wirft nie und ersetzt nie den
+ursprünglichen Fehler; der Lauf endet immer rot.
+
+Bekannte Grenzen:
+- Zwischen Prüfung der Spitze und Löschen liegt ein kurzes Zeitfenster, das die REST-API nicht
+  atomar schließen kann. Den Branch-Namen kennt nur dieser Lauf.
+- Meldet `POST pulls` einen Fehler, obwohl GitHub den PR angelegt hat, und zeigt die PR-Liste ihn
+  noch nicht, würde der Branch gelöscht und der Draft-PR damit geschlossen. `main` bleibt unberührt.
+- Bricht der Runner selbst ab (Zeitlimit, manueller Abbruch), läuft kein Aufräumen. Der Branch
+  bleibt dann ohne Kommentar stehen; gelöscht wird nichts.
+- Der Issue-Kommentar braucht im Workflow `issues: write` für das Job-Token und
+  `CODE_PILOT_COMMENT_TOKEN`. Ohne das steht der Grund nur im Log.
+
+Die nötige Workflow-Verdrahtung (Hash aus Job 2, Kommentar-Token) liegt als Vorschlag in
+`docs/a1-workflow-patch.diff`. Agenten dürfen `.github/` nicht ändern, Noah wendet ihn an mit
+`git apply docs/a1-workflow-patch.diff` und löscht die Datei danach.
+
 ## 8. Erfolgskriterien
 
 Der Pilot ist erfolgreich, wenn:
