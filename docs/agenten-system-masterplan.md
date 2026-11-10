@@ -261,9 +261,87 @@ Abschnitt 9 sind offen. Nächstes Paket ist **A6 Auftragsprofile**.
 ### Phase 3: Ziel A vollständig
 | Paket | Ergebnis | Abnahme |
 |---|---|---|
-| A6 Auftragsprofile (nächstes Paket) | erlaubte Dateien, Prompt mit Auftragsbeschreibung, Abnahmetest je Auftragsart aus einer vertrauenswürdigen Datei auf main statt fest auf #38 (löst R3) | zwei neue Aufträge ohne Workflow-Änderung |
+| A6 Auftragsprofile (in Arbeit, Plan unten) | erlaubte Dateien, Prompt mit Auftragsbeschreibung, Abnahmetest je Auftrag aus vertrauenswürdigen Dateien auf main statt fest auf #38 (löst R3) | zwei neue Aufträge ohne Workflow-Änderung, Sicherheitskriterien K1 bis K4 erfüllt |
 | A7 Negativfälle | verbotene Datei, falscher Code, entzogenes Label | jeweils kein PR, Grund im Issue |
 | A8 Aufräumen | alter Agent und `claude-bot.yml` stillgelegt, Issues #28 und #35 geschlossen, Proben nach Zuordnungsliste entfernt | ein einziger Agenten-Workflow |
+
+### A6 Auftragsprofile: Architektur Version 2
+
+**Stand 10.11.2026:** Konzept Version 2 von ChatGPT geprüft und in der Grundarchitektur akzeptiert.
+Freigegeben ist nur A6.1 PR 1 (diese Dokumentation). Nichts davon ist umgesetzt, nichts ist aktiv.
+Alle Schutzmaßnahmen unten sind **geplant**, keine ist bisher nachgewiesen.
+
+**Grundsatz:** Rechte kommen nur aus vertrauenswürdigen Dateien auf `main`. Der Issue-Text beschreibt
+nur die fachliche Aufgabe und gilt als nicht vertrauenswürdige Eingabe. Die Grenze ist mechanisch
+(Werkzeuge, Pfade, Änderungsprüfung, Abnahme, Freigaben), nicht die Formulierung des Prompts.
+
+**Bausteine (geplant):**
+- **Profile** `agent-profiles/<id>.json`: kanonisches JSON, Label `agent:<id>`. Felder `schema`, `id`,
+  `aktiv`, `dateien`, `abnahme`, `modell`, `budget_usd`, `max_runden`, `max_laufzeit_minuten`,
+  `auftrag_rahmen`, `pr_titel_praefix`. In A6 nur 1 bis 4 exakte, bereits vorhandene Dateien unter
+  `src/` oder `test/` (Modus `100644`), keine Muster, Unterordner, Symlinks, `..` oder neuen Dateien.
+  Geschützt durch `CODEOWNERS`, nicht durch `schutzdateien`.
+- **Policy** `.github/agent/policy.json` (geschützt): Obergrenzen (Budget 1,50, Runden 12,
+  Laufzeit 20 Minuten, Modelle, Dateizahl), Pfadregel, Sperrliste, reservierte IDs und SHA-256 jeder
+  ausführbaren Datei, die ein Job außerhalb des Testcontainers startet, samt Abhängigkeiten. Die Menge
+  der Skripte muss der Liste genau entsprechen. Der geschützte Workflow vergleicht die Hashes inline
+  vor jedem Skriptaufruf und in Job 1 erneut nach Claude.
+- **Claude-Einstellungen** `.github/agent/claude-settings.json` (geschützt, per `settings:` an die
+  Action): Erlaubnisse nur mit Pfad, Verbote für Shell, Netz und Lesen außerhalb des Auftrags.
+- **Job 0 `auftrag_festlegen`** ohne Environment und Secrets: prüft Ereignis, Hashes, Profil,
+  Abnahme, Issue und Doppelstart, bevor eine Freigabe angefragt wird. Gibt nur kurze geprüfte Werte
+  und Hashes weiter, nie den Prompt.
+- **Issue-Übergabe:** Job 1 liest den Issue-Text live, vergleicht seinen Hash mit Job 0 und baut den
+  Prompt aus Sicherheitsrahmen, Profilrahmen und Issue-Daten zwischen Markierungen mit Zufallskennung.
+  Übergabe als Schritt-Ausgabe innerhalb von Job 1 an `with: prompt:`; Issue-Inhalte nie in `run:`.
+- **Abnahme** `agent-acceptance/issue-<n>.mjs`: eigener, vorher freigegebener PR, per Hash an den
+  Ausgangscommit gebunden. Neue Regel in `schutzdateien`: Ein PR mit Dateien unter `agent-profiles/`
+  oder `agent-acceptance/` darf nichts anderes enthalten.
+- **Geheimnisschutz:** kein Ausführen im von Claude veränderten Arbeitsverzeichnis, exakter Abgleich
+  mit den Geheimnissen in Job 1 vor dem Hochladen des Artefakts, Musterprüfung (`sk-ant-`, `ghs_`,
+  `ghp_`, `github_pat_`, `-----BEGIN … PRIVATE KEY`) in Job 2 und Job 3. Kodierte Geheimnisse
+  umgehen Abgleich und Muster; die eigentliche Grenze ist das Leseverbot (K1).
+- **Ein Lauf gleichzeitig** (`concurrency`), fester Auftrag vom Job 0 bis Job 3 (Profil-, Issue-Text-,
+  Abnahme-, Label- und Paket-Hash, Ausgangscommit).
+
+**Befunde zu Job 1 aus A5 (Lauf 42783596004, Action `c0949c50`):**
+- F1: Die Action schreibt das GitHub-Token von Job 1 in die Remote-URL in `.git/config` im
+  Arbeitsverzeichnis (nur Leserechte, verfällt mit dem Job).
+- F2: `ANTHROPIC_API_KEY` und `GITHUB_TOKEN` stehen in der Umgebung des Claude-Schritts.
+- F3 (**Hinweis, nicht belegt**): `--allowedTools Read,Edit,Write` ohne Pfad erlaubt vermutlich jeden
+  Pfad, auch `/proc`, `$HOME`, `$RUNNER_TEMP`. Bis K1 belegt ist, gilt der API-Schlüssel in Job 1
+  als für Claude erreichbar, auch rückwirkend für A5. Die beiden A5-Pakete enthielten nur Rechencode.
+- F4: Nach Claude laufen in Job 1 Skripte und Git-Befehle im veränderten Arbeitsverzeichnis.
+- F5: Das Paket wird vor der Prüfung in Job 2 als Artefakt hochgeladen; das Repository ist öffentlich.
+- F6: Die Action nimmt `settings` (JSON oder Dateipfad), aber keinen Eingang für eine Prompt-Datei.
+- F7: Nach Claude laufen interne Schritte der Action und die Post-Phase von `actions/checkout`, die
+  Git-Befehle im Arbeitsverzeichnis ausführt.
+
+**Sicherheitskriterien, Pflicht vor A6.4 beziehungsweise vor den ersten neuen Live-Läufen (alle offen):**
+
+| # | Anforderung | Nachweis |
+|---|---|---|
+| K1 | Lesen und Schreiben von Claude nur im Auftrag: Pfad-Erlaubnisse, Verbote, zusätzlich die Einstellungen `blockReadsOutsideWorkingDirectories` und `blockWritesOutsideWorkingDirectories` (ob die eingesetzte Claude-Code-Version sie kennt, ist ungeprüft) | Kanarienprobe im echten Action-Kontext mit ausschließlich künstlichen Testwerten; belegt werden müssen tatsächliche Werkzeugverweigerungen, nicht nur fehlende Ausgaben; Gegenprobe mit der heutigen Einstellung muss einen Zugriff zeigen. **Offene Anforderung, nicht ausführen:** Die Probe braucht einen separat begrenzten Zugang, kontrollierte Logausgabe und eine eigene Sicherheitsfreigabe von Noah |
+| K2 | Keine von Claude veränderte Git-Konfiguration und kein von Claude geschriebener Code wirkt in späteren Schritten oder Post- und Cleanup-Schritten (Action, `actions/checkout`) | Claude arbeitet in einer Kopie ohne `.git`, Checkout außerhalb seines Schreibbereichs; Durchsicht aller Post-Schritte auf dem jeweiligen SHA; Probe mit präparierter `.git/config` (`core.fsmonitor`), deren Marker nie entstehen darf. Eine Hash-Prüfung nach Claude allein genügt nicht |
+| K3 | Eindeutige Auftragskennung `issue-<n>/<profil-id>/<profil-hash>/<text-hash>/<abnahme-hash>`; Start nur durch frisch gesetztes Label von Noah; `GITHUB_RUN_ATTEMPT` muss 1 sein; kein offener PR, kein Branch `wp/<n>-*`, Issue offen; höchstens drei Versuche je Kennung; ein wartender Lauf prüft alles neu; Freigabefrist 60 Minuten ab Label | Unit-Tests je Regel mit grünem und rotem Fall, Generalprobe in A6.4 |
+| K4 | Workload Identity Federation statt langlebigem `ANTHROPIC_API_KEY` prüfen. Die gepinnte Action hat die Eingänge `anthropic_federation_rule_id`, `anthropic_organization_id`, `anthropic_service_account_id`, `anthropic_workspace_id`, `anthropic_oidc_audience` und braucht `id-token: write`; ob das Anthropic-Konto Föderation anbietet, ist ungeprüft | schriftlicher Plan mit Kontoseite, engen Regelbedingungen und Rückweg; **keine Änderung an Zugangsdaten ohne Noahs Freigabe** |
+
+**Umsetzungsplan:**
+
+| Paket | Inhalt | Abnahme |
+|---|---|---|
+| A6.1 Profil und Eingabeprüfung, ohne Wirkung | **PR 1** `docs/agenten-system-masterplan.md` (dieser Abschnitt). **PR 2** nur `agent-profiles/js-rechner.json` und `agent-profiles/js-text.json` (`js-text` inaktiv bis A6.3). **PR 3** `scripts/agent-profile.mjs`, `test/agent-profile.test.mjs`, `test/fixtures/agent-policy.entwurf.json`, `test/fixtures/claude-settings.entwurf.json`. Strikt nacheinander, jeder PR von ChatGPT geprüft und von Noah regulär freigegeben | je PR genau seine Dateien; alle Pflichtprüfungen und Trockenlauf grün; Rot-Beweis für jede Prüfung; kein Workflow ruft etwas davon auf; neue Tests ohne GitHub-Schreibzugriffe, Agentenstarts, Zugangsdaten oder andere externe Seiteneffekte |
+| A6.2 Skripte generalisieren | Route, Live-Prüfung, Paket v2, Freigabeplan, Veröffentlicher, Änderungsprüfung, Prompt-Bau, Geheimnis- und Musterprüfung, K3; Abnahme für #38 als eigener PR | #38 mit Profil `js-rechner` nachgespielt ergibt dieselben Dateien wie PR #47; Grenzen grün und rot |
+| A6.3 Trockenlauf je Profil | Trockenlauf für beide Profile; Gerüst `src/text.js`, `test/text.test.js` als eigener PR | beide Profile grün, gleicher Paket-Hash in Job 2 und 3 |
+| A6.4 Workflow-Patch | Patch für beide Workflows, `policy.json`, `claude-settings.json`, `schutz.yml` (Trennregel), `package.json` (Build über `src/`); Aktivierungsprüfung bleibt und wird erweitert | K2 und K3 nachgewiesen, Generalprobe rot bei Manipulation; ChatGPT und ein unabhängiger Prüfer stimmen zu |
+| A6.5 Patch anwenden | Noahs Konto, Admin-Ausnahme | Integrationstest und Trockenlauf grün, Claude-Jobs übersprungen; ein Bot-Test-PR mit verändertem Prüfskript wird nachweislich rot; Schalter vorher und nachher 404 |
+| A6.6 Erster neuer Auftrag | nur nach K1 und K4-Entscheidung und Noahs Go: Abnahme-PR, Issue, Lauf mit `js-rechner` | Draft-PR mit genau den Profildateien, CI grün, zwei Freigaben, Kosten unter dem Deckel |
+| A6.7 Zweiter neuer Auftrag | nach Noahs Go, Profil `js-text` | wie A6.6, ohne Änderung an Workflow, Policy oder Skripten dazwischen; damit ist A6 abgenommen |
+
+**Verschoben:** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach
+Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele
+Läufe, Neustart-Grenzen, Kostenauswertung, neue Dateien in Profilen, Claude Code ohne Action im
+Container, zweite Review-Person, Skripte in geschütztem Ordner statt Hash-Bindung.
 
 ### Phase 4: Ziel B
 B1 Zentrale: Board automatisch, Sitzungsübersicht liest auch dieses Repo und die Agentenläufe ·
@@ -304,6 +382,9 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 | 09.11. | **A4-Schalter:** `vars.CODE_PILOT_ENABLED == 'true'` statt `false &&`; nach dem Merge bleibt die Variable ungesetzt | Abschalten ohne Merge und ohne Ausnahme. Der Schalter ist ein Betriebsschalter, keine Autorisierung: Laut Berechtigungstest vom 09.11. (HTTP 422 für Noah und Bot, 403 als Gegenprobe auf fremdem Repo, Abschnitt 6) kann der Bot ihn sehr wahrscheinlich selbst setzen; eine erfolgreiche Erstellung wurde bewusst nicht getestet. Autorisierung ist die Freigabe im Environment `claude-bot` (in A5 zwei getrennte Freigaben belegt). Eine Freigabeanfrage, die Noah nicht selbst veranlasst hat, wird abgelehnt. Der Fingerabdruck im Prüfskript erkennt Abweichungen, ersetzt aber nicht Noahs Codeprüfung |
 | 09.11. | **Ausnahme-Merge PR #44** (A4-Workflow, Autor Noah, ändert `.github/`) durch Noah über die Admin-Ausnahme, ohne hinterlegtes Review | Weg A, wie für A4 entschieden; Inhalt vorher als PR #43 regulär freigegeben |
 | 10.11. | **Die Abnahme wird nach Versuch 1 nicht abgeschwächt.** `scripts/agent-code-acceptance.mjs` vergleicht weiter exakt mit `a * b`, einschließlich `-0` | geprüft wird, ob der Agent die unabhängigen Anforderungen erfüllt, nicht die Prüfung an den Agenten angepasst |
+| 10.11. | **A6 Architektur Version 2** in der Grundarchitektur akzeptiert (Abschnitt 8); A6.1 in drei getrennten PRs, strikt nacheinander, jeder von ChatGPT geprüft und von Noah regulär freigegeben | kleine, einzeln prüfbare Schritte |
+| 10.11. | K1 bis K4 sind Pflicht vor A6.4 beziehungsweise vor neuen Live-Läufen; die Kanarienprobe K1 nur mit separat begrenztem Zugang, kontrollierter Logausgabe und eigener Sicherheitsfreigabe | keine echten, weitreichenden Zugangsdaten in einer Probe |
+| 10.11. | Tests unter `test/` laufen automatisch in `npm test` und dürfen deshalb keine GitHub-Schreibzugriffe, Agentenstarts, Zugriffe auf Zugangsdaten oder andere externe Seiteneffekte auslösen | jede Pflichtprüfung führt sie aus |
 
 ## 11. Offene Entscheidungen für Noah
 
@@ -312,6 +393,12 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 3. ~~Freigabeweg für geschützte Dateien (R8)~~ entschieden 09.11., siehe Abschnitt 10.
 4. ~~A4-Schalter~~ entschieden 09.11.: Repository-Variable `CODE_PILOT_ENABLED`, siehe Abschnitt 10.
 5. Wer wird die zweite unabhängige Review-Person (Weg B), und bis wann? Spätestens vor B7.
+6. A6, vor A6.6: Mit welchem separat begrenzten Zugang und welcher Logausgabe läuft die Kanarienprobe K1?
+7. A6: In A6 immer nur ein Agentenlauf gleichzeitig? Empfehlung: ja.
+8. A6.4: `package.json` (Build über `src/`) und `schutz.yml` (Trennregel) im selben Patch erweitern? Empfehlung: ja, beides verschärft nur.
+9. Vor A6.6: Ausgabenlimit auf dem Anthropic-Schlüssel setzen? Empfehlung: ja.
+10. Falls K1 zeigt, dass sich Lesen nicht verlässlich begrenzen lässt: A6.6 erst nach Umbau auf Claude Code im Container? Empfehlung: ja, vorab festlegen.
+11. K4: Workload Identity Federation einführen, und neue Live-Läufe erst nach der Schlüsselerneuerung am 02.12.2026? Empfehlung: Entscheidung zusammen mit W1.
 
 ## 12. Einstieg für eine neue Claude-Code-Sitzung
 
