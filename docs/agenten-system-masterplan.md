@@ -113,8 +113,10 @@ A von Anfang an ohne Festverdrahtung auf einzelne Issues gebaut (Paket A6).
 | 09.11. | **A1 Härten:** geprüftes Paket ist gleich veröffentlichtes (Hash aus Job 2, Blob-SHAs), kein verwaister Branch, im Zweifel nie löschen | PR #40, Workflow-Verdrahtung `f192b2a` |
 | 09.11. | **A2 Trockenlauf:** Job 2 und Job 3 ohne Claude bei jedem PR gegen `main`; auf GitHub grün, gleicher Paket-Hash in Job 2 und 3, 190/190 Tests im Container, 0 Anfragen an echtes GitHub | PR #41, Workflow `92a9fc6`, Lauf 42691955117 |
 | 09.11. | **A3:** Code-Pilot auf `main`, beide `false &&`-Sperren aktiv, `build` und `tests` auf `main` grün | PR #37, Commit `aa3646d` (gemergt per Admin-Ausnahme, siehe Abschnitt 10) |
+| 09.11. | **A4:** Prüfskript, Tests und Patch regulär von Noah freigegeben; Workflow mit Schalter statt `false &&` von Noah angewendet; Label-Probe bei ausgeschaltetem Schalter übersprungen | PR #43 (Review „Approved“), PR #44 (`05e0267`, gemergt per Admin-Ausnahme, siehe Abschnitt 10), Lauf 42705575901 |
+| 10.11. | **A5 Versuch 1 gescheitert:** Claude lief echt (Sonnet, 6 Runden, gemeldete Kosten **0,04 $**), die Abnahme in Job 2 lehnte das Paket ab, Job 3 wurde übersprungen, kein Branch, kein PR | Lauf 42778651853, Abschnitt 6 |
 
-## 6. Ist-Zustand (09.11.2026, nach A3)
+## 6. Ist-Zustand (10.11.2026, nach A5 Versuch 1)
 
 | Baustein | Stand | Ort |
 |---|---|---|
@@ -122,7 +124,7 @@ A von Anfang an ohne Festverdrahtung auf einzelne Issues gebaut (Paket A6).
 | Bot-Konto | funktioniert, Token am 09.11. erneuert, Anmeldung als `noah04091-agent` geprüft (R7) | `noah04091-agent` |
 | GitHub-App, kurzlebige Tokens | funktioniert | `noah04091-agenten-probe-cloud-bot` |
 | Agent für Markdown-Testdateien | funktioniert echt (PR #32, #36) | `claude-agent.yml` auf main, Label `agent:test-note` |
-| Code-Pilot (3 Jobs) | auf `main`, gehärtet (A1), beide Sperren aktiv; Job 1 und Job 3 nie echt gelaufen | `code-pilot-claude-stufe.yml` |
+| Code-Pilot (3 Jobs) | auf `main`, gehärtet (A1), Schalter `CODE_PILOT_ENABLED` (A4) am 10.11. nicht gesetzt; Job 1 einmal echt gelaufen (A5 Versuch 1), Job 3 nie | `code-pilot-claude-stufe.yml` |
 | Trockenlauf | läuft bei jedem PR gegen `main` aus diesem Repo, prüft Job 2 und Job 3 ohne Claude, ohne Secrets, ohne Kosten | `code-pilot-trockenlauf.yml`, `scripts/agent-code-dryrun.mjs` |
 | Probe-Workflows | auf `main`, laufen nur noch für den gemergten Branch `wp/26-agent-code-pilot` und damit praktisch nicht mehr; Zuordnung zum Trockenlauf in `docs/agent-code-pilot.md` 7.4 | `code-pilot-transfer`, `-abnahme-transferprobe`, `-isolation`, `-auftrag-probe`, `-issue-startprobe` |
 | Lokales Windows-Bot-Konto (Plan C3) | nicht umgesetzt, geparkt | `claude-werkzeuge/C3-migrationsplan.md` |
@@ -141,6 +143,25 @@ kontrolliert.
 ersetzt, der Integrationstest läuft bei jedem PR aus diesem Repository und ruft
 `scripts/agent-code-activation-check.mjs --switch` auf. Dieselbe Prüfung läuft in `npm test`. Patch,
 Ablauf, Prüfung des Schalters und Notabschaltung: `docs/agent-code-pilot.md` Abschnitt 7.5.
+Umgesetzt mit PR #43 und PR #44.
+
+**A5 Versuch 1 (10.11., Lauf 42778651853):** Noah setzte das Label `bot-auftrag` an #38 um 07:54:59 UTC
+und gab das Environment `claude-bot` frei (eine Freigabe, vor Job 1). Job 1 lief mit Erfolg: Claude
+änderte genau `src/rechne.js` und `test/rechne.test.js`, die Änderungsprüfung bestand. Gemeldete Kosten
+laut Ergebnis von Claude Code: `total_cost_usd` 0,0414 (rund 0,04 $), 6 Runden. Job 2 lehnte das Paket
+in der unabhängigen Abnahme (`scripts/agent-code-acceptance.mjs`) ab:
+`multipliziere(0, -9) liefert ein falsches Ergebnis`, erwartet `-0`, geliefert `0`. Ursache im Paket:
+Claude schrieb `return a * b + 0;` mit dem Kommentar „normalisiert -0 zu 0“ und einen eigenen Test, der
+für `multipliziere(-5, 0)` den Wert `0` erwartet. `assert.strictEqual` unterscheidet `0` und `-0`, ohne
+die Normalisierung wäre also Claudes eigener Test rot gewesen. Job 3 wurde übersprungen, es entstand
+kein Branch und kein PR, ins Issue wurde nichts geschrieben. Das Label ist seit 08:01:10 UTC entfernt.
+**Die Kette hat damit wie geplant gehalten:** Ein falsches Ergebnis kam nicht bis zur Veröffentlichung.
+Nicht geklärt durch diesen Lauf: ob Job 3 eine eigene Environment-Freigabe anfordert (Job 3 lief nicht).
+
+**Befund aus Versuch 1: Claude sieht den Issue-Text nicht.** Die Action meldete
+`Auto-detected mode: agent for event: issues` und als Kontext nur den festen Prompt aus Job 1. Claude
+hat nur `Read`, `Edit` und `Write`, also keinen Zugriff auf GitHub. Eine Präzisierung nur im Text von
+#38 erreicht Claude deshalb nicht.
 
 ## 7. Offene Risiken und technische Schulden
 
@@ -148,10 +169,10 @@ Ablauf, Prüfung des Schalters und Notabschaltung: `docs/agent-code-pilot.md` Ab
 |---|---|---|---|
 | R1 | ~~Abbruch nach Branch-Erstellung hinterlässt Branch ohne PR~~ | erledigt | A1a (PR #40): gelöscht wird nur ein belegt eigener Branch vor der PR-Anfrage, sonst bleibt er stehen und der Grund steht im Issue |
 | R2 | ~~Bindung geprüftes Paket zu veröffentlichtem Inhalt nur indirekt~~ | erledigt | A1b (PR #40, `f192b2a`): Hash aus Job 2, Bytevergleich, Blob-SHAs im Baum und im Diff; auf GitHub im Trockenlauf belegt |
-| R3 | Alles fest auf Issue #38 verdrahtet (Workflow, Prompt, Paket, Plan, Publisher, Abnahmetest) | hoch für Ziel A | Auftragsprofile in einer vertrauenswürdigen Datei auf `main` (A6) |
+| R3 | Alles fest auf Issue #38 verdrahtet (Workflow, Prompt, Paket, Plan, Publisher, Abnahmetest). Der Issue-Text erreicht Claude nicht (belegt in A5 Versuch 1, Abschnitt 6) | hoch für Ziel A | Auftragsprofile in einer vertrauenswürdigen Datei auf `main` (A6) |
 | R4 | Zwei Agenten-Workflows lauschen auf dieselben Label-Ereignisse | niedrig | alten Agenten nach Ziel A stilllegen (A8) |
 | R5 | Sitzungen mit Noahs Admin-Token können die Freigaberegel umgehen | mittel | Schreiben nur im Bot-Terminal, Repo-Terminal nur lesend |
-| R6 | Admin-Ausnahme in `main-freigabe` | bewusst | nötig, weil Noah einziger Code-Owner ist und eigene PRs nicht selbst freigeben kann. Bisher zweimal genutzt (PR #39, PR #37), siehe Abschnitt 10 |
+| R6 | Admin-Ausnahme in `main-freigabe` | bewusst | nötig, weil Noah einziger Code-Owner ist und eigene PRs nicht selbst freigeben kann. Bisher dreimal genutzt (PR #39, PR #37, PR #44), siehe Abschnitt 10 |
 | R8 | Jede Änderung an `.github/`, `CODEOWNERS`, `package.json` oder `CLAUDE.md` lässt sich nur per Admin-Ausnahme mergen: Ein Bot-PR scheitert an `schutzdateien`, ein PR von Noah an der Code-Owner-Freigabe (er kann den eigenen PR nicht freigeben). Gewöhnliche Agenten-PRs (nur Code) sind davon nicht betroffen, die gibt Noah regulär frei | hoch für Ziel B | entschieden: Weg A jetzt, Weg B vor B7 (Abschnitt 10). Plattform so bauen, dass Agentenarbeit nie geschützte Dateien braucht, etwa Auftragsprofile (A6) in einem eigenen Ordner unter `CODEOWNERS`, aber außerhalb von `schutzdateien` |
 | R7 | Bot-Token ist ein klassisches Token (nur `public_repo`) mit begrenzter Laufzeit. Das erste vom 02.11. lief am 09.11. ab; erneuert am 09.11., läuft laut GitHub am 09.12.2026 um 14:43 UTC ab | mittel | rechtzeitig vor Ablauf erneuern; langfristig auch das Bot-Terminal über kurzlebige App-Tokens |
 
@@ -186,8 +207,8 @@ Lokale Vorschläge archiviert (`docs/archiv/2026-11-02-lokal/`), lokale Sicherun
 | A1 Härten ✅ 09.11. | A1a und A1b umgesetzt | erfüllt: PR #40 und `f192b2a`, neue Tests vorher rot, 19 Mutationen rot, CI auf PR #37 grün |
 | A2 Konsolidieren ✅ 09.11. | Trockenlauf prüft Job 2 und 3 ohne Claude | erfüllt: PR #41 und `92a9fc6`, auf GitHub grün (Lauf 42691955117), Zuordnungsliste in `docs/agent-code-pilot.md` 7.4; alte Proben werden erst nach A5 entfernt |
 | A3 Auf main ✅ 09.11. | PR #37 gemergt, Sperren aktiv | erfüllt: `aa3646d`, `build` und `tests` auf `main` grün, Issue #38 nicht gestartet |
-| A4 Entsperren (vorbereitet) | Schalter statt `false &&`, Integrationstest bei jedem PR, Prüfung auch in `npm test`; Patch von Noah per dokumentierter Admin-Ausnahme | Diff nur in `code-pilot-claude-stufe.yml` an Integrationstest und den zwei Sperren; Integrationstest läuft auf dem A4-PR und ist grün; Claude-Jobs übersprungen; `CODE_PILOT_ENABLED` vor und nach dem Merge nicht gesetzt |
-| A5 Erster Lauf | Label an #38, Noah bestätigt | Draft-PR der App mit genau `src/rechne.js` und `test/rechne.test.js`, CI grün, Kosten höchstens 1,50 $. Vorher geprüft: Schreibrechte des Bot-Kontos auf Repository-Variablen. Im Lauf kontrolliert: ob Job 3 eine eigene Environment-Freigabe anfordert |
+| A4 Entsperren ✅ 09.11. | Schalter statt `false &&`, Integrationstest bei jedem PR, Prüfung auch in `npm test`; Patch von Noah per dokumentierter Admin-Ausnahme | Diff nur in `code-pilot-claude-stufe.yml` an Integrationstest und den zwei Sperren; Integrationstest läuft auf dem A4-PR und ist grün; Claude-Jobs übersprungen; `CODE_PILOT_ENABLED` vor und nach dem Merge nicht gesetzt |
+| A5 Erster Lauf | Label an #38, Noah bestätigt | Draft-PR der App mit genau `src/rechne.js` und `test/rechne.test.js`, CI grün, Kosten höchstens 1,50 $. Vorher geprüft: Schreibrechte des Bot-Kontos auf Repository-Variablen. Im Lauf kontrolliert: ob Job 3 eine eigene Environment-Freigabe anfordert. **Versuch 1 (10.11.) gescheitert** an der Abnahme (`-0`), 0,04 $, kein PR; Versuch 2 erst nach Noahs Freigabe |
 
 ### Phase 3: Ziel A vollständig
 | Paket | Ergebnis | Abnahme |
@@ -233,6 +254,8 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 | 09.11. | **Freigabeweg (R8), Weg A:** Änderungen an geschützten Dateien per dokumentierter Admin-Ausnahme, nur für genau diese Änderung, nach Prüfung durch ChatGPT und einen unabhängigen Claude-Prüfer, mit Eintrag in dieser Tabelle. Keine Abschwächung von `schutzdateien`, keine künstlichen Freigaben | Noah ist einziger Code-Owner; ein regulärer Weg existiert für diese Dateien nicht |
 | 09.11. | **Langfristig Weg B:** eine zweite, tatsächlich unabhängige Person als Code-Owner für geschützte Dateien, vor dem produktiven Einsatz (spätestens B7) | echte Vier-Augen-Prüfung statt Ausnahmen |
 | 09.11. | **A4-Schalter:** `vars.CODE_PILOT_ENABLED == 'true'` statt `false &&`; nach dem Merge bleibt die Variable ungesetzt | Abschalten ohne Merge und ohne Ausnahme. Der Schalter ist ein Betriebsschalter, keine Autorisierung: dass nur Noah ihn setzen kann, ist nicht belegt (Schreibrechte des Bot-Kontos vor A5 prüfen). Autorisierung bleibt die Freigabe im Environment. Der Fingerabdruck im Prüfskript erkennt Abweichungen, ersetzt aber nicht Noahs Codeprüfung |
+| 09.11. | **Ausnahme-Merge PR #44** (A4-Workflow, Autor Noah, ändert `.github/`) durch Noah über die Admin-Ausnahme, ohne hinterlegtes Review | Weg A, wie für A4 entschieden; Inhalt vorher als PR #43 regulär freigegeben |
+| 10.11. | **Die Abnahme wird nach Versuch 1 nicht abgeschwächt.** `scripts/agent-code-acceptance.mjs` vergleicht weiter exakt mit `a * b`, einschließlich `-0` | geprüft wird, ob der Agent die unabhängigen Anforderungen erfüllt, nicht die Prüfung an den Agenten angepasst |
 
 ## 11. Offene Entscheidungen für Noah
 
