@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +31,7 @@ import {
   validateProfile,
   validateSettingsDraft,
 } from '../scripts/agent-profile.mjs';
+import * as profileModule from '../scripts/agent-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const POLICY_BYTES = readFileSync(join(ROOT, 'test/fixtures/agent-policy.entwurf.json'));
@@ -78,45 +79,83 @@ const rejectsIssue = (fn, code) => rejects(fn, code, 'Auftragspruefung abgelehnt
 const profileCheck = (profile, fileName = 'js-rechner.json', usedPolicy = policy()) =>
   () => validateProfile(profile, { policy: usedPolicy, fileName, entwurf: true });
 
-// Temporaeres Repository, Baum nur aus Plumbing-Befehlen. Keine Hooks, keine Arbeitskopie.
-const GIT_ENV = {
-  ...process.env,
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_AUTHOR_NAME: 'Test',
-  GIT_AUTHOR_EMAIL: 'test@example.invalid',
-  GIT_COMMITTER_NAME: 'Test',
-  GIT_COMMITTER_EMAIL: 'test@example.invalid',
-};
+// Minimale, ausdruecklich gebaute Umgebung fuer Git-Testprozesse. Von aussen kommen nur die
+// Variablen, die zum Finden und Starten von git noetig sind (Linux: PATH; Windows zusaetzlich
+// SystemRoot, PATHEXT, ComSpec, windir). Alles andere, auch Tokens, GIT_DIR oder
+// GIT_CONFIG_*, bleibt draussen. HOME, XDG und die globale Git-Konfiguration zeigen in einen
+// eigenen leeren Ordner, die Systemkonfiguration ist abgeschaltet.
+const GIT_PASSTHROUGH = Object.freeze(['PATH', 'SystemRoot', 'PATHEXT', 'ComSpec', 'windir']);
 
-function git(dir, args, input) {
+function gitTestEnv(source, home) {
+  const env = {};
+
+  for (const key of GIT_PASSTHROUGH) {
+    if (typeof source[key] === 'string') {
+      env[key] = source[key];
+    }
+  }
+
+  return {
+    ...env,
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: join(home, 'xdg'),
+    TEMP: home,
+    TMP: home,
+    TMPDIR: home,
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: join(home, 'leer.gitconfig'),
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_AUTHOR_NAME: 'Test',
+    GIT_AUTHOR_EMAIL: 'test@example.invalid',
+    GIT_COMMITTER_NAME: 'Test',
+    GIT_COMMITTER_EMAIL: 'test@example.invalid',
+  };
+}
+
+// Eigener Temp-Ordner mit Repository und isoliertem Home. Wird immer entfernt.
+function withSandbox(run) {
+  const base = mkdtempSync(join(tmpdir(), 'agent-profile-test-'));
+
+  try {
+    const repo = join(base, 'repo');
+    const home = join(base, 'home');
+    mkdirSync(repo);
+    mkdirSync(join(home, 'xdg'), { recursive: true });
+    writeFileSync(join(home, 'leer.gitconfig'), '');
+    const env = gitTestEnv(process.env, home);
+    return run({ base, repo, home, env });
+  } finally {
+    rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+}
+
+function git(dir, env, args, input) {
   return execFileSync('git', args, {
     cwd: dir,
-    env: GIT_ENV,
+    env,
     input,
     encoding: 'utf8',
     stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
   }).trim();
 }
 
+// Temporaeres Repository, Baum nur aus Plumbing-Befehlen. Keine Hooks, keine Arbeitskopie.
 function withTree(entries, check) {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-profile-test-'));
-
-  try {
-    git(dir, ['init', '-q']);
+  return withSandbox(({ repo, env }) => {
+    git(repo, env, ['init', '-q']);
 
     for (const { path, mode = '100644', content = 'x\n' } of entries) {
       const sha = mode === '160000'
         ? '1'.repeat(40)
-        : git(dir, ['hash-object', '-w', '--stdin'], content);
-      git(dir, ['update-index', '--add', '--cacheinfo', `${mode},${sha},${path}`]);
+        : git(repo, env, ['hash-object', '-w', '--stdin'], content);
+      git(repo, env, ['update-index', '--add', '--cacheinfo', `${mode},${sha},${path}`]);
     }
 
-    const tree = git(dir, ['write-tree']);
-    const commit = git(dir, ['commit-tree', tree, '-m', 'Testbaum']);
-    return check(dir, commit);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+    const tree = git(repo, env, ['write-tree']);
+    const commit = git(repo, env, ['commit-tree', tree, '-m', 'Testbaum']);
+    return check(repo, commit, env);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -152,8 +191,8 @@ test('Echte Dateien von js-rechner bestehen die Baumpruefung, js-text noch nicht
   const text = loadProfile(readFileSync(join(ROOT, 'agent-profiles/js-text.json')),
     { policy: p, fileName: 'js-text.json', entwurf: true }).profile;
 
-  withTree(files, (dir, sha) => {
-    const tree = readTree(dir, sha);
+  withTree(files, (dir, sha, env) => {
+    const tree = readTree(dir, sha, { env });
     assert.equal(checkProfileFiles(rechner, tree), true);
     rejects(() => checkProfileFiles(text, tree), 'baum-fehlt');
   });
@@ -162,7 +201,7 @@ test('Echte Dateien von js-rechner bestehen die Baumpruefung, js-text noch nicht
 test('Entwuerfe: Policy und Claude-Einstellungen sind gueltig', () => {
   const p = loadPolicy(POLICY_BYTES, DRAFT);
   assert.equal(p.max_budget_usd, 1.5);
-  assert.deepEqual(p.claude_werkzeuge, ['Read', 'Edit', 'Write']);
+  assert.deepEqual(p.claude_werkzeuge, ['Read', 'Edit']);
   assert.deepEqual(p.skript_hashes, {});
   const s = loadSettingsDraft(SETTINGS_BYTES);
   assert.ok(s.permissions.deny.includes('Bash'));
@@ -231,6 +270,84 @@ test('JSON: doppelte Schluessel, Escapes, Zahlenschreibweisen und Formatierung w
 
   for (const text of cases) {
     rejects(() => parseStrictJson(Buffer.from(text), 100), 'json-kanonisch');
+  }
+});
+
+test('JSON: ungueltige oder fehlende Groessengrenze wird abgelehnt, auch bei grosser Datei', () => {
+  // 100 014 Bytes, wie in der Repo-Pruefung nachgestellt.
+  const big = canon({ a: 'x'.repeat(100_000) });
+  assert.equal(big.length, 100_014);
+
+  // Feste Obergrenze: 64 KiB. Eigene Zahl im Test, damit eine Lockerung im Modul auffaellt.
+  const hardMax = 65_536;
+
+  for (const limit of [undefined, NaN, Infinity, -Infinity, null, -1, 0, 1.5, '100', 100n, [100],
+    hardMax + 1, Number.MAX_SAFE_INTEGER]) {
+    rejects(() => parseStrictJson(big, limit), 'json-grenze');
+    rejects(() => parseStrictJson(canon({ a: 1 }), limit), 'json-grenze');
+  }
+
+  // Gueltige Grenzen bis zur festen Obergrenze bleiben nutzbar, die Groesse selbst zaehlt weiter.
+  const small = canon({ a: 1 });
+  assert.equal(small.length, 13);
+  assert.deepEqual(parseStrictJson(small, 13), { a: 1 });
+  rejects(() => parseStrictJson(small, 12), 'json-groesse');
+  assert.deepEqual(parseStrictJson(small, hardMax), { a: 1 });
+  rejects(() => parseStrictJson(big, hardMax), 'json-groesse');
+  assert.equal(profileModule.MAX_JSON_BYTES, hardMax);
+  assert.ok(MAX_PROFILE_BYTES <= hardMax);
+});
+
+test('JSON: zu tiefe Verschachtelung wird abgelehnt statt den Stapel zu sprengen', () => {
+  const nested = depth => {
+    let value = 'x';
+    for (let i = 1; i < depth; i += 1) {
+      value = [value];
+    }
+    return { a: value };
+  };
+
+  // Tiefe 8 (Objekt plus sieben Listen) besteht, Tiefe 9 nicht.
+  assert.ok(parseStrictJson(canon(nested(8)), 4096));
+  rejects(() => parseStrictJson(canon(nested(9)), 4096), 'json-tiefe');
+
+  // Klammern in Texten zaehlen nicht, auch nicht nach einem Escape.
+  assert.ok(parseStrictJson(canon({ a: '[[[[[[[[[[{{{{{{{{{{' }), 4096));
+  assert.ok(parseStrictJson(canon({ a: 'x"[[[[[[[[[[', b: 'y\\' }), 4096));
+  // Nach einem Escape muessen echte Klammern wieder zaehlen.
+  rejects(() => parseStrictJson(canon({ a: 'q"', b: nested(9).a }), 4096), 'json-tiefe');
+  // Viele Listen nebeneinander sind flach: schliessende Klammern muessen die Tiefe senken.
+  const siblings = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`k${i}`, [[1]]]));
+  assert.ok(parseStrictJson(canon(siblings), 4096));
+
+  // Wie in der Pruefung: 16 KiB und 60 KiB tiefe Listen fuehren zu einer sauberen Ablehnung.
+  const deep = n => Buffer.from('{"a":' + '['.repeat(n) + ']'.repeat(n) + '}\n');
+  rejects(() => loadPolicy(deep(8000), DRAFT), 'json-tiefe');
+  rejects(() => loadSettingsDraft(deep(8000)), 'json-tiefe');
+  rejects(() => parseStrictJson(deep(30_000), 65_536), 'json-tiefe');
+});
+
+test('JSON: eine eigene length-Eigenschaft umgeht die Groessengrenze nicht', () => {
+  const big = canon({ a: 'x'.repeat(1000) });
+  Object.defineProperty(big, 'length', { value: 20 });
+  assert.equal(big.length, 20);
+  rejects(() => parseStrictJson(big, 100), 'json-groesse');
+  const big2 = canon({ a: 'x'.repeat(1000) });
+  Object.defineProperty(big2, 'byteLength', { value: 20 });
+  assert.equal(big2.byteLength, 20);
+  rejects(() => parseStrictJson(big2, 100), 'json-groesse');
+});
+
+test('Profil: nur Ergebnisse von validateProfile werden weiterverarbeitet', () => {
+  const fake = { dateien: { flatMap: () => ['Read(./src/a.js)'] } };
+  const plain = baseProfile();
+
+  for (const profile of [fake, plain, {}, null, undefined, Object.freeze({ ...profileCheck(baseProfile())() })]) {
+    rejects(() => settingsAllowForProfile(profile), 'einstellungen-profil-ungeprueft');
+    const s = settings();
+    s.permissions.allow = ['Read(./src/a.js)'];
+    rejects(() => validateSettingsForProfile(s, profile), 'einstellungen-profil-ungeprueft');
+    rejects(() => checkProfileFiles(profile, new Map()), 'baum-profil');
   }
 });
 
@@ -478,6 +595,10 @@ test('Policy: Modelle, Werkzeuge und Praefixe ausserhalb der harten Listen werde
     [p => { p.modelle = ['opus']; }, 'policy-modelle'],
     [p => { p.modelle = []; }, 'policy-modelle'],
     [p => { p.claude_werkzeuge = ['Read', 'Bash']; }, 'policy-werkzeuge'],
+    [p => { p.claude_werkzeuge = ['Read', 'Write']; }, 'policy-werkzeuge'],
+    [p => { p.claude_werkzeuge = ['Read', 'Edit', 'Write']; }, 'policy-werkzeuge'],
+    [p => { p.claude_werkzeuge = ['Grep']; }, 'policy-werkzeuge'],
+    [p => { p.claude_werkzeuge = ['Glob']; }, 'policy-werkzeuge'],
     [p => { p.claude_werkzeuge = ['Read', 'Read']; }, 'policy-werkzeuge'],
     [p => { p.claude_werkzeuge = ['WebFetch']; }, 'policy-werkzeuge'],
     [p => { p.pr_titel_praefixe = ['chore:']; }, 'policy-praefixe'],
@@ -595,8 +716,8 @@ test('Baum: gewoehnliche Dateien bestehen', () => {
   withTree([
     { path: 'src/rechne.js' },
     { path: 'test/rechne.test.js' },
-  ], (dir, sha) => {
-    assert.equal(checkProfileFiles(profileCheck(baseProfile())(), readTree(dir, sha)), true);
+  ], (dir, sha, env) => {
+    assert.equal(checkProfileFiles(profileCheck(baseProfile())(), readTree(dir, sha, { env })), true);
   });
 });
 
@@ -610,18 +731,18 @@ test('Baum: fehlende Datei, Symlink, ausfuehrbare Datei, Unterprojekt und Verzei
   ];
 
   for (const [entries, code] of variants) {
-    withTree(entries, (dir, sha) => {
-      rejects(() => checkProfileFiles(profileCheck(baseProfile())(), readTree(dir, sha)), code);
+    withTree(entries, (dir, sha, env) => {
+      rejects(() => checkProfileFiles(profileCheck(baseProfile())(), readTree(dir, sha, { env })), code);
     });
   }
 });
 
 test('Baum: ungueltiger oder unbekannter Ausgangscommit wird abgelehnt', () => {
-  withTree([{ path: 'src/rechne.js' }], (dir, sha) => {
-    rejects(() => readTree(dir, sha.toUpperCase()), 'baum-sha');
-    rejects(() => readTree(dir, `--output=${sha}`), 'baum-sha');
-    rejects(() => readTree(dir, 'HEAD'), 'baum-sha');
-    rejects(() => readTree(dir, 'f'.repeat(40)), 'baum-git');
+  withTree([{ path: 'src/rechne.js' }], (dir, sha, env) => {
+    rejects(() => readTree(dir, sha.toUpperCase(), { env }), 'baum-sha');
+    rejects(() => readTree(dir, `--output=${sha}`, { env }), 'baum-sha');
+    rejects(() => readTree(dir, 'HEAD', { env }), 'baum-sha');
+    rejects(() => readTree(dir, 'f'.repeat(40), { env }), 'baum-git');
   });
 
   rejects(() => checkProfileFiles(profileCheck(baseProfile())(), {}), 'baum-eingabe');
@@ -647,19 +768,202 @@ test('Baum: ein Eintrag, der zugleich Elternordner ist, wird abgelehnt', () => {
   rejects(() => parseTreeOutput(`160000 commit ${blob}\ttest\x00100644 blob ${blob}\ttest/b.test.js\0`), 'baum-konflikt');
 
   // Echter Git-Baum: src ist Symlink und Ordner zugleich (git mktree nimmt das an).
-  const dir = mkdtempSync(join(tmpdir(), 'agent-profile-test-'));
+  withSandbox(({ repo, env }) => {
+    git(repo, env, ['init', '-q']);
+    const file = git(repo, env, ['hash-object', '-w', '--stdin'], 'x\n');
+    const link = git(repo, env, ['hash-object', '-w', '--stdin'], 'scripts');
+    const sub = git(repo, env, ['mktree'], `100644 blob ${file}\ta.js\n`);
+    const root = git(repo, env, ['mktree'], `120000 blob ${link}\tsrc\n040000 tree ${sub}\tsrc\n`);
+    const commit = git(repo, env, ['commit-tree', root, '-m', 'Konflikt']);
+    rejects(() => readTree(repo, commit, { env }), 'baum-konflikt');
+  });
+});
 
-  try {
-    git(dir, ['init', '-q']);
-    const file = git(dir, ['hash-object', '-w', '--stdin'], 'x\n');
-    const link = git(dir, ['hash-object', '-w', '--stdin'], 'scripts');
-    const sub = git(dir, ['mktree'], `100644 blob ${file}\ta.js\n`);
-    const root = git(dir, ['mktree'], `120000 blob ${link}\tsrc\n040000 tree ${sub}\tsrc\n`);
-    const commit = git(dir, ['commit-tree', root, '-m', 'Konflikt']);
-    rejects(() => readTree(dir, commit), 'baum-konflikt');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+// ---------------------------------------------------------------------------
+// Isolierte Git-Umgebung der Tests
+// ---------------------------------------------------------------------------
+
+const FAKE_SECRETS = Object.freeze({
+  GH_TOKEN: 'ghs_testwertNICHTECHT',
+  GITHUB_TOKEN: 'ghs_testwertNICHTECHT2',
+  ANTHROPIC_API_KEY: 'sk-ant-testwertNICHTECHT',
+  BOT_APP_PRIVATE_KEY: '-----BEGIN TEST KEY-----',
+});
+
+test('Git-Umgebung: nur die erlaubten Variablen, keine Zugangsdaten und keine Git-Steuerung von aussen', () => {
+  const source = {
+    ...FAKE_SECRETS,
+    PATH: '/usr/bin',
+    SystemRoot: 'C:\\Windows',
+    HOME: '/home/echt',
+    USERPROFILE: 'C:\\Users\\echt',
+    XDG_CONFIG_HOME: '/home/echt/.config',
+    GIT_DIR: '/fremd/.git',
+    GIT_WORK_TREE: '/fremd',
+    GIT_CONFIG_PARAMETERS: "'core.hookspath'='/fremd'",
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_GLOBAL: '/home/echt/.gitconfig',
+    GIT_SSH_COMMAND: 'ssh -i fremd',
+    NODE_OPTIONS: '--require fremd',
+  };
+  const env = gitTestEnv(source, '/tmp/isoliert');
+
+  assert.deepEqual(Object.keys(env).sort(), [
+    'GIT_AUTHOR_EMAIL', 'GIT_AUTHOR_NAME', 'GIT_COMMITTER_EMAIL', 'GIT_COMMITTER_NAME',
+    'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_TERMINAL_PROMPT', 'HOME', 'PATH',
+    'SystemRoot', 'TEMP', 'TMP', 'TMPDIR', 'USERPROFILE', 'XDG_CONFIG_HOME',
+  ]);
+  assert.equal(env.HOME, '/tmp/isoliert');
+  assert.equal(env.USERPROFILE, '/tmp/isoliert');
+  assert.equal(env.XDG_CONFIG_HOME, join('/tmp/isoliert', 'xdg'));
+  assert.equal(env.GIT_CONFIG_GLOBAL, join('/tmp/isoliert', 'leer.gitconfig'));
+  assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
+
+  const values = JSON.stringify(env);
+  for (const secret of Object.values(FAKE_SECRETS)) {
+    assert.ok(!values.includes(secret), 'Zugangsdaten in der Git-Umgebung');
   }
+  assert.ok(!values.includes('fremd') && !values.includes('echt'), 'fremde Pfade in der Git-Umgebung');
+});
+
+test('Git-Umgebung: git liest weder die echte globale Konfiguration noch Parameter von aussen', () => {
+  withSandbox(({ base, repo }) => {
+    // Eine "echte" Benutzerkonfiguration ausserhalb des isolierten Home.
+    const realHome = join(base, 'echt');
+    mkdirSync(realHome);
+    writeFileSync(join(realHome, '.gitconfig'), '[user]\n\tname = Leck\n[core]\n\thooksPath = /fremd\n');
+
+    const source = {
+      ...FAKE_SECRETS,
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      PATHEXT: process.env.PATHEXT,
+      ComSpec: process.env.ComSpec,
+      windir: process.env.windir,
+      HOME: realHome,
+      USERPROFILE: realHome,
+      GIT_CONFIG_GLOBAL: join(realHome, '.gitconfig'),
+      GIT_CONFIG_PARAMETERS: "'user.email'='leck@example.invalid'",
+    };
+    const home = join(base, 'home');
+    const env = gitTestEnv(Object.fromEntries(Object.entries(source).filter(([, v]) => v !== undefined)), home);
+
+    git(repo, env, ['init', '-q']);
+
+    // Muss-Treffer: dieselbe Abfrage mit der fremden Konfiguration findet den Wert.
+    const leaky = { ...env, GIT_CONFIG_GLOBAL: join(realHome, '.gitconfig') };
+    assert.equal(git(repo, leaky, ['config', '--get', 'user.name']), 'Leck');
+
+    // Isoliert: kein Wert aus der fremden Konfiguration, kein Parameter von aussen.
+    for (const key of ['user.name', 'user.email', 'core.hooksPath']) {
+      assert.throws(() => git(repo, env, ['config', '--get', key]), `${key} sichtbar`);
+    }
+
+    const origins = git(repo, env, ['config', '--list', '--show-origin']);
+    assert.ok(!origins.includes('Leck') && !origins.includes('fremd'), origins);
+    assert.ok(!origins.includes(realHome), origins);
+  });
+});
+
+test('Git-Umgebung: der Temp-Ordner wird auch bei einem Fehler entfernt', () => {
+  let seen;
+  assert.throws(() => withSandbox(({ base }) => {
+    seen = base;
+    assert.ok(existsSync(base));
+    throw new Error('absichtlich');
+  }), /absichtlich/);
+  assert.ok(seen && !existsSync(seen), 'Temp-Ordner blieb liegen');
+
+  let tree;
+  withTree([{ path: 'src/rechne.js' }], dir => { tree = dir; });
+  assert.ok(tree && !existsSync(tree), 'Test-Repository blieb liegen');
+});
+
+test('Baum: readTree benutzt genau die uebergebene Umgebung', () => {
+  withTree([{ path: 'src/rechne.js' }], (dir, sha, env) => {
+    assert.ok(readTree(dir, sha, { env }).has('src/rechne.js'));
+    // Ein PATH ohne git bricht nur ab, wenn die Umgebung tatsaechlich bei git ankommt.
+    const empty = join(dir, 'leer');
+    mkdirSync(empty);
+    rejects(() => readTree(dir, sha, { env: { ...env, PATH: empty } }), 'baum-git');
+  });
+});
+
+test('Baum: readTree verlangt eine isolierte Git-Umgebung', () => {
+  withTree([{ path: 'src/rechne.js' }], (dir, sha, env) => {
+    const without = key => Object.fromEntries(Object.entries(env).filter(([k]) => k !== key));
+    const cases = [
+      undefined,
+      null,
+      {},
+      { env: null },
+      { env: process.env },
+      { env: { ...env, GIT_DIR: join(dir, 'fremd') } },
+      { env: { ...env, GIT_CONFIG_PARAMETERS: "'core.bare'='true'" } },
+      { env: { ...env, GIT_CONFIG_COUNT: '1' } },
+      { env: { ...env, ...FAKE_SECRETS } },
+      { env: { ...env, GH_TOKEN: FAKE_SECRETS.GH_TOKEN } },
+      { env: { ...env, GIT_CONFIG_NOSYSTEM: '0' } },
+      { env: { ...env, HOME: 7 } },
+      { env: { ...env, TEMP: 7 } },
+      { env: without('GIT_CONFIG_NOSYSTEM') },
+      { env: without('GIT_CONFIG_GLOBAL') },
+      { env: without('HOME') },
+      { env: without('PATH') },
+      { env: { ...env, HOME: '' } },
+      { env: { ...env, HOME: '', GIT_CONFIG_GLOBAL: '/leer.gitconfig', XDG_CONFIG_HOME: '/xdg' } },
+      Object.assign(Object.create(null), { env }),
+      { env: { ...env, GIT_CONFIG_GLOBAL: join(dir, 'fremd.gitconfig') } },
+      { env: { ...env, GIT_CONFIG_GLOBAL: join(env.HOME, '..', 'fremd.gitconfig') } },
+      { env: { ...env, GIT_CONFIG_GLOBAL: `${env.HOME}/../fremd.gitconfig` } },
+      { env: { ...env, GIT_CONFIG_GLOBAL: env.HOME } },
+      { env: { ...env, GIT_CONFIG_GLOBAL: `${env.HOME}-fremd/leer.gitconfig` } },
+      { env: { ...env, XDG_CONFIG_HOME: join(dir, 'xdg') } },
+    ];
+
+    for (const options of cases) {
+      rejects(() => readTree(dir, sha, options), 'baum-umgebung');
+    }
+
+    // Eine Linux-Schreibweise unterhalb von HOME besteht ebenfalls.
+    assert.ok(readTree(dir, sha, { env: { ...env, GIT_CONFIG_GLOBAL: `${env.HOME}/leer.gitconfig` } }).has('src/rechne.js'));
+  });
+
+  // Die Testumgebung selbst enthaelt nur erlaubte Variablen.
+  withSandbox(({ env }) => {
+    for (const key of Object.keys(env)) {
+      assert.ok(profileModule.GIT_ENV_KEYS.includes(key), key);
+    }
+  });
+});
+
+test('Baum: geerbte Eigenschaften und wechselnde Getter erreichen git nicht', () => {
+  withTree([{ path: 'src/rechne.js' }], (dir, sha, env) => {
+    // Verschmutzter Prototyp: ein geerbtes GIT_DIR ins Leere darf git nicht erreichen.
+    Object.prototype.GIT_DIR = join(dir, 'gibt-es-nicht');
+
+    try {
+      // Muss-Treffer: eine gewoehnliche Kopie gibt das geerbte GIT_DIR weiter, git scheitert.
+      assert.throws(() => execFileSync('git', ['ls-tree', '-r', '--full-tree', sha], {
+        cwd: dir,
+        env: { ...env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }));
+      assert.ok(readTree(dir, sha, { env }).has('src/rechne.js'));
+    } finally {
+      delete Object.prototype.GIT_DIR;
+    }
+
+    // Ein Getter, der beim zweiten Lesen einen anderen Wert liefert, wird nur einmal gelesen.
+    let reads = 0;
+    const tricky = { ...env };
+    Object.defineProperty(tricky, 'GIT_CONFIG_NOSYSTEM', {
+      enumerable: true,
+      get: () => (reads++ === 0 ? '1' : '0'),
+    });
+    assert.ok(readTree(dir, sha, { env: tricky }).has('src/rechne.js'));
+    assert.equal(reads, 1);
+  });
 });
 
 test('Baum: Eintrag mit richtigem Modus, aber falschem Typ wird abgelehnt', () => {
@@ -831,7 +1135,7 @@ test('Einstellungen: allow muss genau zum Profil passen', () => {
 
 test('Einstellungen: fehlende Pflichtverbote werden abgelehnt', () => {
   // Eigene Liste im Test, damit eine Kuerzung der Pflichtliste im Modul auffaellt.
-  for (const rule of ['Bash', 'WebFetch', 'WebSearch', 'Task', 'NotebookEdit',
+  for (const rule of ['Bash', 'Write', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'Task', 'NotebookEdit', 'Agent', 'MultiEdit', 'mcp__*',
     'Read(./.git/**)', 'Edit(./.git/**)', 'Write(./.git/**)', 'Read(//proc/**)',
     'Read(~/**)', 'Edit(~/**)', 'Write(~/**)', 'Read(//home/runner/work/_temp/**)',
     'Edit(//home/runner/work/_temp/**)', 'Write(//home/runner/work/_temp/**)',
@@ -842,6 +1146,30 @@ test('Einstellungen: fehlende Pflichtverbote werden abgelehnt', () => {
     rejects(() => validateSettingsDraft(s), 'einstellungen-deny');
   }
 });
+
+// Eigene Tests je Werkzeug: Grep liest Dateiinhalte, Glob listet Pfade, Write legt Dateien an.
+// Ob das Read-Verbot diese Werkzeuge in Claude Code mit abdeckt, ist nicht belegt (K1);
+// deshalb sind sie hier ausdruecklich gesperrt.
+for (const tool of ['Grep', 'Glob', 'Write']) {
+  test(`Einstellungen: fehlendes Verbot fuer ${tool} wird abgelehnt`, () => {
+    const s = settings();
+    assert.ok(s.permissions.deny.includes(tool), `${tool} fehlt im Entwurf`);
+    s.permissions.deny = s.permissions.deny.filter(x => x !== tool);
+    assert.throws(() => validateSettingsDraft(s), error => {
+      assert.equal(error.code, 'einstellungen-deny');
+      assert.ok(error.message.endsWith(`Pflichtverbot fehlt: ${tool}`), error.message);
+      return true;
+    });
+  });
+
+  test(`Einstellungen: ${tool} als Erlaubnis wird abgelehnt, auch mit Pfad`, () => {
+    for (const rule of [tool, `${tool}(./src/rechne.js)`, `${tool}(./src/*.js)`, `${tool}(./src/**)`]) {
+      const s = settings();
+      s.permissions.allow = [rule];
+      rejects(() => validateSettingsDraft(s), 'einstellungen-allow');
+    }
+  });
+}
 
 test('Einstellungen: ganze Werkzeuge, Shell, Netz und Pfade ausserhalb werden als Erlaubnis abgelehnt', () => {
   for (const rule of ['Read', 'Edit', 'Write', 'Bash', 'Bash(npm test)', 'WebFetch', 'Read(//proc/**)',

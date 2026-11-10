@@ -52,12 +52,14 @@ export const HARD_LIMITS = Object.freeze({
   max_issue_text_zeichen: 4000,
 });
 
+// Feste Obergrenze fuer jede JSON-Datei, die diese Pruefung liest.
+export const MAX_JSON_BYTES = 65536;
 export const MAX_PROFILE_BYTES = 8192;
 export const MAX_POLICY_BYTES = 16384;
 export const MAX_SETTINGS_BYTES = 16384;
 
 const HARD_MODELS = Object.freeze(['sonnet']);
-const HARD_TOOLS = Object.freeze(['Read', 'Edit', 'Write']);
+const HARD_TOOLS = Object.freeze(['Read', 'Edit']);
 const HARD_PR_PREFIXES = Object.freeze(['feat:', 'fix:', 'test:']);
 
 // Diese Eintraege muss jede Policy mindestens sperren beziehungsweise reservieren.
@@ -86,10 +88,16 @@ export const REQUIRED_RESERVED_IDS = Object.freeze(['code-pilot', 'test-note']);
 // Pflicht-Verbote im Entwurf der Claude-Einstellungen (Wirkung erst durch K1 belegt).
 export const REQUIRED_SETTINGS_DENY = Object.freeze([
   'Bash',
+  'Write',
+  'Grep',
+  'Glob',
   'WebFetch',
   'WebSearch',
   'Task',
   'NotebookEdit',
+  'Agent',
+  'MultiEdit',
+  'mcp__*',
   'Read(./.git/**)',
   'Edit(./.git/**)',
   'Write(./.git/**)',
@@ -262,16 +270,62 @@ function checkJsonText(value) {
 // Zahlenschreibweisen, unnoetige Escapes und versteckte Formatierung ausgeschlossen.
 // Escapes, die JSON.stringify selbst schreibt (Steuerzeichen, einzelne Surrogate), und
 // unsichtbare Zeichen faengt danach die Zeichenpruefung aller Schluessel und Texte ab.
+export const MAX_JSON_DEPTH = 8;
+
+const TYPED_ARRAY_BYTE_LENGTH = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  'byteLength'
+).get;
+
+// Hoechste Verschachtelungstiefe von Objekten und Listen, Klammern in Texten zaehlen nicht.
+function jsonDepth(text) {
+  let depth = 0;
+  let deepest = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (const char of text) {
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+    } else if (char === '"') {
+      inString = true;
+    } else if (char === '{' || char === '[') {
+      depth += 1;
+      deepest = Math.max(deepest, depth);
+    } else if (char === '}' || char === ']') {
+      depth -= 1;
+    }
+  }
+
+  return deepest;
+}
+
 export function parseStrictJson(input, maxBytes) {
   if (!Buffer.isBuffer(input)) {
     fail('json-eingabe', 'JSON muss als Bytefolge gelesen werden');
   }
 
-  if (input.length === 0) {
+  // Die Grenze selbst muss gueltig sein. undefined, NaN oder Unendlich wuerden den Vergleich
+  // unten sonst immer falsch werden lassen und jede Groesse durchlassen.
+  if (!isPositiveInteger(maxBytes, MAX_JSON_BYTES)) {
+    fail('json-grenze', `Groessengrenze muss eine ganze Zahl von 1 bis ${MAX_JSON_BYTES} sein`);
+  }
+
+  // Die Groesse kommt aus dem eingebauten Getter, nicht aus einer Eigenschaft des Objekts.
+  // Eine eigene length- oder byteLength-Eigenschaft auf dem Buffer wirkt hier nicht.
+  const size = Reflect.apply(TYPED_ARRAY_BYTE_LENGTH, input, []);
+
+  if (size === 0) {
     fail('json-leer', 'leere Datei');
   }
 
-  if (input.length > maxBytes) {
+  if (size > maxBytes) {
     fail('json-groesse', `Datei groesser als ${maxBytes} Bytes`);
   }
 
@@ -289,6 +343,12 @@ export function parseStrictJson(input, maxBytes) {
 
   if (text.includes('\r')) {
     fail('json-zeilenende', 'Wagenruecklauf gefunden, nur LF erlaubt');
+  }
+
+  // Tiefe Verschachtelung wuerde spaeter beim Pruefen den Stapel sprengen (RangeError statt
+  // Ablehnung). Profile, Policy und Einstellungen brauchen hoechstens drei Ebenen.
+  if (jsonDepth(text) > MAX_JSON_DEPTH) {
+    fail('json-tiefe', `mehr als ${MAX_JSON_DEPTH} verschachtelte Ebenen`);
   }
 
   let value;
@@ -342,7 +402,7 @@ export function validatePolicy(policy, { entwurf = false } = {}) {
     policy.claude_werkzeuge.length === 0 ||
     !policy.claude_werkzeuge.every(tool => HARD_TOOLS.includes(tool))
   ) {
-    fail('policy-werkzeuge', 'Werkzeugliste ungueltig, nur Read, Edit und Write sind erlaubt');
+    fail('policy-werkzeuge', 'Werkzeugliste ungueltig, nur Read und Edit sind erlaubt');
   }
 
   if (!isBudget(policy.max_budget_usd, HARD_LIMITS.max_budget_usd)) {
@@ -414,6 +474,16 @@ export function isDeniedPath(path, policy) {
     policy.gesperrte_dateien.some(file => path === file || path.endsWith(`/${file}`)) ||
     policy.gesperrte_praefixe.some(prefix => path.startsWith(prefix) || path.includes(`/${prefix}`))
   );
+}
+
+// Nur Rueckgabewerte von validateProfile gelten als gepruefte Profile. Die folgenden Funktionen
+// nehmen nichts anderes an, damit niemand ein ungeprueftes Objekt hineinreicht.
+const VALIDATED_PROFILES = new WeakSet();
+
+function requireValidatedProfile(profile, code) {
+  if (!VALIDATED_PROFILES.has(profile)) {
+    fail(code, 'Profil ist nicht durch validateProfile geprueft');
+  }
 }
 
 export function validateProfile(profile, { policy, fileName, entwurf = false }) {
@@ -513,7 +583,9 @@ export function validateProfile(profile, { policy, fileName, entwurf = false }) 
     fail('profil-praefix', 'PR-Titel-Praefix nicht erlaubt');
   }
 
-  return Object.freeze({ ...profile, dateien: Object.freeze([...files]) });
+  const result = Object.freeze({ ...profile, dateien: Object.freeze([...files]) });
+  VALIDATED_PROFILES.add(result);
+  return result;
 }
 
 // Liest und prueft ein Profil aus seinen Bytes. Gibt das Profil und den SHA-256 der Bytes zurueck.
@@ -527,9 +599,80 @@ export function loadPolicy(bytes, { entwurf = false } = {}) {
 }
 
 // Liest den vollstaendigen Git-Baum eines Commits. Keine Optionen aus Eingaben, feste Argumente.
-export function readTree(root, sha) {
+// Erlaubte Variablen der Git-Umgebung. Nichts anderes kommt an git: keine Zugangsdaten, kein
+// GIT_DIR, keine GIT_CONFIG_PARAMETERS oder GIT_CONFIG_COUNT von aussen.
+export const GIT_ENV_KEYS = Object.freeze([
+  'PATH',
+  'SystemRoot',
+  'PATHEXT',
+  'ComSpec',
+  'windir',
+  'HOME',
+  'USERPROFILE',
+  'XDG_CONFIG_HOME',
+  'TEMP',
+  'TMP',
+  'TMPDIR',
+  'GIT_CONFIG_NOSYSTEM',
+  'GIT_CONFIG_GLOBAL',
+  'GIT_TERMINAL_PROMPT',
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+]);
+
+function isInside(path, dir) {
+  const separator = String.fromCharCode(92);
+  return (
+    typeof path === 'string' &&
+    !path.includes('..') &&
+    (path.startsWith(`${dir}/`) || path.startsWith(`${dir}${separator}`))
+  );
+}
+
+// Pflicht: eine ausdruecklich gebaute Umgebung mit abgeschalteter Systemkonfiguration und einer
+// globalen Konfiguration unterhalb eines eigenen HOME. Eine geerbte Umgebung wird nicht angenommen.
+// Ergebnis ist eine frische Kopie ohne Prototyp aus genau den eigenen, gepruefte Schluesseln, damit
+// weder geerbte Eigenschaften noch Getter mit wechselnden Werten bei git ankommen. Dass HOME nicht
+// das echte Benutzerverzeichnis ist, bleibt Pflicht des Aufrufers.
+function isolatedGitEnv(env) {
+  if (!isPlainObject(env)) {
+    return null;
+  }
+
+  const clean = Object.create(null);
+
+  for (const key of Object.keys(env)) {
+    if (!GIT_ENV_KEYS.includes(key)) {
+      return null;
+    }
+
+    clean[key] = env[key];
+  }
+
+  const ok = (
+    Object.values(clean).every(value => typeof value === 'string') &&
+    clean.GIT_CONFIG_NOSYSTEM === '1' &&
+    typeof clean.HOME === 'string' &&
+    clean.HOME.length > 0 &&
+    isInside(clean.GIT_CONFIG_GLOBAL, clean.HOME) &&
+    (clean.XDG_CONFIG_HOME === undefined || isInside(clean.XDG_CONFIG_HOME, clean.HOME)) &&
+    typeof clean.PATH === 'string'
+  );
+
+  return ok ? clean : null;
+}
+
+export function readTree(root, sha, options) {
   if (typeof sha !== 'string' || !HEX40_RE.test(sha)) {
     fail('baum-sha', 'ungueltiger Ausgangscommit');
+  }
+
+  const env = isPlainObject(options) ? isolatedGitEnv(options.env) : null;
+
+  if (env === null) {
+    fail('baum-umgebung', 'Git-Umgebung fehlt, ist nicht isoliert oder enthaelt nicht erlaubte Variablen');
   }
 
   let output;
@@ -537,6 +680,7 @@ export function readTree(root, sha) {
   try {
     output = execFileSync('git', ['ls-tree', '-r', '-z', '--full-tree', sha], {
       cwd: root,
+      env,
       encoding: 'utf8',
       timeout: 10_000,
       maxBuffer: 4_000_000,
@@ -595,6 +739,8 @@ export function parseTreeOutput(output) {
 // Jede Profildatei muss im Baum des Ausgangscommits als gewoehnliche Datei vorhanden sein:
 // Modus 100644, Typ blob. Kein Symlink (120000), nicht ausfuehrbar (100755), kein Unterprojekt.
 export function checkProfileFiles(profile, tree) {
+  requireValidatedProfile(profile, 'baum-profil');
+
   if (!(tree instanceof Map)) {
     fail('baum-eingabe', 'Baum fehlt');
   }
@@ -710,6 +856,7 @@ const SETTINGS_ALLOW_RE = /^(Read|Edit)\(\.\/([^()]+)\)$/;
 
 // Die Erlaubnisse, die genau zu einem Profil gehoeren: Read und Edit je Profildatei.
 export function settingsAllowForProfile(profile) {
+  requireValidatedProfile(profile, 'einstellungen-profil-ungeprueft');
   return profile.dateien.flatMap(file => [`Read(./${file})`, `Edit(./${file})`]);
 }
 

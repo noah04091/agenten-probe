@@ -5,8 +5,7 @@
   ],
   "claude_werkzeuge": [
     "Read",
-    "Edit",
-    "Write"
+    "Edit"
   ],
   "max_budget_usd": 1.5,
   "max_runden": 12,
