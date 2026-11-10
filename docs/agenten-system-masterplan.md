@@ -188,8 +188,24 @@ vorab unabhängig.
   erledigt geschlossen.
 - **Kosten A5 gesamt:** rund 0,08 $ laut den Ergebnissen von Claude Code (0,0414 + 0,0425), weit unter
   dem Deckel von 1,50 $ je Lauf.
-- Nicht in A5 geprüft: ob das Bot-Konto Repository-Variablen schreiben, also den Schalter setzen kann.
-  Das bleibt offen (Abschnitt 10, A4-Schalter).
+
+**Berechtigungstest zum Schalter (09.11., Repo-Sitzung, vor A5):** `POST
+/repos/noah04091/agenten-probe/actions/variables` mit leerem Request-Body.
+- Konto `noah04091`: HTTP 422, Pflichtfelder `name` und `value` fehlen.
+- Konto `noah04091-agent`: dieselbe Antwort, HTTP 422.
+- Gegenprobe mit `noah04091-agent` auf `octocat/Hello-World`: HTTP 403, fehlende
+  Repository-Schreibberechtigung.
+- Es wurde keine Variable erstellt oder verändert.
+
+**Aussage und Grenze:** Der Bot kommt durch die Rechteprüfung bis zur Prüfung des Inhalts, genau wie
+Noah. Auf einem fremden Repository scheitert er dagegen schon an der Berechtigung. Zusammen mit seinem
+Schreibzugang spricht das stark dafür, dass der Bot Repository-Variablen und damit auch
+`CODE_PILOT_ENABLED` selbst setzen könnte. Eine erfolgreiche Erstellung wurde bewusst nicht getestet,
+belegt ist es also nicht. **Folge:** Der Schalter ist ein Betriebsschalter, keine ausschließlich
+menschlich kontrollierte Sperre. Die entscheidende zusätzliche Autorisierung ist das geschützte
+Environment `claude-bot`; in A5 wurden dort zwei getrennte menschliche Freigaben nachgewiesen.
+**Sicherheitsregel:** Eine Environment-Freigabeanfrage, die Noah nicht selbst veranlasst hat, wird
+abgelehnt.
 
 ## 7. Offene Risiken und technische Schulden
 
@@ -240,7 +256,7 @@ Abschnitt 9 sind offen. Nächstes Paket ist **A6 Auftragsprofile**.
 | A2 Konsolidieren ✅ 09.11. | Trockenlauf prüft Job 2 und 3 ohne Claude | erfüllt: PR #41 und `92a9fc6`, auf GitHub grün (Lauf 42691955117), Zuordnungsliste in `docs/agent-code-pilot.md` 7.4; alte Proben werden erst nach A5 entfernt |
 | A3 Auf main ✅ 09.11. | PR #37 gemergt, Sperren aktiv | erfüllt: `aa3646d`, `build` und `tests` auf `main` grün, Issue #38 nicht gestartet |
 | A4 Entsperren ✅ 09.11. | Schalter statt `false &&`, Integrationstest bei jedem PR, Prüfung auch in `npm test`; Patch von Noah per dokumentierter Admin-Ausnahme | Diff nur in `code-pilot-claude-stufe.yml` an Integrationstest und den zwei Sperren; Integrationstest läuft auf dem A4-PR und ist grün; Claude-Jobs übersprungen; `CODE_PILOT_ENABLED` vor und nach dem Merge nicht gesetzt |
-| A5 Erster Lauf ✅ 10.11. | Label an #38, Noah bestätigt | erfüllt: Draft-PR #47 der App mit genau `src/rechne.js` und `test/rechne.test.js`, CI grün, regulär freigegeben und gemergt (`a64cab3`); zwei getrennte Environment-Freigaben belegt; Kosten rund 0,08 $ für beide Versuche. Versuch 1 scheiterte an der Abnahme (`-0`), Versuch 2 bestand. Nicht geprüft: Schreibrechte des Bot-Kontos auf Repository-Variablen |
+| A5 Erster Lauf ✅ 10.11. | Label an #38, Noah bestätigt | erfüllt: Draft-PR #47 der App mit genau `src/rechne.js` und `test/rechne.test.js`, CI grün, regulär freigegeben und gemergt (`a64cab3`); zwei getrennte Environment-Freigaben belegt; Kosten rund 0,08 $ für beide Versuche. Versuch 1 scheiterte an der Abnahme (`-0`), Versuch 2 bestand. Schreibrechte des Bot-Kontos auf Repository-Variablen am 09.11. geprüft: Bot erreicht wie Noah HTTP 422 statt 403, kann den Schalter also sehr wahrscheinlich setzen (Abschnitt 6) |
 
 ### Phase 3: Ziel A vollständig
 | Paket | Ergebnis | Abnahme |
@@ -285,7 +301,7 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 | 09.11. | Workflow-Änderungen aus Agentenarbeit liefert der Bot als Patch, Noah wendet sie mit eigenem Konto an | Agenten ändern `.github/` nie selbst (`schutzdateien`, Repo-`CLAUDE.md`) |
 | 09.11. | **Freigabeweg (R8), Weg A:** Änderungen an geschützten Dateien per dokumentierter Admin-Ausnahme, nur für genau diese Änderung, nach Prüfung durch ChatGPT und einen unabhängigen Claude-Prüfer, mit Eintrag in dieser Tabelle. Keine Abschwächung von `schutzdateien`, keine künstlichen Freigaben | Noah ist einziger Code-Owner; ein regulärer Weg existiert für diese Dateien nicht |
 | 09.11. | **Langfristig Weg B:** eine zweite, tatsächlich unabhängige Person als Code-Owner für geschützte Dateien, vor dem produktiven Einsatz (spätestens B7) | echte Vier-Augen-Prüfung statt Ausnahmen |
-| 09.11. | **A4-Schalter:** `vars.CODE_PILOT_ENABLED == 'true'` statt `false &&`; nach dem Merge bleibt die Variable ungesetzt | Abschalten ohne Merge und ohne Ausnahme. Der Schalter ist ein Betriebsschalter, keine Autorisierung: dass nur Noah ihn setzen kann, ist nicht belegt (Schreibrechte des Bot-Kontos vor A5 prüfen). Autorisierung bleibt die Freigabe im Environment. Der Fingerabdruck im Prüfskript erkennt Abweichungen, ersetzt aber nicht Noahs Codeprüfung |
+| 09.11. | **A4-Schalter:** `vars.CODE_PILOT_ENABLED == 'true'` statt `false &&`; nach dem Merge bleibt die Variable ungesetzt | Abschalten ohne Merge und ohne Ausnahme. Der Schalter ist ein Betriebsschalter, keine Autorisierung: Laut Berechtigungstest vom 09.11. (HTTP 422 für Noah und Bot, 403 als Gegenprobe auf fremdem Repo, Abschnitt 6) kann der Bot ihn sehr wahrscheinlich selbst setzen; eine erfolgreiche Erstellung wurde bewusst nicht getestet. Autorisierung ist die Freigabe im Environment `claude-bot` (in A5 zwei getrennte Freigaben belegt). Eine Freigabeanfrage, die Noah nicht selbst veranlasst hat, wird abgelehnt. Der Fingerabdruck im Prüfskript erkennt Abweichungen, ersetzt aber nicht Noahs Codeprüfung |
 | 09.11. | **Ausnahme-Merge PR #44** (A4-Workflow, Autor Noah, ändert `.github/`) durch Noah über die Admin-Ausnahme, ohne hinterlegtes Review | Weg A, wie für A4 entschieden; Inhalt vorher als PR #43 regulär freigegeben |
 | 10.11. | **Die Abnahme wird nach Versuch 1 nicht abgeschwächt.** `scripts/agent-code-acceptance.mjs` vergleicht weiter exakt mit `a * b`, einschließlich `-0` | geprüft wird, ob der Agent die unabhängigen Anforderungen erfüllt, nicht die Prüfung an den Agenten angepasst |
 
