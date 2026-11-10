@@ -1,0 +1,48 @@
+{
+  "schema": "agent-policy-v1",
+  "modelle": [
+    "sonnet"
+  ],
+  "claude_werkzeuge": [
+    "Read",
+    "Edit",
+    "Write"
+  ],
+  "max_budget_usd": 1.5,
+  "max_runden": 12,
+  "max_laufzeit_minuten": 20,
+  "max_dateien": 4,
+  "max_auftrag_rahmen_zeichen": 2000,
+  "max_issue_titel_zeichen": 200,
+  "max_issue_text_zeichen": 4000,
+  "gesperrte_praefixe": [
+    ".git/",
+    ".github/",
+    ".claude/",
+    "scripts/",
+    "agent-profiles/",
+    "agent-acceptance/",
+    "node_modules/"
+  ],
+  "gesperrte_dateien": [
+    "CODEOWNERS",
+    "package.json",
+    "package-lock.json",
+    "CLAUDE.md",
+    ".mcp.json",
+    ".gitmodules",
+    ".gitattributes",
+    ".gitignore",
+    ".npmrc"
+  ],
+  "reservierte_ids": [
+    "code-pilot",
+    "test-note"
+  ],
+  "pr_titel_praefixe": [
+    "feat:",
+    "fix:",
+    "test:"
+  ],
+  "skript_hashes": {}
+}
