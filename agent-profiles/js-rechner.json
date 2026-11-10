@@ -1,0 +1,16 @@
+{
+  "schema": "agent-profile-v1",
+  "id": "js-rechner",
+  "aktiv": true,
+  "dateien": [
+    "src/rechne.js",
+    "test/rechne.test.js"
+  ],
+  "abnahme": "issue",
+  "modell": "sonnet",
+  "budget_usd": 1.5,
+  "max_runden": 8,
+  "max_laufzeit_minuten": 15,
+  "auftrag_rahmen": "Erweitere den Rechner in src/rechne.js um die im Auftrag beschriebene Funktion. Erhalte alle bestehenden Funktionen und Exporte. Schreibe Tests in test/rechne.test.js mit node:test und assert.strictEqual. Ergebnisse müssen exakt dem nativen JavaScript-Ausdruck entsprechen, ohne zusätzliche Normalisierung.",
+  "pr_titel_praefix": "feat:"
+}
