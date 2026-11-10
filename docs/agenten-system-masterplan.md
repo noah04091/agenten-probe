@@ -268,8 +268,14 @@ Abschnitt 9 sind offen. Nächstes Paket ist **A6 Auftragsprofile**.
 ### A6 Auftragsprofile: Architektur Version 2
 
 **Stand 10.11.2026:** Konzept Version 2 von ChatGPT geprüft und in der Grundarchitektur akzeptiert.
-Freigegeben ist nur A6.1 PR 1 (diese Dokumentation). Nichts davon ist umgesetzt, nichts ist aktiv.
-Alle Schutzmaßnahmen unten sind **geplant**, keine ist bisher nachgewiesen.
+**A6.1 ist auf `main` abgeschlossen** (PR #49, #50, #51, Merge `ed4940a`).
+- **Umgesetzt und getestet, aber ohne Wirkung:**
+  - die zwei Auftragsprofile `agent-profiles/js-rechner.json` und `agent-profiles/js-text.json`
+  - die Profil- und Eingabeprüfung `scripts/agent-profile.mjs`
+  - Entwürfe von Policy und Claude-Einstellungen, nur als Testdaten
+  - Unit-Tests mit Rot-Beweis
+- **Noch nicht erfolgt:** die produktive Einbindung in den Agenten-Workflow. Kein Workflow ruft die Prüfung auf, `.github/agent/` existiert noch nicht.
+- **Laufzeit-Schutzmaßnahmen** (Hash-Prüfung im Workflow, Job 0, Lese- und Schreibgrenzen von Claude, Geheimnisschutz) sind weiterhin nur **geplant**, keine ist nachgewiesen. K1 bis K4 bleiben offene Sicherheitsanforderungen.
 
 **Grundsatz:** Rechte kommen nur aus vertrauenswürdigen Dateien auf `main`. Der Issue-Text beschreibt
 nur die fachliche Aufgabe und gilt als nicht vertrauenswürdige Eingabe. Die Grenze ist mechanisch
@@ -335,7 +341,7 @@ nur die fachliche Aufgabe und gilt als nicht vertrauenswürdige Eingabe. Die Gre
 | A6.3 Trockenlauf je Profil | Trockenlauf für beide Profile; Gerüst `src/text.js`, `test/text.test.js` als eigener PR | beide Profile grün, gleicher Paket-Hash in Job 2 und 3 |
 | A6.4 Workflow-Patch | Patch für beide Workflows, `policy.json`, `claude-settings.json`, `schutz.yml` (Trennregel), `package.json` (Build über `src/`); Aktivierungsprüfung bleibt und wird erweitert | K2 und K3 nachgewiesen, Generalprobe rot bei Manipulation; ChatGPT und ein unabhängiger Prüfer stimmen zu |
 | A6.5 Patch anwenden | Noahs Konto, Admin-Ausnahme | Integrationstest und Trockenlauf grün, Claude-Jobs übersprungen; ein Bot-Test-PR mit verändertem Prüfskript wird nachweislich rot; Schalter vorher und nachher 404 |
-| A6.6 Erster neuer Auftrag | nur nach K1 und K4-Entscheidung und Noahs Go: Abnahme-PR, Issue, Lauf mit `js-rechner` | Draft-PR mit genau den Profildateien, CI grün, zwei Freigaben, Kosten unter dem Deckel |
+| A6.6 Erster neuer Auftrag | nur nach K1 und K4-Entscheidung und Noahs Go: Abnahme-PR, Issue, Lauf mit `js-rechner` | Draft-PR, der nur im Profil erlaubte Code- und Testdateien ändert, CI grün, zwei Freigaben, Kosten unter dem Deckel |
 | A6.7 Zweiter neuer Auftrag | nach Noahs Go, Profil `js-text` | wie A6.6, ohne Änderung an Workflow, Policy oder Skripten dazwischen; damit ist A6 abgenommen |
 
 **Verschoben:** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach
@@ -385,6 +391,7 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 | 10.11. | **A6 Architektur Version 2** in der Grundarchitektur akzeptiert (Abschnitt 8); A6.1 in drei getrennten PRs, strikt nacheinander, jeder von ChatGPT geprüft und von Noah regulär freigegeben | kleine, einzeln prüfbare Schritte |
 | 10.11. | K1 bis K4 sind Pflicht vor A6.4 beziehungsweise vor neuen Live-Läufen; die Kanarienprobe K1 nur mit separat begrenztem Zugang, kontrollierter Logausgabe und eigener Sicherheitsfreigabe | keine echten, weitreichenden Zugangsdaten in einer Probe |
 | 10.11. | Tests unter `test/` laufen automatisch in `npm test` und dürfen deshalb keine GitHub-Schreibzugriffe, Agentenstarts, Zugriffe auf Zugangsdaten oder andere externe Seiteneffekte auslösen | jede Pflichtprüfung führt sie aus |
+| 10.11.2026 | **A6.1 abgeschlossen:** PR #49 Architektur, PR #50 Profile, PR #51 Profilvalidator; Merge `ed4940a`. Drei ursprüngliche Sicherheitsbefunde behoben, Rot-Beweis 231/231 dokumentiert. Noch keine Workflow-Aktivierung. K1 bis K4 offen. | PR #51 gemergt um 14:10:12 UTC, Review „Approved“ durch Noah, `build` und `tests` auf `main` grün |
 
 ## 11. Offene Entscheidungen für Noah
 
