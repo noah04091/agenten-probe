@@ -21,10 +21,33 @@
 //   erneuten Lauf ist nicht dokumentiert.
 // Deshalb gibt es keine direkte Verknuepfung zwischen Lauf und Label-Ereignis. Die Zuordnung ist
 // konservativ: Genau eine zaehlende Freigabe muss im Fenster [Lauf-Erstellung minus 5 Minuten,
-// Lauf-Erstellung] liegen, keine zaehlende Freigabe darf nach der Lauf-Erstellung liegen, und der
-// Laufversuch muss 1 sein. Jede fehlende, doppelte, widerspruechliche oder mehrdeutige Angabe
-// fuehrt zum Abbruch. Die Reihenfolge wird nicht der API geglaubt, sondern aus den IDs gebildet
-// und gegen die Zeitstempel geprueft.
+// Lauf-Erstellung] liegen, keine zaehlende Freigabe darf nach der Lauf-Erstellung liegen, der
+// Laufversuch muss 1 sein, und die Nutzlast muss zur Freigabe passen (naechster Absatz). Jede
+// fehlende, doppelte, widerspruechliche oder mehrdeutige Angabe fuehrt zum Abbruch. Die Reihenfolge
+// wird nicht der API geglaubt, sondern aus den IDs gebildet und gegen die Zeitstempel geprueft.
+//
+// Zusaetzliche Bindung an die Nutzlast (Pruefung PR #53): Ohne sie konnte ein verspaeteter Lauf
+// einer frueheren, zurueckgenommenen Freigabe A eine neuere Freigabe B uebernehmen, wenn nur B im
+// Fenster lag. Laut GitHub-OpenAPI-Beschreibung (api.github.com, Version 1.1.4, Schema
+// webhook-issues-labeled, geprueft am 11.11.2026) enthaelt die Nutzlast das Pflichtfeld issue mit
+// den Pflichtfeldern title (Text), body (Text oder null) und updated_at. Deshalb gilt:
+// - updated_at der Nutzlast muss sekundengleich mit der zugeordneten Freigabe sein. Der Lauf von A
+//   traegt die Sekunde von A und kann B nicht mehr uebernehmen.
+// - Titel und Text der Nutzlast muessen nach derselben Normalisierung denselben Hash ergeben wie
+//   das Live-Issue. body null wird in beiden gleich zu leerem Text; da validateIssueInput leeren
+//   Text ablehnt, endet null in der Nutzlast so oder so in einem Abbruch.
+// - updated_at des Live-Issues muss genau die Sekunde der Freigabe tragen. Spaeter heisst
+//   veraendert, frueher heisst veraltete Antwort. Eine Toleranz gibt es nicht mehr.
+// Diese Bindung beruht auf einer Annahme, die weder dokumentiert noch gemessen ist: Die Nutzlast
+// traegt den Issue-Zustand zum Zeitpunkt des Labels, und ihr updated_at ist die Sekunde des Labels.
+// Gemessen ist die Sekunde nur fuer das Live-Issue (siehe unten).
+// - Traegt die Nutzlast eine andere Sekunde, lehnt dieses Modul jeden echten Lauf ab (falsches Nein).
+// - Erzeugt GitHub die Nutzlast dagegen erst spaeter (bei Einreihung oder Lauf-Erstellung), traegt
+//   ein verspaeteter Lauf von A den Zustand nach B, und beide Pruefbefunde waeren wieder offen
+//   (falsches Ja). Fuer diesen Fall gibt das Modul KEINE Garantie.
+// Beides muss vor einem echten Einsatz im ersten Trockenlauf von A6.4 gemessen werden: die Sekunde
+// und der Zeitpunkt des Schnappschusses (zum Beispiel den Titel direkt nach dem Label aendern und
+// pruefen, ob die Nutzlast noch den alten Titel traegt).
 //
 // Auch das Profil-Label waehlt Rechte aus (Dateien, Budget, Runden). Deshalb muss jedes Ereignis
 // eines agent:-Labels von noah04091 stammen, das aktuelle Profil-Label muss vor der Freigabe
@@ -32,18 +55,31 @@
 // beide Labels in einem Schritt gesetzt, tragen sie dieselbe Sekunde und der Lauf bricht immer ab,
 // unabhaengig von der Reihenfolge der IDs. Bedienung: erst agent:<id> setzen, dann bot-auftrag.
 //
-// Titel- und Textaenderungen erscheinen nicht im Ereignisverlauf. Deshalb darf updated_at des
-// Issues hoechstens 2 Sekunden nach der Freigabe liegen. Gemessen am 10.11.2026 an elf Issues
-// dieses Repositorys: Bei Label-Ereignissen ist updated_at sekundengleich mit dem Ereignis, bei
-// closed liegt es bis zu 1 Sekunde davor. Jede spaetere Aktivitaet (Bearbeitung, Kommentar)
-// bricht ab.
+// Textaenderungen erscheinen nicht im Ereignisverlauf, Titelaenderungen schon (Ereignis renamed mit
+// rename.from und rename.to, laut GitHub-Doku "Issue event types", geprueft am 11.11.2026). Deshalb:
+// - Jede Umbenennung, die nicht von noah04091 stammt, bricht ab, egal wann sie war.
+// - updated_at des Live-Issues muss sekundengleich mit der Freigabe sein. Gemessen am 10.11.2026
+//   an elf Issues dieses Repositorys: Bei Label-Ereignissen ist updated_at sekundengleich mit dem
+//   Ereignis, bei closed liegt es bis zu 1 Sekunde davor. Jede spaetere Aktivitaet (Bearbeitung,
+//   Kommentar) bricht ab. Eine Bearbeitung in derselben Sekunde nach dem Label faengt der
+//   Hash-Vergleich mit der Nutzlast, unter der Annahme oben.
+// - Eine Textbearbeitung durch ein anderes Konto mit Schreibrechten VOR dem Label ist im Verlauf
+//   nicht sichtbar und steht auch in der Nutzlast. Sie ist nur dadurch begrenzt, dass noah04091 den
+//   Text beim Setzen des Labels sieht. Wer Issues anderer bearbeiten darf, muss A6.4 festlegen.
 //
 // Grenzen, die dieses Modul nicht schliessen kann und die A6.4 tragen muss:
 // - Dieselbe Freigabe kann zwei Laeufe mit Versuch 1 bestaetigen, wenn zwei Laeufe entstehen.
 //   Dagegen helfen nur eine concurrency-Gruppe je Issue und eine Einmal-Markierung je Freigabe.
 // - Ob der Ereignisverlauf vollstaendig ist (alle Seiten), prueft der Leser in A6.2-2.
 // - Vor resolveOrder darf nichts auf das Issue schreiben (auch kein Kommentar "Lauf gestartet"),
-//   sonst bricht die Pruefung von updated_at ab.
+//   sonst bricht die Pruefung von updated_at ab. Der Auftrag muss danach ohne erneutes Lesen des
+//   Issues verwendet werden.
+// - Das Repository ist oeffentlich. Ein Kommentar irgendeines GitHub-Kontos zwischen Freigabe und
+//   Abruf des Live-Issues aendert updated_at und stoppt den Lauf. Das ist ein falsches Nein, kein
+//   falsches Ja. Ohne die fruehere Toleranz ist dieses Fenster um bis zu 2 Sekunden groesser.
+// - Die Pruefung von renamed wirkt nur, wenn der Leser in A6.2-2 den Ereignisverlauf ungefiltert
+//   und mit den Rohwerten von GitHub uebergibt (event exakt "renamed"). A6.2-2 braucht dafuer einen
+//   Test, der ein fremdes renamed durch den Leser schickt und auftrag-titel-fremd erwartet.
 // - Ungeklaert ist, ob der Ereignisverlauf nach dem Umbenennen eines Labels den alten oder den
 //   neuen Namen liefert. Liefert er den neuen, koennte ein Umbenennen im Repository das Profil
 //   unbemerkt wechseln. Messung mit einem Wegwerf-Label braucht eine Schreibfreigabe (A6.4).
@@ -82,7 +118,6 @@ export const MAX_EVENTS = 1000;
 export const MAX_LABELS = 20;
 export const APPROVAL_WINDOW_MS = 5 * 60 * 1000;
 export const APPROVAL_DEADLINE_MS = 60 * 60 * 1000;
-export const ISSUE_UPDATE_TOLERANCE_MS = 2 * 1000;
 
 const HEX40_RE = /^[0-9a-f]{40}$/;
 const HEX64_RE = /^[0-9a-f]{64}$/;
@@ -91,7 +126,7 @@ const TIME_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/;
 const TREE_LINE_RE = /^([0-7]{6}) (blob|tree|commit) ([0-9a-f]{40})\t(.+)$/s;
 const INPUT_KEYS = Object.freeze(['root', 'baseSha', 'gitEnv', 'repository', 'event', 'issue', 'events', 'run', 'now']);
 const RUN_KEYS = Object.freeze(['id', 'attempt', 'createdAt']);
-const APPROVAL_CONTEXT_KEYS = Object.freeze(['runCreatedAt', 'now', 'profileLabel']);
+const APPROVAL_CONTEXT_KEYS = Object.freeze(['runCreatedAt', 'now', 'profileLabel', 'startUpdatedAt']);
 
 export class OrderError extends Error {
   constructor(code, message) {
@@ -439,12 +474,25 @@ export function orderLabels(labels, policy) {
 // ---------------------------------------------------------------------------
 
 // events: vollstaendiger Ereignisverlauf des Issues (alle Seiten).
-// context: { runCreatedAt, now, profileLabel }, profileLabel ist das aktuelle Label agent:<id>.
+// Ein Ereignis zaehlt nur, wenn noah04091 selbst es ausgeloest hat, nicht ueber eine App.
+function byOwnerEvent(event) {
+  const actor = own(event, 'actor');
+  const app = own(event, 'performed_via_github_app');
+  return (
+    isPlainObject(actor) &&
+    own(actor, 'login') === OWNER &&
+    own(actor, 'type') === 'User' &&
+    (app === undefined || app === null)
+  );
+}
+
+// context: { runCreatedAt, now, profileLabel, startUpdatedAt }. profileLabel ist das aktuelle Label
+// agent:<id>, startUpdatedAt ist updated_at des Issues aus der Nutzlast des Start-Ereignisses.
 // Grenzen: Eine Freigabe genau 5:00 vor der Lauf-Erstellung oder in derselben Sekunde liegt im
 // Fenster. Eine Freigabe genau 60:00 vor now ist noch gueltig, eine Sekunde spaeter nicht mehr.
 export function evaluateStartApprovals(events, context) {
   if (!isPlainObject(context) || !hasExactKeys(context, APPROVAL_CONTEXT_KEYS)) {
-    fail('auftrag-eingabe', 'Kontext braucht genau runCreatedAt, now und profileLabel');
+    fail('auftrag-eingabe', 'Kontext braucht genau runCreatedAt, now, profileLabel und startUpdatedAt');
   }
 
   const nowMs = readNow(own(context, 'now'));
@@ -513,6 +561,14 @@ export function evaluateStartApprovals(events, context) {
   const profileEvents = [];
 
   for (const item of parsed) {
+    // Titelaenderungen sind im Verlauf sichtbar; nur noah04091 darf den Titel geaendert haben.
+    if (item.type === 'renamed') {
+      if (!byOwnerEvent(item.event)) {
+        fail('auftrag-titel-fremd', `Titel wurde in Ereignis ${item.id} nicht von ${OWNER} geaendert`);
+      }
+    }
+
+    // Alles ausser Label-Ereignissen (auch renamed nach der Pruefung oben) wird hier uebersprungen.
     if (item.type !== 'labeled' && item.type !== 'unlabeled') {
       continue;
     }
@@ -537,14 +593,7 @@ export function evaluateStartApprovals(events, context) {
       continue;
     }
 
-    const actor = own(item.event, 'actor');
-    const app = own(item.event, 'performed_via_github_app');
-    const byOwner = (
-      isPlainObject(actor) &&
-      own(actor, 'login') === OWNER &&
-      own(actor, 'type') === 'User' &&
-      (app === undefined || app === null)
-    );
+    const byOwner = byOwnerEvent(item.event);
 
     if (isProfile) {
       if (!byOwner) {
@@ -591,6 +640,17 @@ export function evaluateStartApprovals(events, context) {
   }
 
   const chosen = candidates[0];
+  // startUpdatedAt: updated_at des Issues aus der Nutzlast des Start-Ereignisses dieses Laufs.
+  const startMs = parseTime(own(context, 'startUpdatedAt'));
+
+  if (startMs === null) {
+    fail('auftrag-start-zeit', 'updated_at in der Nutzlast des Start-Ereignisses fehlt oder ist ungueltig');
+  }
+
+  // Ein verspaeteter Lauf einer frueheren Freigabe traegt deren Sekunde, nicht die der neueren.
+  if (startMs !== chosen.time) {
+    fail('auftrag-start-zuordnung', 'Start-Ereignis gehoert nicht zur zugeordneten Freigabe');
+  }
 
   if (removals.some(item => item.id > chosen.id)) {
     fail('auftrag-freigabe-entzogen', 'Startlabel wurde nach der Freigabe entfernt');
@@ -653,14 +713,18 @@ function checkIssue(issue) {
     fail('auftrag-issue-autor', `Issue nicht von ${OWNER} angelegt`);
   }
 
-  const body = own(issue, 'body');
   const updatedAt = parseTime(own(issue, 'updated_at'));
 
   if (updatedAt === null) {
     fail('auftrag-issue-zeit', 'updated_at des Issues fehlt oder ist ungueltig');
   }
 
-  return { number, title: own(issue, 'title'), body: body === null ? '' : body, labels: own(issue, 'labels'), updatedAt };
+  return { number, title: own(issue, 'title'), body: bodyText(own(issue, 'body')), labels: own(issue, 'labels'), updatedAt };
+}
+
+// body ist laut GitHub Text oder null. null gilt in Live-Issue und Nutzlast gleich als leerer Text.
+function bodyText(body) {
+  return body === null ? '' : body;
 }
 
 function checkStartEvent(event, repository, number) {
@@ -685,9 +749,14 @@ function checkStartEvent(event, repository, number) {
   }
 
   // Die Nummer oben ist nur lesbar, wenn issue ein einfaches Objekt ist.
-  if (Object.hasOwn(own(event, 'issue'), 'pull_request')) {
+  const issue = own(event, 'issue');
+
+  if (Object.hasOwn(issue, 'pull_request')) {
     fail('auftrag-issue-pr', 'Start betrifft einen Pull Request');
   }
+
+  // Issue-Zustand zum Zeitpunkt des Labels, so wie er in der Nutzlast steht. Geprueft wird spaeter.
+  return { title: own(issue, 'title'), body: bodyText(own(issue, 'body')), updatedAt: own(issue, 'updated_at') };
 }
 
 function checkRun(run) {
@@ -735,7 +804,7 @@ export function resolveOrder(input) {
 
   const run = checkRun(get('run'));
   const issue = checkIssue(get('issue'));
-  checkStartEvent(get('event'), REPOSITORY, issue.number);
+  const start = checkStartEvent(get('event'), REPOSITORY, issue.number);
 
   const repo = openRepository(get('root'), get('baseSha'), get('gitEnv'));
   const trusted = loadTrustedPolicy(repo);
@@ -775,11 +844,33 @@ export function resolveOrder(input) {
     runCreatedAt: run.createdAt,
     now: new Date(nowMs),
     profileLabel: `${PROFILE_LABEL_PREFIX}${profilId}`,
+    startUpdatedAt: start.updatedAt,
   });
 
-  // Titel und Text duerfen nach der Freigabe nicht mehr bearbeitet worden sein.
-  if (issue.updatedAt > Date.parse(approval.zeitpunkt) + ISSUE_UPDATE_TOLERANCE_MS) {
+  // Das Live-Issue muss genau die Sekunde der Freigabe tragen: spaeter heisst bearbeitet,
+  // frueher heisst, die Antwort ist aelter als die Freigabe und belegt nichts.
+  const approvalMs = Date.parse(approval.zeitpunkt);
+
+  if (issue.updatedAt > approvalMs) {
     fail('auftrag-issue-geaendert', 'Issue wurde nach der Freigabe veraendert');
+  }
+
+  if (issue.updatedAt < approvalMs) {
+    fail('auftrag-issue-veraltet', 'Live-Issue ist aelter als die Freigabe');
+  }
+
+  // Titel und Text muessen dem Zustand in der Nutzlast entsprechen, auch bei einer Bearbeitung in
+  // derselben Sekunde wie die Freigabe.
+  let startInput = null;
+
+  try {
+    startInput = validateIssueInput(start.title, start.body, trusted.policy);
+  } catch {
+    // Unvollstaendige oder ungueltige Nutzlast: kein Vergleich moeglich, unten Abbruch.
+  }
+
+  if (startInput === null || startInput.sha256 !== issueInput.sha256) {
+    fail('auftrag-issue-abweichung', 'Titel oder Text weichen vom Stand bei der Freigabe ab');
   }
 
   const order = {
