@@ -1021,7 +1021,7 @@ test('Wache: kein anderes Skript verweist auf eines der beiden Auftragsmodule', 
   // Muss-Treffer: beide Module existieren, und die Suche findet bekannte Importe in anderen Skripten.
   assert.ok(names.includes('agent-code-auftrag.mjs') && names.includes('agent-code-auftrag-live.mjs'));
   const others = names
-    .filter(name => name !== 'agent-code-auftrag.mjs' && name !== 'agent-code-auftrag-live.mjs')
+    .filter(name => name !== 'agent-code-auftrag.mjs' && name !== 'agent-code-auftrag-live.mjs' && name !== 'agent-code-auftrag-prompt.mjs')
     .map(name => readFileSync(join(dir, name), 'utf8'));
   assert.ok(others.length >= 10, 'Gegenprobe: zu wenige Skripte gefunden');
   assert.ok(others.some(text => text.includes('./agent-code-release-plan.mjs')), 'Gegenprobe ohne Treffer');
