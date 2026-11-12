@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
+  accessSync, chmodSync, constants as fsConstants, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -487,7 +487,13 @@ test('Ueberschneidung: ueber einen Symlink im Elternpfad (nur wo Symlinks erlaub
     return;
   }
 
-  rejects(() => prepareWorkspace(trusted, order, orderSha256(order), join(link, 'arbeit'), opts()), 'paket-ueberschneidung');
+  // Ist der direkte Elternordner ein Symlink, wird er schon als Pfad abgelehnt.
+  rejects(() => prepareWorkspace(trusted, order, orderSha256(order), join(link, 'arbeit'), opts()), 'paket-pfad');
+  // Liegt der Symlink weiter oben, loest realpath ihn auf und die Ueberschneidung faellt auf.
+  const upper = newDir('l');
+  symlinkSync(dirname(trusted), upper, 'dir');
+  rejects(() => prepareWorkspace(trusted, order, orderSha256(order), join(upper, basename(trusted), 'arbeit'), opts()), 'paket-ueberschneidung');
+  rejects(() => prepareWorkspace(trusted, order, orderSha256(order), join(upper, basename(trusted), 'src', 'arbeit'), opts()), 'paket-ueberschneidung');
   // Der Arbeitsordner selbst darf kein Symlink sein, auch nicht auf einen leeren Ordner.
   const empty = newDir('e');
   mkdirSync(empty);
@@ -724,19 +730,32 @@ test('Git-Verbot: Vergleich und Paketbau loesen keinen Git-Hook im Arbeitsbereic
   write(work, GOOD);
 
   // Muss-Treffer: ein Git-Befehl im Arbeitsordner erzeugt den Marker.
+  let gitOutput = '';
+
   try {
-    execFileSync('git', ['status'], { cwd: work, env: ENV, stdio: 'ignore' });
-  } catch {
+    execFileSync('git', ['status'], { cwd: work, env: ENV, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' });
+  } catch (error) {
     // Der Hook endet mit Exitcode 1; entscheidend ist nur der Marker.
+    gitOutput = String(error?.stderr ?? '').split('\n')[0];
   }
 
   if (!existsSync(marker)) {
-    if (IS_WINDOWS) {
-      t.skip('core.fsmonitor-Hook wird hier nicht ausgefuehrt (laeuft unter Ubuntu in der CI)');
+    // Ausnahme nur unter Windows und im schreibgeschuetzten Container des Trockenlaufs (Repository
+    // nicht beschreibbar). Im normalen Ubuntu-Testjob muss die Gegenprobe treffen.
+    let repoWritable = true;
+
+    try {
+      accessSync(ROOT, fsConstants.W_OK);
+    } catch {
+      repoWritable = false;
+    }
+
+    if (IS_WINDOWS || !repoWritable) {
+      t.skip(`core.fsmonitor-Hook wird hier nicht ausgefuehrt (${IS_WINDOWS ? 'Windows' : 'schreibgeschuetzter Container'}; git: ${gitOutput || 'keine Meldung'}). Pflichtlauf im Ubuntu-Testjob`);
       return;
     }
 
-    assert.fail('Gegenprobe: der Hook hat keinen Marker erzeugt');
+    assert.fail(`Gegenprobe: der Hook hat keinen Marker erzeugt (git: ${gitOutput || 'keine Meldung'})`);
   }
 
   unlinkSync(marker);
