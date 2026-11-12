@@ -726,9 +726,9 @@ test('Wache: kein anderes Skript verweist auf eines der drei Auftragsmodule', ()
   const names = readdirSync(dir).filter(name => name.endsWith('.mjs'));
   assert.ok(MODULES.every(name => names.includes(name)), 'Gegenprobe: ein Auftragsmodul fehlt');
   const others = names
-    .filter(name => name !== 'agent-code-auftrag.mjs' && name !== 'agent-code-auftrag-live.mjs' && name !== 'agent-code-auftrag-prompt.mjs' && name !== 'agent-code-auftrag-paket.mjs')
+    .filter(name => name !== 'agent-code-auftrag.mjs' && name !== 'agent-code-auftrag-live.mjs' && name !== 'agent-code-auftrag-prompt.mjs' && name !== 'agent-code-auftrag-paket.mjs' && name !== 'agent-code-auftrag-publish.mjs')
     .map(name => readFileSync(join(dir, name), 'utf8'));
-  assert.equal(others.length, names.length - 4);
+  assert.equal(others.length, names.length - 5);
   assert.ok(others.length >= 10, 'Gegenprobe: zu wenige Skripte gefunden');
   assert.ok(others.some(text => text.includes('./agent-code-release-plan.mjs')), 'Gegenprobe ohne Treffer');
   assert.ok(others.every(text => !text.includes('agent-code-auftrag')), 'ein Skript verweist auf ein Auftragsmodul');

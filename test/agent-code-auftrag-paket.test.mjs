@@ -1361,7 +1361,7 @@ test('Geheimniswerte: Eingaben, leere Liste, kurze Werte und keine Ausgabe der W
 // Wachtests auf Quelltext und Workflows
 // ---------------------------------------------------------------------------
 
-const MODULES = ['agent-code-auftrag.mjs', 'agent-code-auftrag-live.mjs', 'agent-code-auftrag-prompt.mjs', 'agent-code-auftrag-paket.mjs'];
+const MODULES = ['agent-code-auftrag.mjs', 'agent-code-auftrag-live.mjs', 'agent-code-auftrag-prompt.mjs', 'agent-code-auftrag-paket.mjs', 'agent-code-auftrag-publish.mjs'];
 const SOURCE = readFileSync(MODULE_PATH, 'utf8');
 
 test('Wache: nur die vorgesehenen Importe, kein Netz-, Prozess-, Umgebungs- oder Protokollzugriff', () => {
