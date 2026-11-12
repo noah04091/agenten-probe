@@ -820,7 +820,7 @@ const workflowTexts = () => readdirSync(join(ROOT, '.github/workflows'))
   .filter(name => /\.ya?ml$/.test(name))
   .map(name => readRepoFile(`.github/workflows/${name}`));
 const scriptTexts = () => readdirSync(join(ROOT, 'scripts'))
-  .filter(name => name.endsWith('.mjs') && name !== 'agent-code-auftrag.mjs' && name !== 'agent-code-auftrag-live.mjs' && name !== 'agent-code-auftrag-prompt.mjs' && name !== 'agent-code-auftrag-paket.mjs')
+  .filter(name => name.endsWith('.mjs') && name !== 'agent-code-auftrag.mjs' && name !== 'agent-code-auftrag-live.mjs' && name !== 'agent-code-auftrag-prompt.mjs' && name !== 'agent-code-auftrag-paket.mjs' && name !== 'agent-code-auftrag-publish.mjs')
   .map(name => readRepoFile(`scripts/${name}`));
 const importsOf = text => [...text.matchAll(/^\s*import\s[^;]*?from\s+'([^']+)'/gm)].map(match => match[1]).sort();
 
