@@ -277,7 +277,7 @@ function isolatedEnv(gitEnv) {
 }
 
 // Ersatzobjekte (refs/replace) koennten Commit, Baum oder Blob austauschen. Sie sind abgeschaltet.
-function runGit(git, args, code, binary = false) {
+export function runGit(git, args, code, binary = false) {
   try {
     return execFileSync('git', ['--no-replace-objects', ...args], {
       cwd: git.root,
@@ -294,7 +294,7 @@ function runGit(git, args, code, binary = false) {
 
 // Oeffnet das Repository und liest den Baum von baseSha genau einmal. parseTreeOutput prueft
 // Format, doppelte Pfade und Konflikte zwischen Eintrag und Ordner; hier kommen die Blob-IDs dazu.
-function openRepository(root, baseSha, gitEnv) {
+export function openRepository(root, baseSha, gitEnv) {
   if (typeof root !== 'string' || !isAbsolute(root)) {
     fail('auftrag-wurzel', 'Repository-Verzeichnis muss ein absoluter Pfad sein');
   }
