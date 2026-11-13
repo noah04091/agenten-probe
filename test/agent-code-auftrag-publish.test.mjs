@@ -410,7 +410,9 @@ function handle(sim, req) {
   if (req.method === 'POST' && rest === 'pulls') {
     const number = sim.nextPr;
     sim.nextPr += 1;
-    const record = { ...pullRecord(number, body.head), state: 'open', draft: body.draft, title: body.title, body: body.body };
+    const neu = pullRecord(number, body.head);
+    // head.sha ist die tatsaechliche simulierte Branchspitze, wie bei GitHub.
+    const record = { ...neu, head: { ...neu.head, sha: sim.refs.get(`refs/heads/${body.head}`) }, state: 'open', draft: body.draft, title: body.title, body: body.body };
     sim.pulls.push(record);
     return created(record);
   }
@@ -714,6 +716,25 @@ test('Gueltiger Fall: Blobs, Baum, Commit, Branch und Draft-PR in genau dieser R
   const pr = sim.pulls.at(-1);
   assert.equal(pr.draft, true);
   assert.equal(pr.head.ref, BRANCH);
+  // Die PR-Antwort meldet genau den eigenen Commit, und genau ein POST pulls fand statt.
+  assert.equal(pr.head.sha, result.commit);
+  assert.notEqual(result.commit, BASE);
+  assert.equal(sim.log.filter(req => req.method === 'POST' && restOf(req) === 'pulls').length, 1);
+  assert.deepEqual(writes(sim), WRITES_OK);
+});
+
+test('Simulator: head.sha der PR-Antwort stammt aus der simulierten Branchspitze, nicht aus einer Konstante', () => {
+  for (const spitze of ['1'.repeat(40), '2'.repeat(40)]) {
+    const sim = createSim();
+    sim.refs.set(`refs/heads/${BRANCH}`, spitze);
+    const res = handle(sim, { method: 'POST', path: `${P}pulls`, body: JSON.stringify({ title: 't', head: BRANCH, base: 'main', draft: true, body: 'b' }) });
+    assert.equal(JSON.parse(res.body).head.sha, spitze);
+  }
+
+  // Ohne Branchspitze gibt es auch kein head.sha.
+  const leer = createSim();
+  const res = handle(leer, { method: 'POST', path: `${P}pulls`, body: JSON.stringify({ title: 't', head: BRANCH, base: 'main', draft: true, body: 'b' }) });
+  assert.equal(Object.hasOwn(JSON.parse(res.body).head, 'sha'), false);
 });
 
 test('Gueltiger Fall: Anfragen tragen genau die geprueften Daten, keine Issue-Inhalte im PR', async () => {
@@ -1348,6 +1369,48 @@ test('PR-Antwort: jede Abweichung wird abgelehnt, der Branch bleibt stehen', asy
     json => [json],
   ]) {
     assertAfterPull(await tampered(tamperNth(pullPost, 1, jsonEdit(edit))), 'publish-pr-antwort');
+  }
+});
+
+test('PR-Antwort: head.sha muss exakt der eigene Commit sein, sonst Ablehnung ohne Loeschen', async () => {
+  const kippe = sha => `${sha.slice(0, 20)}${sha[20] === '0' ? '1' : '0'}${sha.slice(21)}`;
+  const faelle = [
+    ['fehlt', json => { delete json.head.sha; }],
+    ['null', json => { json.head.sha = null; }],
+    ['Zahl', json => { json.head.sha = 1234567; }],
+    ['leer', json => { json.head.sha = ''; }],
+    ['verkuerzt', json => { json.head.sha = json.head.sha.slice(0, 7); }],
+    ['ungueltige Zeichen', json => { json.head.sha = `${json.head.sha.slice(0, 39)}g`; }],
+    ['Ausgangscommit', json => { json.head.sha = BASE; }],
+    ['fremde gueltige SHA', json => { json.head.sha = 'c'.repeat(40); }],
+    ['ein Zeichen veraendert', json => { json.head.sha = kippe(json.head.sha); }],
+    ['richtige SHA nur als Praefix', json => { json.head.sha = `${json.head.sha}deadbeef`; }],
+    ['Grossbuchstaben', json => { json.head.sha = json.head.sha.toUpperCase(); }],
+    ['ein zusaetzliches Zeichen', json => { json.head.sha = `${json.head.sha}0`; }],
+    ['Zeilenumbruch angehaengt', json => { json.head.sha = `${json.head.sha}\n`; }],
+    ['Objekt statt String', json => { json.head.sha = { sha: json.head.sha }; }],
+  ];
+
+  for (const [name, edit] of faelle) {
+    let echt = null;
+    let gesendet = null;
+    const outcome = await tampered(tamperNth(pullPost, 1, jsonEdit(json => {
+      echt = json.head.sha;
+      edit(json);
+      gesendet = json.head.sha;
+    })));
+
+    // Die Manipulation wurde tatsaechlich ausgeliefert und weicht vom eigenen Commit ab.
+    assert.equal(typeof echt, 'string', name);
+    assert.notEqual(gesendet, echt, name);
+    const bericht = assertAfterPull(outcome, 'publish-pr-antwort');
+    assert.equal(bericht.commit, echt, name);
+    assert.equal(bericht.branch, BRANCH, name);
+    assert.equal(outcome.sim.refs.get(`refs/heads/${BRANCH}`), echt, name);
+    assert.equal(outcome.result, undefined, name);
+    // Der simulierte Draft-PR existiert weiterhin und bleibt unangetastet.
+    assert.equal(outcome.sim.pulls.at(-1).head.ref, BRANCH, name);
+    assert.equal(outcome.sim.pulls.at(-1).head.sha, echt, name);
   }
 });
 

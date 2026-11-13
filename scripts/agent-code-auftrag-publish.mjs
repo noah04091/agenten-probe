@@ -723,7 +723,8 @@ function checkPullResponse(json, ctx) {
   if (
     !isPlainObject(json) || !Number.isSafeInteger(number) || number < 1 || own(json, 'draft') !== true ||
     own(base, 'ref') !== 'main' || own(own(base, 'repo'), 'full_name') !== REPOSITORY ||
-    own(head, 'ref') !== ctx.branch || own(own(head, 'repo'), 'full_name') !== REPOSITORY ||
+    own(head, 'ref') !== ctx.branch || own(head, 'sha') !== ctx.commit ||
+    own(own(head, 'repo'), 'full_name') !== REPOSITORY ||
     own(json, 'html_url') !== `${PR_URL_PREFIX}${number}`
   ) {
     fail('publish-pr-antwort', 'Draft-PR-Bestaetigung ungueltig, manuell pruefen, nicht loeschen');
