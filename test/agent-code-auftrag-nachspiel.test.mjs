@@ -14,8 +14,10 @@
 //   im Testgeruest (Funktionen bindCodeBeforeAcceptance, runBoundAcceptance, publishAccepted).
 //   Kein Produktionsmodul enthaelt sie. A6.4 muss sie im echten Pruef- und Veroeffentlichungsjob
 //   selbst gewaehrleisten.
-// - Bekannte Luecke: Der Veroeffentlicher prueft head.sha in der Antwort auf POST pulls noch nicht.
-//   Der letzte Test dieser Datei misst das. Die Ergaenzung ist Pflicht fuer A6.4.
+// - head.sha in der Antwort auf POST pulls: Seit A6.4-1 prueft das allgemeine Veroeffentlichungs-
+//   modul, dass head.sha exakt dem eigenen Commit entspricht (offline nachgewiesen). Der letzte Test
+//   dieser Datei belegt die Ablehnung einer manipulierten PR-Antwort. Die produktive Workflow-
+//   Einbindung bleibt offen.
 //
 // Alles offline: kein Claude-Aufruf, keine Netzanfrage, keine Zugangsdaten, kein GitHub-Schreibzugriff.
 // Alle Live-Zustaende kommen aus einem lokalen Simulator. Die Daten sind kuenstlich: Issue 38 ist im
@@ -1450,12 +1452,12 @@ test('Simulator-Antwort manipuliert: falsche Blob-ID nach dem Upload stoppt vor 
 });
 
 // ---------------------------------------------------------------------------
-// Bekannte Luecke (offen fuer A6.4, NICHT implementiert)
+// Fruehere Luecke, seit A6.4-1 geschlossen: fremde head.sha in der PR-Antwort
 // ---------------------------------------------------------------------------
 
-test('Bekannte Luecke fuer A6.4: head.sha in der Antwort auf POST pulls wird vom Veroeffentlicher nicht geprueft', async () => {
-  // Misst den heutigen Stand. Sobald A6.4 die Pruefung ergaenzt, muss dieser Test zu einem
-  // Negativtest werden (fremde head.sha wird abgelehnt). Er belegt KEINE Schutzwirkung.
+test('A6.4-1: fremde head.sha in der Antwort auf POST pulls wird abgelehnt, Branch und Draft-PR bleiben stehen', async () => {
+  // Bis A6.4-1 hat dieser Test die Luecke gemessen (gefaelschte head.sha wurde akzeptiert). Jetzt
+  // belegt er die Ablehnung und die Sicherheitsfolgen nach einer bereits gestellten PR-Anfrage.
   const parsed = parsePackageV2(ORDER, HASH, PKG.bytes, PKG.sha256);
   const check = checkout();
   applyPackageV2(check, ORDER, HASH, parsed, { gitEnv: { ...ENV } });
@@ -1474,10 +1476,33 @@ test('Bekannte Luecke fuer A6.4: head.sha in der Antwort auf POST pulls wird vom
     delivered.push(forged.head.sha);
     return { ...res, body: JSON.stringify(forged) };
   };
-  const result = await publishAccepted(accepted, { sim, expectedSha256: HASH, pkg: PKG });
+  const error = await publishAccepted(accepted, { sim, expectedSha256: HASH, pkg: PKG }).then(() => null, caught => caught);
+  const branch = branchOf(RUN_A);
+  const commit = sim.refs.get(`refs/heads/${branch}`);
+
   // Muss-Treffer: Die gefaelschte Antwort wurde genau einmal ausgeliefert und weicht vom Commit ab.
   assert.deepEqual(delivered, [foreignHead]);
-  assert.notEqual(result.commit, foreignHead);
-  assert.equal(sim.pulls.at(-1).head.sha, result.commit);
+  assert.match(commit, /^[0-9a-f]{40}$/);
+  assert.notEqual(commit, foreignHead);
+
+  // Ablehnung mit vollstaendigem Fehlerbericht, kein Erfolg.
+  assert.ok(error instanceof PublishError, String(error));
+  assert.equal(error.code, 'publish-pr-antwort');
+  assert.equal(error.bericht.pr_angefragt, true);
+  assert.equal(error.bericht.bereinigung, 'nicht-geloescht');
+  assert.equal(error.bericht.bereinigung_grund, 'pr-angefragt');
+  assert.equal(error.bericht.commit, commit);
+  assert.equal(error.bericht.branch, branch);
+
+  // Alle Schreibaufrufe bis einschliesslich POST pulls, danach keine Anfrage, kein DELETE.
   assert.deepEqual(writes(sim), WRITES_OK);
+  assert.equal(sim.log.at(-1).method, 'POST');
+  assert.equal(restOf(sim.log.at(-1)), 'pulls');
+  assert.ok(!sim.log.some(req => req.method === 'DELETE'));
+
+  // Eigener Branch und simulierter Draft-PR bestehen weiter, die Branchspitze ist unveraendert.
+  assert.ok(sim.refs.has(`refs/heads/${branch}`));
+  assert.equal(sim.pulls.at(-1).head.ref, branch);
+  assert.equal(sim.pulls.at(-1).head.sha, commit);
+  assert.equal(sim.pulls.at(-1).draft, true);
 });
