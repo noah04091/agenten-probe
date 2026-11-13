@@ -338,6 +338,21 @@ nur die fachliche Aufgabe und gilt als nicht vertrauenswürdige Eingabe. Die Gre
 2. **Prüf-Checkout isolieren:** Nur eigenständiger Klon mit eigenem `.git`-Verzeichnis. Keine Linked Worktrees und keine `.git`-Dateien mit Verweis auf den vertrauenswürdigen Checkout.
 3. **Abnahmedatei binden:** Unmittelbar vor der tatsächlichen Ausführung muss der SHA-256 der ausgeführten Abnahmedatei mit `order.abnahme_sha256` übereinstimmen.
 4. **Codedateien vor Abnahme binden:** Unmittelbar vor der unabhängigen Abnahme müssen die tatsächlichen Git-Blob-IDs aller freigegebenen Dateien im Prüf-Checkout mit den Blob-IDs des geprüften Pakets übereinstimmen.
+5. **Vertrauenswürdige Job-, Lauf- und Paketbindung:** Der Veröffentlichungsjob darf ausschließlich nach einem erfolgreich abgeschlossenen unabhängigen Prüf- und Abnahmejob desselben Workflow-Laufs starten. Verbindlich:
+   - Abhängigkeit über `needs` mit ausdrücklicher Bedingung `needs.<job>.result == 'success'`; fehlgeschlagene, übersprungene oder abgebrochene Prüfjobs verhindern die Veröffentlichung; keine Umgehung über `always()` oder `!cancelled()`.
+   - Artefaktname an `run_id` und `run_attempt` gebunden, Download mit `digest-mismatch: error`.
+   - Vollständiger Paket-SHA-256 ausschließlich über `needs.<job>.outputs`, nie als vertrauenswürdiger Wert aus dem Artefakt; der Veröffentlichungsjob berechnet den SHA-256 der tatsächlich empfangenen Paketbytes selbst.
+   - Vollständige Bindung an Auftrag, Profil, Basiscommit und Lauf; Prüf- und Veröffentlichungsjob verlangen denselben `GITHUB_SHA`, und dieser stimmt mit dem gebundenen Ausgangs-SHA des Auftrags überein.
+   - Keine frei konstruierten Abnahmeobjekte als Freigabe.
+   - Negativproben bei manipuliertem Paket, fremdem Lauf, übersprungenem Prüfjob, falschem Ausgangscommit und ungültigem SHA.
+6. **Festgelegte Node-Version und äußere Laufzeitbegrenzung:** Der produktive Abnahmejob verwendet eine festgelegte, kontrollierte Node-Version. Verbindlich:
+   - Node-Laufzeit über einen unveränderlichen Container-Digest absichern; Vorlage ist der bestehende Node-Container des bisherigen Trockenlauf-Job-2.
+   - Tatsächliche Node-Version zu Beginn ausgeben und gegen einen fest genehmigten Wert vergleichen; Änderung von Version oder Digest nur über geschützten PR und reguläre Freigabe.
+   - Erfolg nur bei Exitcode 0, korrekter erwarteter Ausgabe und ohne unerwartetes stderr. Eine negative Abnahmeprobe verlangt Ablehnung durch Exitcode ungleich 0 oder ein Abbruchsignal, keinen bestimmten negativen Exitcode.
+   - Ein Timeout beendet die Abnahme außerhalb des geprüften Node-Prozesses; kein ausschließlicher `node:test`-Timeout gegen synchron blockierenden Code; ergänzende Prozess-, Container- und Job-Zeitlimits.
+   - Hintergrund: Der Vertauschungs-Negativfall der Originalabnahme endete unter Node 20 und 24 mit Exitcode 7, unter Node 22 mit Exitcode 1. Maßgeblich ist die tatsächliche Ablehnung.
+
+K1 bis K4 sowie alle sechs weiteren A6.4-Pflichtpunkte bleiben offen.
 
 Ebenfalls offen und bisher nicht dauerhaft festgehalten:
 - Bind-Mount-Schutz mit echter Negativprobe.
@@ -417,7 +432,8 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 | 12.11.2026 | **A6.2-4 abgeschlossen:** PR #57, regulär gemergt (Merge-Commit `9126f23d35d585e5f1745f060012ad0644d32b37`). Codepaket v2 einschließlich Änderungs- und Sicherheitsprüfungen (`scripts/agent-code-auftrag-paket.mjs`) liegt auf `main`. Keine produktive Einbindung. K1 bis K4 bleiben offen. | Kein Workflow ruft das Modul auf; die Einbindung folgt erst mit A6.4. |
 | 12.11.2026 | **A6.2-5 abgeschlossen:** PR #58, regulär gemergt (Merge-Commit `29985a57647269701761a5144af9246ce5f8cc98`). `agent-acceptance/issue-38.mjs` liegt byteidentisch zum Original `scripts/agent-code-acceptance.mjs` auf `main`. Keine produktive Einbindung. | Die Datei dient dem Nachspiel und späteren Abnahmeprüfungen, nicht einem neuen Live-Lauf auf dem geschlossenen Issue #38. |
 | 12.11.2026 | **A6.2-6 abgeschlossen:** PR #59, unabhängig geprüft und gemergt (Merge-Commit `0fe1931a64a6f7e1807b247f6c5600855b5975d0`). Allgemeiner Draft-PR-Veröffentlicher `scripts/agent-code-auftrag-publish.mjs` liegt auf `main`. Noch keine produktive Einbindung. | Die Prüfung von `head.sha` in der Antwort auf `POST pulls` fehlt noch und ist Pflicht für A6.4 (siehe Pflichtpunkte unter K1 bis K4). |
-| 12.11.2026 | **A6.2-7 in Prüfung:** historisch exaktes, vollständig offline ausführbares Nachspiel von Issue #38 (`test/agent-code-auftrag-nachspiel.test.mjs`). Noch kein abgeschlossener Merge, A6.2-7 und damit A6.2 sind nicht abgeschlossen. | Abschluss erst nach tatsächlichem PR-Merge und unabhängiger Nachprüfung. |
+| 13.11.2026 | **A6.2-7 abgeschlossen:** PR #60, unabhängig geprüft und regulär gemergt (Merge-Commit `b06e4f9bfb706df91b9e540f0aee706e831c811d`). Das vollständige historische Offline-Nachspiel von Issue #38 (`test/agent-code-auftrag-nachspiel.test.mjs`) ist erfolgreich und erreicht dieselben Ergebnis-Blobs wie PR #47. Keine produktive Workflow-Einbindung. Damit ist A6.2 insgesamt abgeschlossen. | K1 bis K4 und alle A6.4-Pflichtpunkte bleiben offen. |
+| 13.11.2026 | **A6.3-1 abgeschlossen:** PR #61, Merge-Commit `ce5c3a34fd922e56feb6ff3d0fc4c3bcc956bcee`. **A6.3-2 in Umsetzung und Prüfung, nicht abgeschlossen:** Zwei-Profile-Trockenlauf vollständig offline (`test/agent-code-auftrag-zwei-profile.test.mjs`); simulierter Job 2 und Job 3 sind zwei getrennte Node-Prozesse; die Übergabe nutzt ausschließlich die Paketdatei und eine SHA-256-Textdatei; beide Profile verwenden denselben künstlichen Ausgangscommit. Das echte Profil `js-text` bleibt inaktiv. | Die echte GitHub-Actions-Übergabe von Paket v2 ist ausdrücklich in die A6.4-Generalprobe verschoben. In A6.3 kein Workflow-Patch, keine reale Profilaktivierung und keine echten Abnahme-PRs. |
 
 ## 11. Offene Entscheidungen für Noah
 
