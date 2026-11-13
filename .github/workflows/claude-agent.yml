@@ -36,6 +36,7 @@ jobs:
   agentenlauf:
     name: Claude starten nach Freigabe
     if: >-
+      false &&
       github.event_name == 'issues' &&
       github.repository == 'noah04091/agenten-probe' &&
       github.ref == 'refs/heads/main' &&
