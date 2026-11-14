@@ -1544,7 +1544,7 @@ test('Branch-Name: fest aus Issue und Lauf-ID, keine freie Eingabe', () => {
 // ---------------------------------------------------------------------------
 
 const SOURCE = readFileSync(MODULE_PATH, 'utf8');
-const MODULES = ['agent-code-auftrag.mjs', 'agent-code-auftrag-live.mjs', 'agent-code-auftrag-prompt.mjs', 'agent-code-auftrag-paket.mjs', 'agent-code-auftrag-publish.mjs'];
+const MODULES = ['agent-code-auftrag.mjs', 'agent-code-auftrag-live.mjs', 'agent-code-auftrag-prompt.mjs', 'agent-code-auftrag-paket.mjs', 'agent-code-auftrag-publish.mjs', 'agent-code-auftrag-abnahme.mjs'];
 
 test('Wache: nur die vorgesehenen Importe, kein Netz-, Prozess-, Umgebungs- oder Protokollzugriff', () => {
   const imports = [...SOURCE.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map(m => m[1]).sort();
