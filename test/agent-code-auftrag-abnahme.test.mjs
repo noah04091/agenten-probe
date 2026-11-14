@@ -1017,21 +1017,34 @@ function markerScript(name, exitCode) {
 
 const exists = path => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 
+// Liegt der Temp-Ordner auf einem noexec-Dateisystem (gemessen im Trockenlauf-Container: tmpfs /tmp
+// mit noexec, alles andere schreibgeschuetzt), scheitert jeder direkte Start mit EACCES. Nur dieser
+// eine Befund gilt als "hier nicht ausfuehrbar"; jedes andere Ergebnis laesst die Gegenprobe laufen.
+// Die Probe nutzt ein eigenes Skript mit eigener Markerdatei, damit sie die Gegenprobe nicht vorwegnimmt.
+function directStartBlocked() {
+  const { script } = markerScript('startprobe', 0);
+  const out = cp.spawnSync(script, [], { stdio: 'ignore', shell: false });
+  return out.error?.code === 'EACCES';
+}
+
 test('fsmonitor: ein praepariertes core.fsmonitor wird abgelehnt und nicht ausgefuehrt; Gegenprobe: es ist hier ausfuehrbar', () => {
   const p = paket('rechner');
   const { marker, script } = markerScript('fsmonitor', 1);
-  const r = lauf(eingabe(p), [{ wann: NACH_KLON, tu: dir => config(dir, 'core.fsmonitor', script) }]);
+  // git startet core.fsmonitor ueber die Shell; mit "sh <skript>" laeuft die Gegenprobe auch dort,
+  // wo der Temp-Ordner noexec ist.
+  const value = `sh "${script}"`;
+  const r = lauf(eingabe(p), [{ wann: NACH_KLON, tu: dir => config(dir, 'core.fsmonitor', value) }]);
   ohneAbnahme(r, 'abnahme-git-config');
   assert.ok(!exists(marker), 'fsmonitor wurde ausgefuehrt');
 
   // Gegenprobe im selben Aufbau: derselbe Hook laeuft bei git status tatsaechlich.
   const kontrolle = cloneAt(join(newDir('kontrolle'), 'c'), BASIS);
-  config(kontrolle, 'core.fsmonitor', script);
+  config(kontrolle, 'core.fsmonitor', value);
   git(kontrolle, ['status', '--porcelain']);
   assert.ok(exists(marker), 'Gegenprobe: fsmonitor ist auf diesem System nicht ausfuehrbar, der Test belegt sonst nichts');
 });
 
-test('Hook: ein vor dem Auschecken eingeschleuster post-checkout-Hook laeuft nicht; Gegenprobe: er ist hier ausfuehrbar', () => {
+test('Hook: ein vor dem Auschecken eingeschleuster post-checkout-Hook laeuft nicht; Gegenprobe: er ist hier ausfuehrbar', t => {
   const p = paket('rechner');
   const { marker, script } = markerScript('hook', 0);
   const hook = readFileSync(script);
@@ -1050,7 +1063,12 @@ test('Hook: ein vor dem Auschecken eingeschleuster post-checkout-Hook laeuft nic
   ohneAbnahme(lauf(eingabe(p), [{ wann: NACH_KLON, tu: dir => config(dir, 'core.hooksPath', join(hooksDir, 'hooks')) }]), 'abnahme-git-config');
   assert.ok(!exists(marker), 'Hook ueber core.hooksPath wurde ausgefuehrt');
 
-  // Gegenprobe: derselbe Hook laeuft bei einem gewoehnlichen git checkout.
+  // Gegenprobe: derselbe Hook laeuft bei einem gewoehnlichen git checkout. Git startet Hooks direkt;
+  // auf einem noexec-Temp-Ordner kann dort kein Hook laufen, auch kein eingeschleuster.
+  if (directStartBlocked()) {
+    t.skip('Temp-Ordner ist noexec (direkter Start: EACCES), Hooks sind hier generell nicht ausfuehrbar; die Gegenprobe laeuft im Job tests');
+    return;
+  }
   const kontrolle = cloneAt(join(newDir('kontrolle'), 'c'), BASIS);
   plant(join(kontrolle, '.git'));
   git(kontrolle, ['checkout', '-q', '--detach', PARENT]);
