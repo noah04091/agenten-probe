@@ -187,7 +187,7 @@ const liveIssue = () => ({
 const liveRun = () => ({
   id: Number(RUN_ID),
   event: 'issues',
-  path: '.github/workflows/code-pilot-claude-stufe.yml',
+  path: '.github/workflows/agent-auftrag.yml',
   head_branch: 'main',
   head_sha: BASE,
   run_attempt: 1,
@@ -1544,7 +1544,7 @@ test('Branch-Name: fest aus Issue und Lauf-ID, keine freie Eingabe', () => {
 // ---------------------------------------------------------------------------
 
 const SOURCE = readFileSync(MODULE_PATH, 'utf8');
-const MODULES = ['agent-code-auftrag.mjs', 'agent-code-auftrag-live.mjs', 'agent-code-auftrag-prompt.mjs', 'agent-code-auftrag-paket.mjs', 'agent-code-auftrag-publish.mjs', 'agent-code-auftrag-abnahme.mjs', 'agent-code-auftrag-transport.mjs'];
+const MODULES = ['agent-code-auftrag.mjs', 'agent-code-auftrag-live.mjs', 'agent-code-auftrag-prompt.mjs', 'agent-code-auftrag-paket.mjs', 'agent-code-auftrag-publish.mjs', 'agent-code-auftrag-abnahme.mjs', 'agent-code-auftrag-transport.mjs', 'agent-code-job-auftrag.mjs', 'agent-code-job-abnahme.mjs'];
 
 test('Wache: nur die vorgesehenen Importe, kein Netz-, Prozess-, Umgebungs- oder Protokollzugriff', () => {
   const imports = [...SOURCE.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map(m => m[1]).sort();

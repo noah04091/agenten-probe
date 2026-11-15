@@ -76,7 +76,7 @@ import { types } from 'node:util';
 
 import { MAX_ISSUE_NUMBER, OWNER, OrderError, REPOSITORY, resolveOrder, sameOrder } from './agent-code-auftrag.mjs';
 
-export const WORKFLOW_PATH = '.github/workflows/code-pilot-claude-stufe.yml';
+export const WORKFLOW_PATH = '.github/workflows/agent-auftrag.yml';
 export const PER_PAGE = 100;
 export const MAX_PAGES = 10;
 // Gemessen: 43 PRs ergeben rund 740 KB, 100 PRs also rund 1,8 MB. Die Grenze laesst lange PR-Texte zu.

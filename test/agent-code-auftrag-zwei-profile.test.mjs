@@ -556,7 +556,7 @@ function createSim({ gitDir, env, aufgabe, runId, baseSha, indexFile }) {
     run: {
       id: Number(runId),
       event: 'issues',
-      path: '.github/workflows/code-pilot-claude-stufe.yml',
+      path: '.github/workflows/agent-auftrag.yml',
       head_branch: 'main',
       head_sha: baseSha,
       run_attempt: 1,
