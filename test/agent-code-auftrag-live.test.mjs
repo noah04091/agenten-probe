@@ -160,7 +160,7 @@ const liveIssue = (number = ISSUE) => ({
 const liveRun = () => ({
   id: Number(RUN_ID),
   event: 'issues',
-  path: '.github/workflows/code-pilot-claude-stufe.yml',
+  path: '.github/workflows/agent-auftrag.yml',
   head_branch: 'main',
   head_sha: BASE,
   run_attempt: 1,
@@ -380,7 +380,7 @@ test('Positiv: unveraenderter Live-Zustand bestaetigt denselben Auftrag ueber re
   ]);
   assert.ok(calls.every(c => c.method === 'GET' && Object.isFrozen(c) && Reflect.ownKeys(c).length === 2));
   assert.ok(Object.isFrozen(state) && Object.isFrozen(state.events) && Object.isFrozen(state.issue));
-  assert.equal(WORKFLOW_PATH, '.github/workflows/code-pilot-claude-stufe.yml');
+  assert.equal(WORKFLOW_PATH, '.github/workflows/agent-auftrag.yml');
   assert.equal(PER_PAGE, 100);
   assert.equal(MAX_PAGES, 10);
   assert.equal(MAX_BODY_BYTES, 16 * 1024 * 1024);
@@ -1021,7 +1021,7 @@ test('Wache: kein anderes Skript verweist auf eines der beiden Auftragsmodule', 
   // Muss-Treffer: beide Module existieren, und die Suche findet bekannte Importe in anderen Skripten.
   assert.ok(names.includes('agent-code-auftrag.mjs') && names.includes('agent-code-auftrag-live.mjs'));
   const others = names
-    .filter(name => name !== 'agent-code-auftrag.mjs' && name !== 'agent-code-auftrag-live.mjs' && name !== 'agent-code-auftrag-prompt.mjs' && name !== 'agent-code-auftrag-paket.mjs' && name !== 'agent-code-auftrag-publish.mjs' && name !== 'agent-code-auftrag-abnahme.mjs' && name !== 'agent-code-auftrag-transport.mjs')
+    .filter(name => name !== 'agent-code-auftrag.mjs' && name !== 'agent-code-auftrag-live.mjs' && name !== 'agent-code-auftrag-prompt.mjs' && name !== 'agent-code-auftrag-paket.mjs' && name !== 'agent-code-auftrag-publish.mjs' && name !== 'agent-code-auftrag-abnahme.mjs' && name !== 'agent-code-auftrag-transport.mjs' && name !== 'agent-code-job-auftrag.mjs' && name !== 'agent-code-job-abnahme.mjs')
     .map(name => readFileSync(join(dir, name), 'utf8'));
   assert.ok(others.length >= 10, 'Gegenprobe: zu wenige Skripte gefunden');
   assert.ok(others.some(text => text.includes('./agent-code-release-plan.mjs')), 'Gegenprobe ohne Treffer');

@@ -593,7 +593,7 @@ function createSim(runId = RUN_A) {
     run: {
       id: Number(runId),
       event: 'issues',
-      path: '.github/workflows/code-pilot-claude-stufe.yml',
+      path: '.github/workflows/agent-auftrag.yml',
       head_branch: 'main',
       head_sha: BASE,
       run_attempt: 1,
