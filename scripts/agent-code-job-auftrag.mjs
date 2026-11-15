@@ -138,6 +138,10 @@ export async function main(env) {
   }
 }
 
-if (import.meta.main) {
+// Ohne import.meta.main (Node vor 22.18.0 und 24.2.0) laeuft der Einstieg mit leerem Vertrag und endet
+// kontrolliert mit job-umgebung-fehlt. Nie ein ungeprueftes Exitcode 0.
+if (import.meta.main === true) {
   process.exitCode = await main(process.env);
+} else if (import.meta.main !== false) {
+  process.exitCode = await main({});
 }

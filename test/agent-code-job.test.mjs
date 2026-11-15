@@ -27,7 +27,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { after, afterEach, before, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { MAX_EVENTS, MAX_LABELS, orderSha256, resolveOrder } from '../scripts/agent-code-auftrag.mjs';
 import { WORKFLOW_PATH } from '../scripts/agent-code-auftrag-live.mjs';
@@ -1343,6 +1343,77 @@ test('Wache: beide Einstiege geben nur feste Codes aus und lesen process nur fue
       assert.ok(!forbidden.test(source), `verbotener Zugriff: ${forbidden}`);
     }
   }
+});
+
+// Einstiegserkennung: nur genau diese zwei Formen. Ohne import.meta.main (Node vor 22.18.0 und
+// 24.2.0) darf ein Start nie ungeprueft mit Exitcode 0 enden.
+const EINSTIEG = {
+  [JOB0_PATH]: 'if (import.meta.main === true) {\n  process.exitCode = await main(process.env);\n} else if (import.meta.main !== false) {\n  process.exitCode = await main({});\n}\n',
+  [JOB2_PATH]: 'if (import.meta.main === true) {\n  process.exitCode = main(process.env);\n} else if (import.meta.main !== false) {\n  process.exitCode = main({});\n}\n',
+};
+const UNSICHER = {
+  [JOB0_PATH]: 'if (import.meta.main) {\n  process.exitCode = await main(process.env);\n}\n',
+  [JOB2_PATH]: 'if (import.meta.main) {\n  process.exitCode = main(process.env);\n}\n',
+};
+
+test('Wache: Einstiegserkennung nur in der fail-closed-Form, der alte Ausdruck und andere Erkennungen sind verboten', () => {
+  for (const path of [JOB0_PATH, JOB2_PATH]) {
+    const source = readFileSync(path, 'utf8');
+    assert.ok(source.endsWith(EINSTIEG[path]), 'erlaubte Einstiegskonstruktion fehlt am Dateiende');
+    assert.equal(source.split(EINSTIEG[path]).length, 2, 'Einstieg nicht genau einmal');
+    assert.ok(!source.includes('if (import.meta.main) {'), 'unsicherer Ausdruck if (import.meta.main)');
+    // import.meta nur in den zwei Zeilen der erlaubten Form; keine Erkennung ueber argv, url, filename oder require.main.
+    assert.equal([...source.matchAll(/\bimport\.meta\b/g)].length, 2 + [...source.matchAll(/^\/\/.*import\.meta/gm)].length);
+    assert.equal([...source.matchAll(/^(?:if|} else if) \(import\.meta\.main (?:=== true|!== false)\) \{$/gm)].length, 2);
+    assert.ok(!/process\.argv|require\.main|import\.meta\.(url|filename|dirname|resolve)|module\.parent/.test(source), 'andere Einstiegserkennung');
+    assert.equal([...source.matchAll(/process\.exitCode =/g)].length, 2);
+    assert.equal([...source.matchAll(/main\(\{\}\)/g)].length, 1, 'Ersatzlauf mit leerem Vertrag fehlt');
+  }
+});
+
+// Baut eine Kopie des Einstiegs, deren lokale Importe auf die echten Module zeigen. ersetze wandelt den
+// Quelltext ab; so laesst sich unter Node 24 ein Lauf ohne import.meta.main nachstellen.
+function einstiegKopie(path, ersetze) {
+  let source = readFileSync(path, 'utf8').replace(/from '\.\/([^']+)'/g, (_, name) => `from '${new URL(`../scripts/${name}`, import.meta.url).href}'`);
+  source = ersetze(source);
+  const datei = join(newDir('einstieg-'), 'einstieg.mjs');
+  writeFileSync(datei, source);
+  return datei;
+}
+
+const cli = (args, env = { ...systemEnv() }) => SPAWN(process.execPath, args, { env, encoding: 'utf8', timeout: 60_000, windowsHide: true });
+
+test('Laufzeit: ohne import.meta.main endet jeder Start mit job-umgebung-fehlt; der alte Ausdruck endete mit 0', () => {
+  for (const path of [JOB0_PATH, JOB2_PATH]) {
+    // Nachstellung eines Node ohne import.meta.main: die Eigenschaft ist dann undefined.
+    const fehlt = s => s.replaceAll('import.meta.main', 'import.meta.mainFehlt');
+    const korrigiert = einstiegKopie(path, fehlt);
+    const neu = cli([korrigiert]);
+    assert.equal(neu.status, 1, neu.stderr);
+    assert.equal(neu.stdout, '');
+    assert.equal(neu.stderr, 'A6-FEHLER job-umgebung-fehlt\n');
+
+    // Muss-Treffer: dieselbe Nachstellung mit dem frueheren Ausdruck endet ungeprueft mit 0.
+    const alt = einstiegKopie(path, s => fehlt(s.replace(EINSTIEG[path], UNSICHER[path])));
+    assert.ok(readFileSync(alt, 'utf8').includes('if (import.meta.mainFehlt) {'), 'Nachstellung des alten Ausdrucks fehlt');
+    const vorher = cli([alt]);
+    assert.equal(vorher.status, 0);
+    assert.equal(vorher.stderr, '');
+
+    // Mit unterstuetztem import.meta.main: direkter Start ohne Vertrag lehnt ab.
+    const direkt = cli([path]);
+    assert.equal(direkt.status, 1);
+    assert.equal(direkt.stderr, 'A6-FEHLER job-umgebung-fehlt\n');
+    assert.equal(direkt.stdout, '');
+
+    // Import des Moduls fuehrt keine Job-Pruefung aus.
+    const imp = cli(['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(path).href)});`]);
+    assert.equal(imp.status, 0, imp.stderr);
+    assert.equal(imp.stderr, '');
+    assert.equal(imp.stdout, '');
+  }
+
+  assert.equal(typeof import.meta.main, 'boolean', 'diese Probe setzt ein Node mit import.meta.main voraus');
 });
 
 test('Wache: kein Workflow ruft die Job-Einstiege auf; nur diese zwei Einstiege sind als Ausnahme benannt', () => {
