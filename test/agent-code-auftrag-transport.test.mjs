@@ -1180,7 +1180,7 @@ test('Wache: kein Workflow und kein anderes Skript verweist auf das Transportmod
   const scripts = join(ROOT, 'scripts');
   const names = readdirSync(scripts).filter(name => name.endsWith('.mjs'));
   assert.ok(names.includes('agent-code-auftrag-transport.mjs'), 'Gegenprobe: Modul fehlt');
-  const others = names.filter(name => name !== 'agent-code-auftrag-transport.mjs' && name !== 'agent-code-job-auftrag.mjs').map(name => readFileSync(join(scripts, name), 'utf8'));
+  const others = names.filter(name => name !== 'agent-code-auftrag-transport.mjs' && name !== 'agent-code-job-auftrag.mjs' && name !== 'agent-code-job-claude-vor.mjs' && name !== 'agent-code-job-veroeffentlichen.mjs').map(name => readFileSync(join(scripts, name), 'utf8'));
   assert.ok(others.length >= 10, 'Gegenprobe: zu wenige Skripte gefunden');
   assert.ok(others.some(text => text.includes('agent-code-auftrag-live')), 'Gegenprobe ohne Treffer');
   assert.ok(others.every(text => !text.includes('agent-code-auftrag-transport')), 'ein Skript verweist auf das Transportmodul');
