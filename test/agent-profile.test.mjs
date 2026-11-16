@@ -677,6 +677,115 @@ test('Policy: Felder, Schema und Skript-Hashes werden streng geprueft', () => {
   assert.equal(validatePolicy(ok), ok);
 });
 
+// A6.4-2d: Pfadregel der Skript-Hashes. Eigene Liste im Test: alle 25 Skripte vor A6.4-2d und der
+// Integritaetspruefer. Die vollstaendige Gleichheit mit dem Ordner prueft agent-code-integritaet.test.mjs.
+const SKRIPTE_VOR_2D = Object.freeze([
+  'scripts/agent-code-acceptance.mjs',
+  'scripts/agent-code-activation-check.mjs',
+  'scripts/agent-code-auftrag-abnahme.mjs',
+  'scripts/agent-code-auftrag-live.mjs',
+  'scripts/agent-code-auftrag-paket.mjs',
+  'scripts/agent-code-auftrag-prompt.mjs',
+  'scripts/agent-code-auftrag-publish.mjs',
+  'scripts/agent-code-auftrag-transport.mjs',
+  'scripts/agent-code-auftrag.mjs',
+  'scripts/agent-code-change-check.mjs',
+  'scripts/agent-code-dryrun.mjs',
+  'scripts/agent-code-issue-live-check.mjs',
+  'scripts/agent-code-issue-route.mjs',
+  'scripts/agent-code-job-abnahme.mjs',
+  'scripts/agent-code-job-auftrag.mjs',
+  'scripts/agent-code-job-claude-nach.mjs',
+  'scripts/agent-code-job-claude-vor.mjs',
+  'scripts/agent-code-job-gemeinsam.mjs',
+  'scripts/agent-code-job-veroeffentlichen.mjs',
+  'scripts/agent-code-package.mjs',
+  'scripts/agent-code-publish.mjs',
+  'scripts/agent-code-release-plan.mjs',
+  'scripts/agent-issue-live-check.mjs',
+  'scripts/agent-issue-route.mjs',
+  'scripts/agent-profile.mjs',
+]);
+
+test('Policy: Pfadregel der Skript-Hashes nimmt alle 25 bisherigen Skripte und den Integritaetspruefer an', () => {
+  assert.equal(SKRIPTE_VOR_2D.length, 25);
+  assert.equal(new Set(SKRIPTE_VOR_2D).size, 25);
+  const alle = [...SKRIPTE_VOR_2D, 'scripts/agent-code-integritaet.mjs'];
+
+  for (const path of alle) {
+    const p = policy();
+    p.skript_hashes = { [path]: 'a'.repeat(64) };
+    assert.equal(validatePolicy(p, DRAFT), p, path);
+  }
+
+  // Vollstaendige Liste mit 26 Eintraegen besteht auch ohne Entwurf.
+  const voll = policy();
+  voll.skript_hashes = Object.fromEntries(alle.map(path => [path, 'b'.repeat(64)]));
+  assert.equal(Object.keys(voll.skript_hashes).length, 26);
+  assert.equal(validatePolicy(voll), voll);
+  assert.deepEqual(loadPolicy(canon(voll)), voll);
+
+  // Gegenprobe: die alte Regel lehnte die A5-Namen ab; deshalb scheiterte eine vollstaendige Liste.
+  const alt = /^scripts\/agent-(code-[a-z-]+|profile)\.mjs$/;
+  assert.ok(!alt.test('scripts/agent-issue-route.mjs') && !alt.test('scripts/agent-issue-live-check.mjs'));
+  assert.ok(alle.filter(path => !alt.test(path)).length === 2);
+});
+
+test('Policy: Pfadregel der Skript-Hashes lehnt jede andere Schreibweise ab', () => {
+  const falsch = [
+    '.github/agent-x.mjs',
+    '.github/workflows/agent-x.mjs',
+    'src/agent-x.mjs',
+    'test/agent-x.mjs',
+    'scripts/../scripts/agent-x.mjs',
+    'scripts/../agent-x.mjs',
+    '/scripts/agent-x.mjs',
+    'C:/scripts/agent-x.mjs',
+    './scripts/agent-x.mjs',
+    'scripts\\agent-x.mjs',
+    'scripts//agent-x.mjs',
+    'scripts/anderes.mjs',
+    'scripts/agent.mjs',
+    'scripts/agent-.mjs',
+    'scripts/Agent-x.mjs',
+    'scripts/agent-X.mjs',
+    'scripts/AGENT-PROFILE.mjs',
+    'scripts/agent--x.mjs',
+    'scripts/agent-x--y.mjs',
+    'scripts/agent-x-.mjs',
+    'scripts/agent_x.mjs',
+    'scripts/sub/agent-x.mjs',
+    'scripts/agent-x/agent-y.mjs',
+    'scripts/agent-x.js',
+    'scripts/agent-x.MJS',
+    'scripts/agent-x.cjs',
+    'scripts/agent-x.mjs.bak',
+    'scripts/agent-x',
+    'scripts/agent-x .mjs',
+    'scripts/agent-x.mjs ',
+    ' scripts/agent-x.mjs',
+    'scripts/agent-x.mjs\n',
+    'scripts/agent-\u00e4.mjs',
+    'scripts/agent-x\u2010y.mjs',
+    'scripts/agent-x\u200b.mjs',
+    'scripts/agent-x.mjs\u200b',
+    'scripts/agent-x.mjs\u0000',
+    'scripts/agent-\uff58.mjs',
+    '',
+  ];
+
+  for (const path of falsch) {
+    const p = policy();
+    p.skript_hashes = { [path]: 'a'.repeat(64) };
+    rejects(() => validatePolicy(p, DRAFT), 'policy-hashes');
+  }
+
+  // Muss-Treffer: dieselbe Pruefung nimmt einen gueltigen Pfad an.
+  const p = policy();
+  p.skript_hashes = { 'scripts/agent-x-y2.mjs': 'a'.repeat(64) };
+  assert.equal(validatePolicy(p, DRAFT), p);
+});
+
 test('Policy: leere Skript-Hashes sind nur im Entwurf erlaubt', () => {
   assert.deepEqual(policy().skript_hashes, {});
   rejects(() => validatePolicy(policy()), 'policy-hashes-fehlen');
