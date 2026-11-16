@@ -416,7 +416,7 @@ werden während der Migration nicht abgeschwächt. Keine neue Aktivierungsvariab
 | A6.4-2c | Bot | Job-Einstiege und Geheimnisprüfung | Abgeschlossen, PR #68, 5797e9a und PR #69, dc7a284 |
 | A6.4-2d | Bot | Vollständige Skript-Hashbindung | Abgeschlossen, PR #70, e40635b; ohne Wirkung bis A6.4-3 und A6.4-4 |
 | A6.4-B | Noah | Build-Prüfung über erlaubte `src/`-Dateien | Offen |
-| A6.4-3 | Noah | Policy, Claude-Einstellungen und Schutzregeln | Offen; A6.4-3-0 abgeschlossen (PR #71, 19bd43b); A6.4-3a vorbereitet (Bot-Draft-PR, nicht mergefähig), Eigentümer-PR offen |
+| A6.4-3 | Noah | Policy, Claude-Einstellungen und Schutzregeln | Offen; A6.4-3-0 abgeschlossen (PR #71, 19bd43b); A6.4-3a abgeschlossen (Eigentümer-PR #73, 1b2b8bf); A6.4-3c in Vorbereitung (Bot-Draft-PR, nicht mergefähig), Eigentümer-PR offen |
 | A6.4-4 | Noah; Bot nur Patchvorbereitung | Neuer gesperrter A6-Workflow, Wächter und Sammeljob | Offen |
 | A6.4-5 | Noah | Geheimnisfreie echte Actions-Generalprobe mit Paket v2 | Offen |
 | A6.4-6 | Noah, gesonderte Freigaben | K1/K2/K3/K4-Restnachweise | Offen |
@@ -556,7 +556,7 @@ Pakete werden nicht erneut geöffnet. A6.4 insgesamt ist offen.
   `permissions.allow` leer, 38 Pflichtverbote; profilspezifische Rechte erst in A6.4-4). Zusätzlich
   zur vollständigen CI: (A) beide Dateien im Git-Tree mit Modus `100644`, (B) SHA-256 des Policy-Blobs
   gleich dem Wert oben, (C) Einstellungsdatei byte-gleich mit der geprüften Fixture.
-- **Freigabeweg A, Status: Weg A gewählt, noch nicht ausgeführt.** Geplanter Ablauf: (1) Der Bot
+- **Freigabeweg A, Status: ausgeführt (Abschlussnachweis im nächsten Punkt).** Geplanter Ablauf: (1) Der Bot
   bereitet ausschließlich die vier ungeschützten Dateien vor. (2) Terminal 1 und ChatGPT prüfen den
   Bot-Stand. (3) Noah erstellt einen eigenen Eigentümerbranch auf genau diesem geprüften Commit. (4) Sein
   zusätzlicher Commit legt ausschließlich die zwei geschützten Dateien an. (5) Terminal 1 prüft den
@@ -567,8 +567,56 @@ Pakete werden nicht erneut geöffnet. A6.4 insgesamt ist offen.
   geschlossen. (12) Eltern, Dateibaum und CI werden danach erneut geprüft. Die Wahl von Weg A ist kein
   Nachweis einer ausgeführten oder abschließend genehmigten Ausnahme. Den tatsächlichen Eintrag mit PR,
   Merge-Commit und Ergebnis bringt der nächste Masterplan-PR (A6.4-3c).
+- **Abschlussnachweis (nachgetragen in A6.4-3c):** Eigentümer-PR #73, Autor `noah04091`, Kopf
+  `e44822a8816f436b13934080023896260dc91121`, normaler Merge-Commit
+  `1b2b8bf2cd23aeee9a2ad06d283b79391ab6dd2f` mit den Eltern `19bd43b` und `e44822a`. Sechs geprüfte
+  Dateien: die vier Bot-Dateien und die zwei geschützten Dateien aus Noahs eigenem Commit. Policy-SHA-256
+  `590626e65aa8c610e3e4230e667f35ca6a895046d1f609858b1d511b720c4539`, Claude-Einstellungen
+  byte-gleich mit dem geprüften Entwurf. `build`, `tests` und `schutzdateien` erfolgreich. Laut
+  Eigentümerangabe einmalige genehmigte Ausnahme nur bei `main-freigabe`, keine Ausnahme bei
+  `main-pruefungen`. Keine Aktivierung.
+- **Bot-PR #72:** Kopf `84e4741bcb2b21c33d54d7d1caa113262b44ba9b`. GitHub hat ihn automatisch als
+  gemergt markiert, weil sein Commit über PR #73 nach `main` kam. Es gibt keinen eigenen Merge-Commit
+  von #72, und der rote Bot-Zwischenstand wurde nicht separat übernommen. Abweichend von Schritt (11)
+  wurde er deshalb nicht ohne Merge geschlossen.
 - **Weiterhin offen:** N1 und N2, S1 bis S4, die beiden Testlücken aus A6.4-2c-2, K1 bis K4. A6.4-3 ist
   nicht abgeschlossen, A6.4-4 ist nicht freigegeben. Keine Agentenaktivierung.
+
+**A6.4-3c: Trennregel für Profile und Abnahmedateien im Schutzworkflow (Stand 16.11.2026, Vorbereitung):**
+
+- **Regel, für jeden Autor einschließlich Noah:** Enthält ein PR einen neuen oder früheren Pfad unter
+  `agent-profiles/` oder `agent-acceptance/`, liegen alle neuen und früheren Pfade des PR in genau
+  einem dieser beiden Bereiche. Profile allein oder Abnahmedateien allein sind zulässig. Jede Mischung
+  mit anderen Pfaden, mit dem jeweils anderen Bereich oder über eine bereichsübergreifende Umbenennung
+  ist rot. PRs ohne diese Bereiche schränkt die Regel nicht zusätzlich ein. Dazu kommen eine
+  Eindeutigkeitsprüfung der Dateiliste und ein abschließender erneuter Abruf von Kopf-SHA und
+  Dateianzahl unmittelbar vor der Erfolgsmeldung. Die bisherige Autorregel bleibt unverändert.
+- **Bot-Anteil (drei ungeschützte Dateien):** `test/schutz-workflow.test.mjs` (neu),
+  `test/agent-profile.test.mjs` und dieser Masterplan. Der neue Test schneidet den einzigen run-Block
+  strukturell aus dem echten `.github/workflows/schutz.yml`, führt ihn unverändert mit Bash aus und
+  ersetzt `gh` durch einen kontrollierten Fake, der nur die drei erwarteten Aufrufe kennt. Er bindet
+  `schutz.yml` an den genehmigten Eigentümerstand (SHA-256
+  `46d5958e6345c19a7999ca0e1544093b4aade4291422d1ef90b4753037ac4ec5`). Die Profilsperre in
+  `agent-profile.test.mjs` erlaubt in `schutz.yml` genau eine Zeile, die Zählzeile der Trennregel,
+  byte-gleich und nur zwischen ihren beiden Nachbarzeilen. Jedes weitere Vorkommen bleibt rot, auch in
+  Kommentaren und in allen anderen Workflows.
+- **Bewusst rote CI im Bot-Branch:** Der Bot-Branch enthält die neuen Tests, aber noch nicht den
+  geschützten Workflow-Patch. Kein Überspringen, kein Umgehungsschalter. Der Bot-PR ist nicht mergefähig
+  und wird nie separat gemergt. Den Patch an `schutz.yml` bringt ausschließlich ein Eigentümer-PR.
+- **Sicherheitsbefund: Workflow aus dem PR.** `schutz.yml` läuft bei `pull_request`. GitHub nimmt dabei
+  die Workflowfassung aus dem Merge-Commit des PR. Ändert ein PR `schutz.yml` selbst, ist der
+  Schutzcheck deshalb nicht vollständig unabhängig vom PR, und ein grüner Status beweist dann keine
+  unveränderte Prüflogik. `CODEOWNERS`, Rulesets, unabhängige Prüfung und Eigentümerfreigabe bleiben
+  deshalb erforderlich. Die Trennregel ersetzt diese Vertrauensgrenze nicht. Ein base-seitiger
+  Schutzcheck ist vor der produktiven Agentenaktivierung gesondert zu bewerten. Ein Wechsel zu
+  `pull_request_target` ist nicht Teil von A6.4-3c. Vor einem solchen Wechsel sind Sicherheitsrisiken,
+  Eventrichtlinien, Tokenrechte und die Zuordnung des Pflichtchecks zum richtigen PR-Commit nachzuweisen.
+  Dabei sind die von GitHub angekündigten Einschränkungen für `pull_request_target` in öffentlichen
+  Repositories zu berücksichtigen (vorgesehene Durchsetzung am 2. Dezember 2026). Keine
+  Triggerumstellung in A6.4-3c.
+- **Status:** A6.4-3c in Vorbereitung. Eine Ausnahme für den Eigentümer-PR von A6.4-3c ist weder
+  genehmigt noch ausgeführt. A6.4-3 bleibt insgesamt offen, A6.4-4 ist nicht freigegeben, kein Live-Lauf.
+  Offen bleiben N1 und N2, S1 bis S4, K1 bis K4 und die beiden Testlücken aus A6.4-2c-2.
 
 **Verschoben:** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach
 Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele

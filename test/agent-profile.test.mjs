@@ -207,6 +207,24 @@ test('Entwuerfe: Policy und Claude-Einstellungen sind gueltig', () => {
   assert.ok(s.permissions.deny.includes('Bash'));
 });
 
+// A6.4-3c: Einzige Ausnahme ist die Zaehlzeile der Trennregel im Pruefschritt von schutz.yml,
+// byte-gleich mit Zeile 74 des genehmigten Eigentuemerstands und nur zwischen ihren beiden
+// Nachbarzeilen. Sie zaehlt Pfade, ruft nichts auf. Jedes weitere Vorkommen bleibt verboten,
+// auch in Kommentaren und in jedem anderen Workflow.
+const TRENN_VORHER = '          GESAMT="$(grep -c . <<< "$ALLE" || true)"';
+const TRENN_ZEILE = '          PROFILE="$(grep -c \'^agent-profiles/\' <<< "$ALLE" || true)"';
+const TRENN_NACHHER = '          ABNAHME="$(grep -c \'^agent-acceptance/\' <<< "$ALLE" || true)"';
+
+function profilVerweise(name, text) {
+  const zeilen = text.replace(/\r\n/g, '\n').split('\n');
+  const treffer = zeilen.map((zeile, i) => ({ zeile, i })).filter(t => t.zeile.includes('agent-profile'));
+  const fremd = treffer.filter(t => !(name === 'schutz.yml'
+    && t.zeile === TRENN_ZEILE
+    && zeilen[t.i - 1] === TRENN_VORHER
+    && zeilen[t.i + 1] === TRENN_NACHHER));
+  return { treffer: treffer.length, fremd: fremd.map(t => t.i + 1) };
+}
+
 test('Ohne Wirkung: kein Workflow ruft die Profilpruefung auf', () => {
   const dir = join(ROOT, '.github/workflows');
   const workflows = readdirSync(dir).filter(name => name.endsWith('.yml'));
@@ -214,9 +232,31 @@ test('Ohne Wirkung: kein Workflow ruft die Profilpruefung auf', () => {
 
   for (const name of workflows) {
     const text = readFileSync(join(dir, name), 'utf8');
-    assert.ok(!text.includes('agent-profile'), `${name} verweist auf agent-profile`);
-    assert.ok(!text.includes('agent-profiles/'), `${name} verweist auf agent-profiles/`);
+    const { treffer, fremd } = profilVerweise(name, text);
+    assert.deepEqual(fremd, [], `${name} verweist auf agent-profile (Zeilen ${fremd.join(', ')})`);
+    assert.ok(treffer <= (name === 'schutz.yml' ? 1 : 0), `${name} verweist mehrfach auf agent-profile`);
+    assert.ok(!text.includes('agent-profile.mjs'), `${name} verweist auf agent-profile.mjs`);
   }
+});
+
+test('Ohne Wirkung: die Ausnahme fuer die Trennregel ist auf genau eine Zeile in schutz.yml begrenzt', () => {
+  const kontext = `${TRENN_VORHER}\n${TRENN_ZEILE}\n${TRENN_NACHHER}\n`;
+  assert.deepEqual(profilVerweise('schutz.yml', `run: |\n${kontext}`), { treffer: 1, fremd: [] });
+  const rot = {
+    'Zeile in einem anderen Workflow': ['tests.yml', kontext],
+    'Aufruf des Profilpruefers': ['schutz.yml', `${kontext}          node scripts/agent-profile.mjs\n`],
+    'Profilpfad ausserhalb der Trennregel': ['schutz.yml', `${kontext}          cat agent-profiles/js-rechner.json\n`],
+    'Kommentar mit der erlaubten Zeile': ['schutz.yml', `${TRENN_VORHER}\n          # ${TRENN_ZEILE.trim()}\n${TRENN_NACHHER}\n`],
+    'Kommentar haengt an der erlaubten Zeile': ['schutz.yml', `${TRENN_VORHER}\n${TRENN_ZEILE} # agent-profiles/\n${TRENN_NACHHER}\n`],
+    'zusaetzlicher Befehl in derselben Zeile': ['schutz.yml', `${TRENN_VORHER}\n${TRENN_ZEILE}; cat agent-profiles/x\n${TRENN_NACHHER}\n`],
+    'erlaubte Zeile ohne ihren Kontext': ['schutz.yml', `          echo x\n${TRENN_ZEILE}\n${TRENN_NACHHER}\n`],
+    'andere Einrueckung': ['schutz.yml', `${TRENN_VORHER}\n  ${TRENN_ZEILE}\n${TRENN_NACHHER}\n`],
+  };
+  for (const [fall, [name, text]] of Object.entries(rot)) {
+    assert.notDeepEqual(profilVerweise(name, text).fremd, [], `nicht erkannt: ${fall}`);
+  }
+  const doppelt = `${kontext}${kontext}`;
+  assert.equal(profilVerweise('schutz.yml', doppelt).treffer, 2, 'doppelte Zeile wird gezaehlt');
 });
 
 test('Ohne Seiteneffekte: das Modul nutzt kein Netz, keine Umgebung, schreibt keine Dateien', () => {
