@@ -5,9 +5,11 @@
 // GitHub mit `bash --noprofile --norc -eo pipefail` aus. Aendert sich der Workflow, aendert sich
 // damit das gepruefte Verhalten.
 //
-// Abgeschottet: Der PATH enthaelt nur zwei Wegwerfordner. Im einen liegt ein kontrollierter
-// gh-Fake, im anderen je ein Verweis auf grep, cut und sort. Ein echtes gh ist damit nicht
-// erreichbar. Der Fake kennt genau die drei erwarteten API-Aufrufe in fester Reihenfolge samt
+// Abgeschottet: Der PATH zeigt auf einen leeren Wegwerfordner. gh, grep, cut und sort sind Bash-
+// Funktionen aus einer Wegwerfdatei, die bash ueber BASH_ENV vor dem Block liest; grep, cut und sort
+// rufen ihr Programm mit absolutem Pfad auf. So muss nichts im Wegwerfordner ausfuehrbar sein (die
+// isolierten CI-Container haengen /tmp mit noexec ein), und ein echtes gh ist nicht erreichbar.
+// Der Fake kennt genau die drei erwarteten API-Aufrufe in fester Reihenfolge samt
 // --jq-Ausdruck, beantwortet sie aus synthetischen Daten (TSV wie jq @tsv) und lehnt jeden anderen
 // Aufruf mit Exitcode 97 ab. Kein Token, kein Netz, kein GitHub-Zugriff, kein Schreiben ausserhalb
 // der Wegwerfordner, kein eval, Dateinamen sind nur Daten.
@@ -20,7 +22,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -122,27 +124,24 @@ const tsv = s => s.replace(/\\/g, '\\\\').replace(/\t/g, '\\t').replace(/\n/g, '
 for (const d of a.dateien) process.stdout.write(tsv(d.filename) + '\t' + tsv(d.previous_filename ?? '') + '\n');
 `;
 
-function umgebung(dir, { mitGh = true, ghSkript = null } = {}) {
-  const fakeBin = join(dir, 'fake-bin');
-  const werkzeug = join(dir, 'werkzeug');
-  mkdirSync(fakeBin);
-  mkdirSync(werkzeug);
-  for (const w of WERKZEUGE) {
-    const quelle = IS_WINDOWS ? join(GIT_WIN, 'usr', 'bin', `${w}.exe`) : `/usr/bin/${w}`;
-    assert.ok(existsSync(quelle), `${w} fehlt unter ${quelle}`);
-    writeFileSync(join(werkzeug, w), `#!/bin/bash\nexec /usr/bin/${w} "$@"\n`);
-    chmodSync(join(werkzeug, w), 0o755);
-  }
+function umgebung(dir, { mitGh = true, ghRumpf = null } = {}) {
+  const leer = join(dir, 'leer');
+  mkdirSync(leer);
   const fake = join(dir, 'gh-fake.mjs');
   const szenario = join(dir, 'szenario.json');
   const log = join(dir, 'aufrufe.log');
   writeFileSync(fake, FAKE);
-  if (mitGh) {
-    const inhalt = ghSkript ?? `#!/bin/bash\nexec '${posix(process.execPath)}' '${vorwaerts(fake)}' '${vorwaerts(szenario)}' '${vorwaerts(log)}' "$@"\n`;
-    writeFileSync(join(fakeBin, 'gh'), inhalt);
-    chmodSync(join(fakeBin, 'gh'), 0o755);
+  const funktionen = [];
+  for (const w of WERKZEUGE) {
+    const quelle = IS_WINDOWS ? join(GIT_WIN, 'usr', 'bin', `${w}.exe`) : `/usr/bin/${w}`;
+    assert.ok(existsSync(quelle), `${w} fehlt unter ${quelle}`);
+    funktionen.push(`${w}() { /usr/bin/${w} "$@"; }`);
   }
-  return { fake, szenario, log, path: `${posix(fakeBin)}:${posix(werkzeug)}` };
+  const ghAufruf = `'${posix(process.execPath)}' '${vorwaerts(fake)}' '${vorwaerts(szenario)}' '${vorwaerts(log)}' "$@"`;
+  if (mitGh) funktionen.push(`gh() { ${ghRumpf ?? ghAufruf}; }`);
+  const bashEnv = join(dir, 'umgebung.sh');
+  writeFileSync(bashEnv, `${funktionen.join('\n')}\n`);
+  return { fake, szenario, log, path: posix(leer), bashEnv: vorwaerts(bashEnv) };
 }
 
 function fuehreAus(fall, workflowText = WORKFLOW_TEXT) {
@@ -158,7 +157,7 @@ function fuehreAus(fall, workflowText = WORKFLOW_TEXT) {
     const skript = join(dir, 'pruefschritt.sh');
     writeFileSync(skript, runBlock(workflowText));
     const env = {
-      PATH: u.path, HOME: dir, LC_ALL: 'C.UTF-8', MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '*',
+      PATH: u.path, BASH_ENV: u.bashEnv, HOME: dir, LC_ALL: 'C.UTF-8', MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '*',
       GH_TOKEN: 'synthetisch-kein-token', REPO, NR: fall.nr ?? NR, AUTOR: fall.autor, HEAD_SHA: HEAD,
     };
     if (IS_WINDOWS) env.SYSTEMROOT = process.env.SYSTEMROOT;
@@ -242,7 +241,7 @@ const NEGATIV = [
   fall('N26 gh-Fake fehlt', BOT, [d('src/rechne.js')], { status: 127, stderr: 'gh: command not found', aufrufe: 0 },
     { umgebung: { mitGh: false } }),
   fall('N27 gh-Fake bricht ohne Ausgabe ab', BOT, [d('src/rechne.js')], { status: 3, aufrufe: 0 },
-    { umgebung: { ghSkript: '#!/bin/bash\nexit 3\n' } }),
+    { umgebung: { ghRumpf: 'return 3' } }),
   fall('N28 Autorregel: Bot aendert einen Workflow', BOT, [d('.github/workflows/tests.yml'), d('src/rechne.js')], fehler(GESCHUETZT, 2)),
   fall('N29 Autorregel: Bot benennt package.json um (alter Name geschuetzt)', BOT, [d('src/paket.json', 'package.json')], fehler(GESCHUETZT, 2)),
   fall('N30 Autorregel: Bot aendert schutz.yml und Masterplan', BOT, [d('.github/workflows/schutz.yml'), d(PLAN)], fehler(GESCHUETZT, 2)),
