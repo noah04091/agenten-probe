@@ -357,6 +357,7 @@ nur die fachliche Aufgabe und gilt als nicht vertrauenswürdige Eingabe. Die Gre
    - Prüfung vor jedem sicherheitsrelevanten Skriptaufruf; erneute Integritätskontrolle nach Claude, bevor weitere vertrauenswürdige Skripte laufen.
    - Driftprüfung in `npm test` und Rot-Beweise gegen veränderte Skriptbytes.
    - Der bisherige Policyvalidator prüft nur die Struktur der Hashangaben. Das ist kein ausreichender Integritätsnachweis.
+   - Stand A6.4-2d: Der eigenständige Prüfer `scripts/agent-code-integritaet.mjs` und die Driftprüfung liegen vor (Abschnitt „A6.4-2d“ unten). Wirksam wird die Bindung erst mit der geschützten Policy (A6.4-3) und dem äußeren Anker im Workflow (A6.4-4); bis dahin bleibt Pflichtpunkt 7 offen.
 8. **Sammeljob gegen übersprungene Pflichtprüfungen (offen):** Der neue A6-Workflow erhält einen eigenen Abschlussjob, der die tatsächlich erforderlichen Job-Ergebnisse auswertet. Verbindlich:
    - Er kennt alle für das jeweilige Ereignis erforderlichen Jobs und unterscheidet erfolgreiche von übersprungenen Jobs.
    - Unerwartete Überspringungen, Fehler, Abbrüche und Timeouts führen zur Ablehnung.
@@ -413,7 +414,7 @@ werden während der Migration nicht abgeschwächt. Keine neue Aktivierungsvariab
 | A6.4-2a | Bot | Produktives unabhängiges Abnahmemodul | Offen |
 | A6.4-2b | Bot | Sicherer GitHub-Transport | Offen |
 | A6.4-2c | Bot | Job-Einstiege und Geheimnisprüfung | Offen |
-| A6.4-2d | Bot | Vollständige Skript-Hashbindung | Offen |
+| A6.4-2d | Bot | Vollständige Skript-Hashbindung | Offline umgesetzt (Draft-PR, Prüfung offen); ohne Wirkung bis A6.4-3 und A6.4-4 |
 | A6.4-B | Noah | Build-Prüfung über erlaubte `src/`-Dateien | Offen |
 | A6.4-3 | Noah | Policy, Claude-Einstellungen und Schutzregeln | Offen |
 | A6.4-4 | Noah; Bot nur Patchvorbereitung | Neuer gesperrter A6-Workflow, Wächter und Sammeljob | Offen |
@@ -432,6 +433,70 @@ Pakete werden nicht erneut geöffnet. A6.4 insgesamt ist offen.
 - Jeder Teil-PR wird unabhängig geprüft. Kein Bot-Merge.
 - Keine neuen echten Claude-Läufe vor den erforderlichen K1- bis K4-Nachweisen und weiteren Freigaben. Keine produktive Aktivierung aus einem Dokumentations- oder Test-PR heraus.
 - Der alte A5-Aktivierungswächter bleibt bis zur abgesicherten Ablösung erhalten. Die Sperre aus A6.4-S bleibt aktiv, bis eine ausdrücklich freigegebene spätere Bereinigung stattfindet.
+
+**A6.4-2d: Vollständige Skript-Hashbindung (Stand 16.11.2026, offline, ohne Wirkung):**
+
+- **Bestand:** Vor A6.4-2d lagen 25 Dateien unter `scripts/`, mit dem Integritätsprüfer
+  `scripts/agent-code-integritaet.mjs` sind es 26. Für diesen Stand ist genau diese Menge verbindlich.
+- **Eine vollständige Hashliste:** `skript_hashes` der Policy enthält den SHA-256 jeder Datei unter
+  `scripts/`, nicht nur ausgewählter. Die bisherige getrennte Importkontrolle der A6-Module bleibt.
+- **Exakte Inventarkontrolle:** Die Menge der Dateien und die Menge der Policy-Schlüssel müssen gleich
+  sein. Jede Datei hat genau einen Hash, jeder Hash genau eine Datei. Abgelehnt werden zusätzliche und
+  fehlende Dateien, zusätzliche Hashes, Unterordner, Symlinks, Hardlinks, FIFOs, Sockets, versteckte
+  Dateien und jeder Name außerhalb von `^scripts/agent-[a-z0-9]+(?:-[a-z0-9]+)*\.mjs$`. Dieselbe Regel
+  gilt jetzt für `SCRIPT_PATH_RE` in `agent-profile.mjs`; die alte Regel lehnte die A5-Namen
+  `agent-issue-*` ab, eine vollständige Liste wäre dort gescheitert.
+- **Eigenständiger Prüfer:** nur `node:crypto`, `node:fs`, `node:path`. Kein lokales Modul, weil
+  statische ESM-Importe vor dem eigenen Code laufen und sonst ungeprüfter Code zuerst liefe. Kein
+  Prozessstart, kein Netz, kein Git, keine Shell, keine Umgebungsvariablen, keine Argumente, kein
+  Schreibzugriff, kein Ausnahmemodus.
+- **Feste Quellen:** Repositorywurzel ist ausschließlich `process.cwd()`, einmal zu Beginn festgehalten.
+  Die Policy kommt ausschließlich aus `.github/agent/policy.json` relativ dazu, ohne Fallback und ohne
+  Umschaltung. Fehlt sie, bricht der Prüfer mit `A6-FEHLER integritaet-policy-fehlt` ab; auf `main`
+  ist das bis A6.4-3 das erwartete Verhalten.
+- **Policy streng lesen:** gewöhnliche Datei, kein Symlink, kein Hardlink, höchstens 16 KiB, nicht
+  leer, kein BOM, UTF-8 strikt, kein CR, keine NUL, kanonische Form (zwei Leerzeichen, abschließender
+  Zeilenumbruch; damit keine doppelten Schlüssel), genau die Policy-Felder, Schema `agent-policy-v1`,
+  `skript_hashes` als gewöhnliches Objekt mit 64 kleinen Hexzeichen je Wert. Die übrigen Fachregeln
+  von `validatePolicy()` ersetzt dieser Prüfer nicht.
+- **Byteprüfung statt Git-Status:** je Datei `lstat`, Öffnen mit `O_NOFOLLOW` (wo verfügbar) und
+  `O_NONBLOCK`, `fstat` des geöffneten Deskriptors, gleiches Gerät und gleicher Inode, `nlink` gleich 1,
+  feste Größengrenze, vollständiges Lesen ohne Wachstum, SHA-256 über die Rohbytes. Keine Normalisierung
+  der Zeilenenden. Das Repository hat keine `.gitattributes`; ein Windows-Checkout mit `core.autocrlf`
+  liefert andere Bytes und fällt deshalb auf.
+- **Grenze zwischen Prüfung und Ausführung:** Der Prüfer kann nicht belegen, dass eine Datei nach der
+  Prüfung bis zum späteren Import unverändert bleibt. Dieses Zeitfenster schließen erst Prozess- und
+  Dateisystemisolation (S1, A6.4-4).
+- **Keine Selbstbeglaubigung, geschützter äußerer Anker:** Der Prüfer steht selbst in der Liste; das
+  ist nur Konsistenz. Vertrauenswurzel ist ein fest genehmigter SHA-256 von
+  `scripts/agent-code-integritaet.mjs` in der geschützten Workflow-Datei. Der Workflow vergleicht ihn
+  vor dem Start mit den tatsächlichen Bytes und startet den Prüfer erst danach. Dieser äußere Hash
+  kommt nie aus der Policy desselben Checkouts. Werden Skript und ungeschützte Hashliste gemeinsam
+  geändert, besteht der Prüfer allein (Fall B); abgelehnt wird das erst im geschützten Gesamtablauf
+  mit unverändertem Anker und geschützter Policy (Fall C, A6.4-3 und A6.4-4).
+- **Driftfixture nur als Testhilfe:** `test/fixtures/agent-skript-hashes.json` hält die 26 Hashes für
+  `npm test` fest. Der Prüfer liest sie nie. Eine gemeinsame Änderung von Skript und Fixture beweist
+  keine autorisierte Änderung und ersetzt keine Policy.
+- **Trennung:** A6.4-2d liefert nur Prüfer, Pfadregel, Tests und Fixture. A6.4-3 liefert die
+  geschützte produktive Policy mit allen genehmigten Hashes. A6.4-4 liefert den Workflow: frischer
+  Checkout auf dem erwarteten Commit, unabhängige Git-Prüfung, festgelegte Node-Laufzeit, äußerer
+  Hashvergleich des Prüfers, Prüfer vor jedem Job-Einstieg und nach Claude erneut in frischem
+  Checkout, nur Exitcode 0 als Erfolg, keine Abnahme oder Veröffentlichung nach Fehlschlag, Sammeljob.
+  Git- und PATH-Vertrauensbasis bleiben S2, die bereinigte Umgebung vor dem Start von Node S4.
+- **Offene Eigentümerentscheidung:** Wer erwartete Hashwerte aktualisiert, wie Skriptänderung und
+  Hashupdate gemeinsam geprüft werden, ab wann eine neue Skriptversion als vertrauenswürdig gilt, wie
+  die CI während eines autorisierten Updates nachvollziehbar bleibt und wie die nötigen Reviews ohne
+  Admin-Ausnahme laufen. Rulesets und `schutzdateien` ersetzen diese Entscheidung nicht.
+- **Zeitlimits (Korrektur):** Die harte Profilgrenze ist `max_laufzeit_minuten <= 20` in
+  `scripts/agent-profile.mjs`. Das äußere Claude-Zeitlimit darf sie nicht überschreiten; die frühere
+  Empfehlung von 30 Minuten gilt nicht mehr. Eigene Grenzen brauchen außerdem Workflowstart und
+  Warteschlange, Job 0, Job 1a, Claude, Job 1b, die Artefaktübergabe, Job 2 und Job 3. Die
+  Freigabefrist von 60 Minuten und die Branchreserve von 120 Sekunden bleiben unverändert. Festgelegt
+  und aktiviert wird das erst in A6.4-4.
+- **Bekannte Testlücken aus A6.4-2c-2** (nicht durch eigene Tests geschlossen, aber durch weitere
+  Sperren abgewehrt): (1) ein zusätzlicher Veröffentlichungsversuch in Job 3, abgewehrt durch die
+  übrigen Sperren des Veröffentlichers; (2) eine Ausgabedatei als Symlink, abgewehrt durch den
+  Vergleich von Gerät und Inode.
 
 **Verschoben:** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach
 Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele

@@ -120,7 +120,10 @@ export const PATH_RE = /^(src|test)\/[a-z0-9_-]+(\.test)?\.(js|mjs)$/;
 export const ID_RE = /^[a-z][a-z0-9-]{1,29}[a-z0-9]$/;
 const HEX40_RE = /^[0-9a-f]{40}$/;
 const HEX64_RE = /^[0-9a-f]{64}$/;
-const SCRIPT_PATH_RE = /^scripts\/agent-(code-[a-z-]+|profile)\.mjs$/;
+// Schluessel von skript_hashes: genau eine Datei direkt unter scripts/, Name agent- mit kleinen
+// Woertern aus a-z und 0-9, getrennt durch einzelne Bindestriche, Endung .mjs. Deckt alle Skripte
+// ab, auch die A5-Namen agent-issue-*; dieselbe Regel nutzt agent-code-integritaet.mjs (A6.4-2d).
+const SCRIPT_PATH_RE = /^scripts\/agent-[a-z0-9]+(?:-[a-z0-9]+)*\.mjs$/;
 const TREE_LINE_RE = /^([0-7]{6}) (blob|tree|commit) ([0-9a-f]{40})\t(.+)$/s;
 
 // Verbotene Unicode-Kategorien: Cc Steuerzeichen (Zeilenumbruch und Tab werden vorher
