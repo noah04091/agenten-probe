@@ -62,4 +62,22 @@ jobs:
               exit 1
             fi
           fi
+          # Eindeutig: jeder Name genau einmal (doppelte API-Eintraege oder Seitenueberlappung).
+          EINDEUTIG="$(sort -u <<< "$NAMEN" | grep -c . || true)"
+          (( EINDEUTIG == ANZAHL )) || { echo "FEHLER: Dateiliste nicht eindeutig"; exit 1; }
+
+          # Trennregel (A6.4-3c), fuer jeden Autor: Beruehrt der PR den Profil- oder den
+          # Abnahmebereich (neuer oder alter Name), liegen ALLE Namen und alten Namen in genau
+          # einem dieser beiden Bereiche.
+          ALLE="$(grep . <<< "$NAMEN"$'\n'"$ALTE" || true)"
+          GESAMT="$(grep -c . <<< "$ALLE" || true)"
+          PROFILE="$(grep -c '^agent-profiles/' <<< "$ALLE" || true)"
+          ABNAHME="$(grep -c '^agent-acceptance/' <<< "$ALLE" || true)"
+          if (( PROFILE + ABNAHME > 0 )); then
+            (( PROFILE == GESAMT || ABNAHME == GESAMT )) || { echo "FEHLER: Profile oder Abnahmedateien nur allein und nur in einem Bereich aendern"; exit 1; }
+          fi
+
+          # Kopf und Dateizahl unmittelbar vor dem Erfolg erneut abfragen.
+          PR_DATEN2="$(gh api "repos/$REPO/pulls/$NR" --jq '"\(.changed_files) \(.head.sha)"')"
+          [[ "$PR_DATEN2" == "$ERWARTET $HEAD_SHA" ]] || { echo "FEHLER: PR hat sich waehrend der Pruefung geaendert"; exit 1; }
           echo "Pruefung bestanden: $ANZAHL von $ERWARTET Dateien geprueft."
