@@ -411,12 +411,12 @@ werden während der Migration nicht abgeschwächt. Keine neue Aktivierungsvariab
 | A6.4-S | Noah | Alten Claude-Agenten sperren, Wächtertest | Abgeschlossen, PR #63 |
 | A6.4-0 | Bot | Masterplan korrigieren und Roadmap festhalten | Jetzt |
 | A6.4-1 | Bot | `head.sha`-Prüfung im allgemeinen Veröffentlicher | Offen |
-| A6.4-2a | Bot | Produktives unabhängiges Abnahmemodul | Offen |
-| A6.4-2b | Bot | Sicherer GitHub-Transport | Offen |
-| A6.4-2c | Bot | Job-Einstiege und Geheimnisprüfung | Offen |
-| A6.4-2d | Bot | Vollständige Skript-Hashbindung | Offline umgesetzt (Draft-PR, Prüfung offen); ohne Wirkung bis A6.4-3 und A6.4-4 |
+| A6.4-2a | Bot | Produktives unabhängiges Abnahmemodul | Abgeschlossen, PR #66, b764d29 |
+| A6.4-2b | Bot | Sicherer GitHub-Transport | Abgeschlossen, PR #67, ae07e68 |
+| A6.4-2c | Bot | Job-Einstiege und Geheimnisprüfung | Abgeschlossen, PR #68, 5797e9a und PR #69, dc7a284 |
+| A6.4-2d | Bot | Vollständige Skript-Hashbindung | Abgeschlossen, PR #70, e40635b; ohne Wirkung bis A6.4-3 und A6.4-4 |
 | A6.4-B | Noah | Build-Prüfung über erlaubte `src/`-Dateien | Offen |
-| A6.4-3 | Noah | Policy, Claude-Einstellungen und Schutzregeln | Offen |
+| A6.4-3 | Noah | Policy, Claude-Einstellungen und Schutzregeln | Offen; Vorpaket A6.4-3-0 (Wachen des Prüfers) als Draft-PR in Prüfung |
 | A6.4-4 | Noah; Bot nur Patchvorbereitung | Neuer gesperrter A6-Workflow, Wächter und Sammeljob | Offen |
 | A6.4-5 | Noah | Geheimnisfreie echte Actions-Generalprobe mit Paket v2 | Offen |
 | A6.4-6 | Noah, gesonderte Freigaben | K1/K2/K3/K4-Restnachweise | Offen |
@@ -497,6 +497,36 @@ Pakete werden nicht erneut geöffnet. A6.4 insgesamt ist offen.
   Sperren abgewehrt): (1) ein zusätzlicher Veröffentlichungsversuch in Job 3, abgewehrt durch die
   übrigen Sperren des Veröffentlichers; (2) eine Ausgabedatei als Symlink, abgewehrt durch den
   Vergleich von Gerät und Inode.
+
+**A6.4-3-0: Härtung der Quelltextwachen des Integritätsprüfers (Stand 16.11.2026, nur Tests und Doku):**
+
+- **Befunde aus der unabhängigen Prüfung von PR #70:** (U1) Eine manipulierte Fassung des Prüfers
+  konnte den bereits importierten `openSync` mit einem Schreibmodus aufrufen, schreiben und trotzdem mit
+  Exitcode 0 enden; die Quelltextwachen erkannten das nicht. (U2) Über `process.getBuiltinModule` und
+  dynamische Zugriffe wie `process[...]` liess sich ein Node-Basismodul ohne Importzeile holen und die
+  Importkontrolle umgehen. Der unveränderte Prüfer aus A6.4-2d wurde dabei unabhängig als rein lesend
+  geprüft; er bleibt in A6.4-3-0 byteidentisch, die 26 Skripthashes ändern sich nicht.
+- **Verschärfung, erlaubte Formen statt Verbote:** Im Code ohne Kommentar- und Importzeilen kommt
+  `process` genau fünfmal vor (einmal `process.cwd()`, zweimal `process.stderr.write(`, zweimal
+  `process.exitCode =`). `openSync` steht genau einmal da, als `openSync(pfad, OPEN_FLAGS)`.
+  `constants` steht nur in der wörtlich festgelegten Zeile `OPEN_FLAGS` aus `O_RDONLY`, `O_NOFOLLOW`
+  und `O_NONBLOCK`; `OPEN_FLAGS` kommt genau zweimal vor. `getBuiltinModule` und Blockkommentare sind
+  ausdrücklich verboten (die Kommentarfilterung ist zeilenweise). Damit fallen auch Aliase und Umwege
+  wie `const p = process`, `Reflect.get(process, ...)`, `process [x]`, `const o = openSync` oder eine
+  Zahl statt `O_WRONLY` auf. Jede Negativprobe prüft den genauen Grund; je eine Mutation für U1 und U2
+  mit gültiger Syntax ist zusätzlich zur Laufzeit belegt (Marke angelegt, Exitcode 0, Wache erkennt sie).
+- **Aussagekraft:** Die Quelltextwachen sind Regressionstests, keine Garantie gegen beliebig
+  verschleiertes JavaScript. Vertrauenswurzel bleiben zwingend der geschützte äußere Hashanker des
+  Prüfers, die geschützte produktive Policy und ein vertrauenswürdiger Workflow. Die Härtung ersetzt
+  keinen dieser Mechanismen.
+- **Korrektur des Symlink-Befunds aus A6.4-2d:** Gegen Symlink-Dateien wirken drei Sperren: die
+  `lstat`-Typprüfung, `O_NOFOLLOW` sowie der Vergleich von Gerät und Inode. Der Größenvergleich zwischen
+  `lstat` und `fstat` ist keine verlässliche vierte Sperre: Die unabhängige Prüfung hat ihn mit einem
+  passend langen Symlink-Zielpfad umgangen. Der Prüfer selbst bleibt unverändert.
+- **Weiterhin offen:** Die beiden Testlücken aus A6.4-2c-2 (oben) sind vor der Aktivierung zu
+  behandeln. A6.4-3 ist nicht abgeschlossen; produktive Policy, Claude-Einstellungen und
+  Schutzworkflow-Änderungen brauchen eigene Eigentümerfreigaben (A6.4-3a, A6.4-3c). A6.4-4 ist nicht
+  freigegeben. Keine Agentenaktivierung.
 
 **Verschoben:** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach
 Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele
