@@ -721,14 +721,16 @@ test('Vertrag: Job 3 liest nur die festen Namen, kennt keine Ausgabedatei und ke
   assert.ok(!('outputPath' in v));
 });
 
-test('Regression: kein A6-Workflow, kein Workflow ruft einen Job-Einstieg auf, die produktive Policy fehlt', () => {
+// A6.4-3a: Die produktive Policy liegt vor, aktiviert aber nichts. Bis der Eigentuemer-PR sie einrichtet,
+// ist dieser Test bewusst rot; er wird nicht uebersprungen.
+test('Regression: Policy vorhanden, kein A6-Workflow, kein Workflow ruft Job-Einstieg oder Integritaetspruefer auf', () => {
   const workflows = join(ROOT, '.github', 'workflows');
   const files = readdirSync(workflows).filter(name => /\.ya?ml$/.test(name));
   assert.ok(files.length >= 10, 'Gegenprobe: zu wenige Workflows gefunden');
   assert.ok(!files.includes('agent-auftrag.yml'));
-  assert.ok(files.every(name => !/agent-code-job|A6_APP_TOKEN|A6_VERGLEICH/.test(readFileSync(join(workflows, name), 'utf8'))));
+  assert.ok(files.every(name => !/agent-code-job|agent-code-integritaet|A6_APP_TOKEN|A6_VERGLEICH/.test(readFileSync(join(workflows, name), 'utf8'))));
   assert.ok(files.some(name => readFileSync(join(workflows, name), 'utf8').includes('agent-code-package')), 'Muss-Treffer der Suche');
-  assert.equal(existsSync(join(ROOT, '.github', 'agent', 'policy.json')), false);
+  assert.equal(existsSync(join(ROOT, '.github', 'agent', 'policy.json')), true);
   // Das Profil js-text ist auf main weiterhin inaktiv; die Tests aktivieren es nur in temporaeren Repositories.
   assert.ok(readFileSync(join(ROOT, 'agent-profiles', 'js-text.json'), 'utf8').includes('"aktiv": false'));
 });
