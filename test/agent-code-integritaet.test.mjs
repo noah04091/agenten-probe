@@ -284,6 +284,69 @@ function quellProbleme(text) {
     probleme.push('Verweis auf anderes Modul');
   }
 
+  probleme.push(...formProbleme(code));
+  return probleme;
+}
+
+// A6.4-3-0 (U1, U2): erlaubte Formen statt Verbote. Gezaehlt wird im Code ohne Kommentarzeilen und
+// ohne Importzeilen. Damit fallen auch Aliase und Umwege auf, die kein Verbotsmuster nennt
+// (const p = process, Reflect.get(process, ...), process [x], const o = openSync, Zahl statt O_WRONLY).
+// Grenze: Das ist eine Regressionswache, keine Garantie gegen beliebig verschleiertes JavaScript.
+// Vertrauenswurzel bleiben der geschuetzte aeussere Hashanker, die geschuetzte Policy und der Workflow.
+const ERLAUBTE_PROCESS = Object.freeze([
+  ['process.cwd()', 1],
+  ['process.stderr.write(', 2],
+  ['process.exitCode =', 2],
+]);
+const OPEN_FLAGS_ZEILE =
+  'const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);';
+const OPEN_AUFRUF = 'openSync(pfad, OPEN_FLAGS)';
+const anzahl = (text, muster) => (text.match(muster) ?? []).length;
+
+function formProbleme(code) {
+  const probleme = [];
+  const zeilen = code.split('\n').filter(line => !/^\s*import\b/.test(line));
+  const rumpf = zeilen.join('\n');
+
+  // Die Kommentarzeilen-Filterung ist zeilenweise; ein Blockkommentar koennte Code hinter einer
+  // scheinbaren Kommentarzeile verstecken. Der Pruefer braucht keine Blockkommentare.
+  if (rumpf.includes('/*')) {
+    probleme.push('Blockkommentar');
+  }
+
+  let rest = rumpf;
+
+  for (const [form, soll] of ERLAUBTE_PROCESS) {
+    if (rest.split(form).length - 1 !== soll) {
+      rest = null;
+      break;
+    }
+
+    rest = rest.replaceAll(form, '');
+  }
+
+  if (rest === null || /\bprocess\b/.test(rest) || anzahl(rumpf, /\bprocess\b/g) !== 5) {
+    probleme.push('process weicht ab');
+  }
+
+  if (/getBuiltinModule/.test(rumpf)) {
+    probleme.push('getBuiltinModule');
+  }
+
+  if (anzahl(rumpf, /\bopenSync\b/g) !== 1 || rumpf.split(OPEN_AUFRUF).length !== 2) {
+    probleme.push('openSync weicht ab');
+  }
+
+  const ohneFlagsZeile = zeilen.filter(line => line !== OPEN_FLAGS_ZEILE).join('\n');
+
+  if (zeilen.filter(line => line === OPEN_FLAGS_ZEILE).length !== 1 || /\bconstants\b/.test(ohneFlagsZeile)) {
+    probleme.push('constants weicht ab');
+  }
+
+  if (anzahl(rumpf, /\bOPEN_FLAGS\b/g) !== 2) {
+    probleme.push('OPEN_FLAGS weicht ab');
+  }
+
   return probleme;
 }
 
@@ -322,6 +385,111 @@ test('Wache: jede verbotene Form wird erkannt (lokaler Import, Prozess, Netz, Sc
     const mutiert = aendern(SOURCE);
     assert.notEqual(mutiert, SOURCE, `${name}: Mutation greift nicht`);
     assert.ok(quellProbleme(mutiert).length > 0, `${name}: nicht erkannt`);
+  }
+
+  // Muss-Treffer mit genauem Grund fuer die bestehenden Verbotsgruppen.
+  const grund = [
+    ['Prozessstarter', s => s.replace(ende, `${ende}import { execFileSync } from 'node:child_process';\n`)],
+    ['Netz oder Laufzeit', s => s.replace(ende, `${ende}import https from 'node:https';\n`)],
+    ['Netz oder Laufzeit', s => s.replace('export function main() {', "export function main() {\n  fetch('https://example.org');")],
+    ['Importe weichen ab', s => s.replace(ende, `${ende}import { inspect } from 'node:util';\n`)],
+    ['lokales Modul', s => s.replace(ende, `${ende}import './agent-code-integritaet-x.mjs';\n`)],
+  ];
+
+  for (const [erwartet, aendern] of grund) {
+    assert.ok(quellProbleme(aendern(SOURCE)).includes(erwartet), `${erwartet}: nicht als Grund erkannt`);
+  }
+});
+
+// A6.4-3-0: Muss-Treffer der erlaubten Formen am unveraenderten Pruefer.
+test('Wache U1/U2: unveraenderter Pruefer hat genau die erlaubten Formen', () => {
+  const code = ohneKommentare(SOURCE);
+  const rumpf = code.split('\n').filter(line => !/^\s*import\b/.test(line)).join('\n');
+  assert.deepEqual(formProbleme(code), []);
+  assert.equal(anzahl(rumpf, /\bprocess\b/g), 5);
+  assert.equal(rumpf.split('process.cwd()').length - 1, 1);
+  assert.equal(rumpf.split('process.stderr.write(').length - 1, 2);
+  assert.equal(rumpf.split('process.exitCode =').length - 1, 2);
+  assert.equal(anzahl(rumpf, /\bopenSync\b/g), 1);
+  assert.ok(rumpf.includes(`fd = ${OPEN_AUFRUF};`));
+  assert.ok(code.split('\n').includes(OPEN_FLAGS_ZEILE));
+  assert.equal(anzahl(rumpf, /\bconstants\b/g), 3);
+  assert.equal(anzahl(rumpf, /\bOPEN_FLAGS\b/g), 2);
+  // Die Flags bestehen nur aus Lesen, kein Folgen von Symlinks und nicht blockierend.
+  assert.deepEqual(OPEN_FLAGS_ZEILE.match(/O_[A-Z]+/g), ['O_RDONLY', 'O_NOFOLLOW', 'O_NONBLOCK']);
+});
+
+test('Wache U1/U2: jede Abweichung wird mit genau ihrem Grund erkannt', () => {
+  const START = '  const wurzel = process.cwd();\n';
+  const MAIN = 'export function main() {\n';
+  assert.equal(SOURCE.split(START).length, 2);
+  assert.equal(SOURCE.split(MAIN).length, 2);
+  const nachStart = zeile => s => s.replace(START, `${START}  ${zeile}\n`);
+  const inMain = zeile => s => s.replace(MAIN, `${MAIN}  ${zeile}\n`);
+  const flags = neu => s => s.replace(OPEN_FLAGS_ZEILE, neu);
+
+  const varianten = [
+    // U1: Schreibmodus ueber den bereits importierten openSync
+    ['openSync mit w statt OPEN_FLAGS', s => s.replace(OPEN_AUFRUF, "openSync(pfad, 'w')"), ['openSync weicht ab', 'OPEN_FLAGS weicht ab']],
+    ['zusaetzlicher openSync mit w', nachStart("closeSync(openSync('marke', 'w'));"), ['openSync weicht ab']],
+    ['zusaetzlicher openSync mit Zahl', nachStart("closeSync(openSync('marke', 577));"), ['openSync weicht ab']],
+    ['openSync-Alias', inMain('const o = openSync;'), ['openSync weicht ab']],
+    ['OPEN_FLAGS erweitert im Aufruf', s => s.replace(OPEN_AUFRUF, 'openSync(pfad, OPEN_FLAGS | 1)'), ['openSync weicht ab']],
+    ['O_WRONLY statt O_RDONLY', flags(OPEN_FLAGS_ZEILE.replace('O_RDONLY', 'O_WRONLY')), ['Schreibzugriff', 'constants weicht ab']],
+    ['Zahl statt O_WRONLY', flags(OPEN_FLAGS_ZEILE.replace('constants.O_RDONLY', 'constants.O_RDONLY | 1')), ['constants weicht ab']],
+    ['O_NOFOLLOW entfernt', flags(OPEN_FLAGS_ZEILE.replace(' | (constants.O_NOFOLLOW ?? 0)', '')), ['constants weicht ab']],
+    ['constants-Alias', inMain('const c = constants;'), ['constants weicht ab']],
+    ['OPEN_FLAGS weiterverwendet', inMain('const f = OPEN_FLAGS;'), ['OPEN_FLAGS weicht ab']],
+    // U2: Basismodul ueber process und dynamische Zugriffe
+    ['getBuiltinModule', nachStart("process.getBuiltinModule('node:fs').mkdtempSync('marke-');"), ['process weicht ab', 'getBuiltinModule']],
+    ['process[...] mit Name', inMain("const m = process['getBuiltinModule'];"), ['process weicht ab', 'getBuiltinModule']],
+    ['process [...] mit Leerraum', inMain("const m = process ['getBuilt' + 'inModule'];"), ['process weicht ab']],
+    ['process mit Zeilenumbruch vor [', inMain("const m = process\n    ['getBuilt' + 'inModule'];"), ['process weicht ab']],
+    ['process . mit Leerraum', inMain("const m = process .cwd();"), ['process weicht ab']],
+    ['process-Alias', inMain('const p = process;'), ['process weicht ab']],
+    ['Reflect.get', inMain("const m = Reflect.get(process, 'getBuilt' + 'inModule');"), ['process weicht ab']],
+    ['dritter exitCode', inMain('process.exitCode = 0;'), ['process weicht ab']],
+    ['erlaubte Form entfernt', s => s.replace("process.stderr.write(fehlerZeile(error));", 'fehlerZeile(error);'), ['process weicht ab']],
+    ['Blockkommentar versteckt Code', inMain('/*\n// */ const a = 1;'), ['Blockkommentar']],
+  ];
+
+  for (const [name, aendern, erwartet] of varianten) {
+    const mutiert = aendern(SOURCE);
+    assert.notEqual(mutiert, SOURCE, `${name}: Mutation greift nicht`);
+    assert.deepEqual(quellProbleme(mutiert), erwartet, name);
+  }
+});
+
+// Laufzeitbeleg: Mutationen mit gueltiger Syntax wirken tatsaechlich. In einem synthetischen Baum mit
+// passender Policy legen sie eine Marke im Arbeitsverzeichnis an und enden trotzdem mit 0. Gerade das
+// faengt nur die Quelltextwache ab; der Pruefer selbst kann sich nicht pruefen (Fall B).
+test('Laufzeit U1/U2: gefaehrliche Mutation schreibt, endet mit 0, und die Wache erkennt genau sie', () => {
+  const START = '  const wurzel = process.cwd();\n';
+  const faelle = [
+    ['U1', `${START}  closeSync(openSync('marke', 'w'));\n`, ['openSync weicht ab'], root => existsSync(join(root, 'marke'))],
+    [
+      'U2',
+      `${START}  process.getBuiltinModule('node:fs').mkdtempSync('marke-');\n`,
+      ['process weicht ab', 'getBuiltinModule'],
+      root => readdirSync(root).some(name => name.startsWith('marke-')),
+    ],
+  ];
+
+  for (const [name, ersatz, erwartet, markeDa] of faelle) {
+    const mutiert = SOURCE.replace(START, ersatz);
+    assert.notEqual(mutiert, SOURCE);
+    assert.deepEqual(quellProbleme(mutiert), erwartet, name);
+
+    const { root, policy } = baum();
+    // Gegenprobe vorher: der unveraenderte Pruefer besteht und hinterlaesst keine Marke.
+    bestanden(lauf(root));
+    assert.equal(markeDa(root), false, `${name}: Marke vor der Mutation`);
+
+    writeFileSync(join(root, 'scripts', PRUEFER), mutiert);
+    policy.skript_hashes = hashesVon(root);
+    schreibePolicy(root, policy);
+    bestanden(lauf(root));
+    assert.equal(markeDa(root), true, `${name}: Mutation hat nicht geschrieben`);
   }
 });
 
