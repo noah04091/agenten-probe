@@ -39,6 +39,7 @@ import {
   MAX_SNAPSHOT_EVENTS,
   MAX_SNAPSHOT_LABELS,
   OUTPUT_KEYS,
+  SECRET_NAMES,
   SNAPSHOT_SCHEMA,
   WORKFLOW_REF,
   buildSnapshot,
@@ -56,6 +57,11 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SCRIPTS = join(ROOT, 'scripts');
 const JOB0_PATH = join(SCRIPTS, 'agent-code-job-auftrag.mjs');
 const JOB2_PATH = join(SCRIPTS, 'agent-code-job-abnahme.mjs');
+const JOB1A_PATH = join(SCRIPTS, 'agent-code-job-claude-vor.mjs');
+const JOB1B_PATH = join(SCRIPTS, 'agent-code-job-claude-nach.mjs');
+const JOB3_PATH = join(SCRIPTS, 'agent-code-job-veroeffentlichen.mjs');
+const EINSTIEGE = Object.freeze([JOB0_PATH, JOB1A_PATH, JOB1B_PATH, JOB2_PATH, JOB3_PATH]);
+const ASYNC_EINSTIEGE = Object.freeze([JOB0_PATH, JOB1A_PATH, JOB3_PATH]);
 const GEMEINSAM_PATH = join(SCRIPTS, 'agent-code-job-gemeinsam.mjs');
 const EXEC = cp.execFileSync;
 const SPAWN = cp.spawnSync;
@@ -1329,10 +1335,167 @@ test('Wache: Job 2 importiert nur Auftrag, Paket, Abnahme und Hilfsdatei; kein L
   // Kein Nachweis aus JSON und kein selbst gebautes WeakSet: requireAccepted bekommt das Ergebnis von acceptOrderPackage.
   assert.ok(!/JSON\.parse|WeakSet|WeakMap/.test(source));
   assert.ok(/const nachweis = acceptOrderPackage\(\{/.test(source) && source.includes('requireAccepted(nachweis, order, contract.orderSha256);'));
+
+  // A6.4-2c-2: Job 2 schreibt keine Job-Ausgabe, auch nicht ueber die neuen Ausgabeschreiber.
+  assert.ok(!/writeHashOutputs|writePackageOutput|outputPath|GITHUB_OUTPUT|OUTPUT_KEY/.test(source), 'Ausgabe in Job 2');
+  assert.ok(/writeHashOutputs/.test(readFileSync(JOB0_PATH, 'utf8')), 'Muss-Treffer der Ausgabesuche');
 });
 
-test('Wache: beide Einstiege geben nur feste Codes aus und lesen process nur fuer stderr, Exitcode und den Vertrag', () => {
-  for (const path of [JOB0_PATH, JOB2_PATH]) {
+// ---------------------------------------------------------------------------
+// A6.4-2c-2: Wachen der drei neuen Einstiege und Regression von Job 0 und Job 2
+// ---------------------------------------------------------------------------
+
+const NETZ_RE = /^node:(net|http|https|http2|tls|dns|dgram)$/;
+// Quelltext ohne ganze Kommentarzeilen: Aufrufe werden nur im Code gezaehlt.
+const ohneKommentare = source => source.replace(/^\s*\/\/.*$/gm, '');
+
+test('Wache: Job 1a importiert nur Auftrag, Live, Lesetransport, Prompt, Paket und Hilfsdatei; keine Abnahme, kein Veroeffentlicher', () => {
+  const source = readFileSync(JOB1A_PATH, 'utf8');
+  assert.deepEqual(directImports(source), [
+    './agent-code-auftrag-live.mjs', './agent-code-auftrag-paket.mjs', './agent-code-auftrag-prompt.mjs', './agent-code-auftrag-transport.mjs',
+    './agent-code-auftrag.mjs', './agent-code-job-gemeinsam.mjs', 'node:path',
+  ]);
+  assert.ok(source.includes("import { createReadTransport } from './agent-code-auftrag-transport.mjs';"), 'nur der Lesetransport');
+  assert.ok(source.includes("import { prepareWorkspace } from './agent-code-auftrag-paket.mjs';"), 'aus dem Paketmodul nur prepareWorkspace');
+  assert.ok(source.includes("import { buildPrompt, writeStepOutput } from './agent-code-auftrag-prompt.mjs';"));
+  const graph = importGraph('agent-code-job-claude-vor.mjs');
+  assert.deepEqual(graph.lokal, [
+    'agent-code-auftrag-live.mjs', 'agent-code-auftrag-paket.mjs', 'agent-code-auftrag-prompt.mjs', 'agent-code-auftrag-transport.mjs',
+    'agent-code-auftrag.mjs', 'agent-code-job-gemeinsam.mjs', 'agent-profile.mjs',
+  ]);
+  assert.deepEqual(graph.node, ['node:child_process', 'node:crypto', 'node:fs', 'node:https', 'node:path', 'node:tls', 'node:util']);
+
+  // Kein Claude-Start, keine Schreibanfrage, kein eigener Prompt und kein frei gewaehlter Arbeitsordner.
+  for (const verboten of ['agent-code-auftrag-abnahme', 'agent-code-auftrag-publish', 'createPublishTransport', 'child_process', 'spawn', 'execFile', "'POST'", "'DELETE'", 'SECURITY_FRAME', 'createNonce', 'process.cwd', 'mkdtemp']) {
+    assert.ok(!source.includes(verboten), `${verboten} in Job 1a`);
+  }
+
+  assert.equal([...ohneKommentare(source).matchAll(/buildPrompt\(/g)].length, 1);
+  assert.equal([...source.matchAll(/writeStepOutput\(\{ outputPath: contract\.outputPath, name: 'prompt', prompt \}\)/g)].length, 1);
+  assert.ok(source.includes('const workDir = absentDir(contract.runnerTemp, WORK_DIR, \'job-arbeitsordner\');'));
+  assert.ok(source.includes('title: snapshot.issue.title,') && source.includes('body: snapshot.issue.body,'), 'Titel und Text aus dem gebundenen Schnappschuss');
+  assert.ok(source.includes('state, ...base, now, runId: contract.runId });'), 'checkLiveOrder mit genau dem frisch gelesenen Zustand');
+});
+
+test('Wache: Job 1b importiert nur Auftrag, Paket und Hilfsdatei; kein Netz, kein Live, kein Prompt, keine Abnahme, kein Prozessstarter', () => {
+  const source = readFileSync(JOB1B_PATH, 'utf8');
+  assert.deepEqual(directImports(source), ['./agent-code-auftrag-paket.mjs', './agent-code-auftrag.mjs', './agent-code-job-gemeinsam.mjs']);
+  assert.ok(source.includes("import { containsSecretValue, createPackageV2, packageFileBytes, parsePackageV2, scanForSecrets } from './agent-code-auftrag-paket.mjs';"));
+  const graph = importGraph('agent-code-job-claude-nach.mjs');
+  assert.deepEqual(graph.lokal, ['agent-code-auftrag-paket.mjs', 'agent-code-auftrag.mjs', 'agent-code-job-gemeinsam.mjs', 'agent-profile.mjs']);
+  assert.ok(!graph.node.some(spec => NETZ_RE.test(spec)), `Netzmodul: ${graph.node.join(', ')}`);
+  // Git nur ueber das Auftragsmodul (resolveOrder, openRepository und runGit), nie ein eigener Import.
+  assert.deepEqual(graph.node, ['node:child_process', 'node:crypto', 'node:fs', 'node:path', 'node:util']);
+
+  for (const verboten of ['agent-code-auftrag-live', 'agent-code-auftrag-transport', 'agent-code-auftrag-prompt', 'agent-code-auftrag-abnahme', 'agent-code-auftrag-publish', 'node:', 'child_process', 'spawn', 'execFile', 'fork(', 'Transport', 'token', 'fetch', 'compareWorkspace', 'JSON.stringify', 'JSON.parse']) {
+    assert.ok(!source.includes(verboten), `${verboten} in Job 1b`);
+  }
+
+  // Git laeuft nur im vertrauenswuerdigen Checkout, nie im Arbeitsordner von Claude.
+  assert.deepEqual([...source.matchAll(/openRepository\(([^,]+),/g)].map(m => m[1]), ['contract.workspace']);
+  assert.deepEqual([...source.matchAll(/resolveOrder\(\{ root: ([^,]+),/g)].map(m => m[1]), ['contract.workspace']);
+  assert.equal([...source.matchAll(/runGit\(/g)].length, 1);
+  assert.ok(!/(?:runGit|openRepository|resolveOrder)\([^)]*workDir/.test(source));
+
+  // Reihenfolge: Paket bauen, Bytes binden, pruefen, Geheimnisse, dann schreiben, zuruecklesen, ausgeben.
+  const stelle = text => {
+    const index = source.indexOf(text);
+    assert.ok(index > 0, `${text} fehlt`);
+    return index;
+  };
+  const folge = [
+    'const result = createPackageV2(', "Buffer.from(result.text, 'utf8')", 'parsePackageV2(order, contract.orderSha256, packageBytes, result.sha256)',
+    'scanPackageSecrets(parsed, packageBytes, contract.compareValues);', 'writeExclusive(freshDir(contract.runnerTemp, PACKAGE_DIR), PACKAGE_FILE, packageBytes);',
+    'const back = readBounded(packagePath(', 'writePackageOutput(contract, sha256Hex(back));',
+  ].map(stelle);
+  assert.deepEqual(folge, [...folge].sort((a, b) => a - b), 'Reihenfolge im Quelltext');
+  const code = ohneKommentare(source);
+  assert.equal([...code.matchAll(/writeExclusive\(/g)].length, 1);
+  assert.equal([...code.matchAll(/writePackageOutput\(/g)].length, 1);
+  assert.equal([...code.matchAll(/Buffer\.from\(/g)].length, 1, 'Ergebnistext genau einmal in Bytes');
+});
+
+test('Wache: Job 3 importiert nur Veroeffentlicher, Veroeffentlichungstransport, Auftrag und Hilfsdatei; ein Aufruf, kein Retry', () => {
+  const source = readFileSync(JOB3_PATH, 'utf8');
+  assert.deepEqual(directImports(source), ['./agent-code-auftrag-publish.mjs', './agent-code-auftrag-transport.mjs', './agent-code-auftrag.mjs', './agent-code-job-gemeinsam.mjs']);
+  assert.ok(source.includes("import { createPublishTransport } from './agent-code-auftrag-transport.mjs';"));
+  assert.ok(source.includes("import { publishOrderDraft } from './agent-code-auftrag-publish.mjs';"));
+  assert.ok(source.includes("import { openRepository, runGit } from './agent-code-auftrag.mjs';"));
+  const graph = importGraph('agent-code-job-veroeffentlichen.mjs');
+  assert.deepEqual(graph.lokal, [
+    'agent-code-auftrag-live.mjs', 'agent-code-auftrag-paket.mjs', 'agent-code-auftrag-publish.mjs', 'agent-code-auftrag-transport.mjs',
+    'agent-code-auftrag.mjs', 'agent-code-job-gemeinsam.mjs', 'agent-profile.mjs',
+  ]);
+
+  for (const verboten of ['agent-code-auftrag-prompt', 'agent-code-auftrag-abnahme', 'agent-code-job-claude', 'createReadTransport', 'readLiveState', 'checkLiveOrder', 'resolveOrder', 'parseSnapshot', 'branchName', '/repos/', "'POST'", "'DELETE'", 'pulls', 'git/refs', 'child_process', 'spawn', 'execFile', 'while', 'for (', 'catch {', 'JSON.parse(', 'bericht']) {
+    assert.ok(!source.includes(verboten), `${verboten} in Job 3`);
+  }
+
+  // Genau ein Transport, genau ein Aufruf des Veroeffentlichers mit genau den elf Schluesseln und der echten Uhr.
+  const code = ohneKommentare(source);
+  assert.equal([...code.matchAll(/createPublishTransport\(/g)].length, 1);
+  assert.equal([...code.matchAll(/publishOrderDraft\(/g)].length, 1);
+  assert.equal([...source.matchAll(/await publishOrderDraft\(\{/g)].length, 1);
+  const call = source.slice(source.indexOf('await publishOrderDraft({'), source.indexOf('});', source.indexOf('await publishOrderDraft({')));
+  assert.deepEqual([...call.matchAll(/^ {4}(\w+)[,:]/gm)].map(m => m[1]), [
+    'root', 'checkRoot', 'baseSha', 'event', 'expectedSha256', 'runId', 'packageBytes', 'packageSha256', 'gitEnv', 'transport', 'clock',
+  ]);
+  assert.ok(call.includes('clock: () => new Date(),'));
+  assert.ok(call.includes('packageSha256: contract.packageSha256,') && call.includes('expectedSha256: contract.orderSha256,'), 'Hashes nur aus dem Vertrag');
+  assert.ok(source.includes('const event = readEventFile(contract);'), 'Ereignis nur aus der Ereignisdatei des Runners');
+});
+
+test('Wache: Hilfsdatei kennt die Geheimnisnamen nur als feste, eingefrorene Listen; der Stolperdraht bekommt nie eine Liste von aussen', () => {
+  const source = readFileSync(GEMEINSAM_PATH, 'utf8');
+  assert.equal([...source.matchAll(/tripwire\(/g)].length, 6, 'eine Definition und fuenf Aufrufe');
+  assert.ok(source.includes('function tripwire(env, allowed) {'));
+  assert.deepEqual([...source.matchAll(/^ {2}tripwire\(env, ([^)]+)\);$/gm)].map(m => m[1]).sort(), [
+    'SECRET_NAMES.abnahme', 'SECRET_NAMES.auftrag', 'SECRET_NAMES.claudeNach', 'SECRET_NAMES.claudeVor', 'SECRET_NAMES.veroeffentlichen',
+  ]);
+  assert.ok(!/export function tripwire/.test(source));
+  assert.equal([...source.matchAll(/O_APPEND/g)].length, 1, 'weiterhin genau eine anhaengende Schreibstelle');
+  assert.ok(source.includes("export const PACKAGE_OUTPUT_KEY = 'paket_sha256';"));
+  assert.ok(source.includes('appendOutput(contract.outputPath, `${PACKAGE_OUTPUT_KEY}=${paketSha256}\\n`);'));
+});
+
+test('Regression: feste Geheimnisnamen je Job; Job 0 nur Lesetoken, Job 2 keiner, fremde Namen werden abgelehnt', async () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(SECRET_NAMES)), {
+    auftrag: ['A6_LESE_TOKEN'],
+    claudeVor: ['A6_LESE_TOKEN'],
+    claudeNach: ['A6_VERGLEICH_ANTHROPIC', 'A6_VERGLEICH_LESE_TOKEN'],
+    abnahme: [],
+    veroeffentlichen: ['A6_APP_TOKEN'],
+  });
+  assert.ok(Object.isFrozen(SECRET_NAMES) && Object.values(SECRET_NAMES).every(Object.isFrozen));
+  assert.throws(() => SECRET_NAMES.abnahme.push('A6_APP_TOKEN'), TypeError);
+  assert.throws(() => { SECRET_NAMES.abnahme = ['A6_APP_TOKEN']; }, TypeError);
+  assert.deepEqual(SECRET_NAMES.abnahme, []);
+
+  // Job 2: kein einziger Geheimnisname, auch nicht die der anderen Jobs mit harmlos wirkendem Wert.
+  const harmlos = 'Synthetischer-Vergleichswert-ohne-Wirkung-0001';
+  const k = await kette('rechner');
+
+  for (const name of ['A6_LESE_TOKEN', 'A6_VERGLEICH_ANTHROPIC', 'A6_VERGLEICH_LESE_TOKEN', 'A6_APP_TOKEN']) {
+    const r = await job2(k, { [name]: name === 'A6_LESE_TOKEN' || name === 'A6_APP_TOKEN' ? TOKEN : harmlos });
+    abgelehnt(r, 'job-umgebung-geheimnis');
+    assert.ok(!r.starts.includes(process.execPath), `Abnahme trotz ${name} gestartet`);
+  }
+
+  // Muss-Treffer: ohne fremden Namen besteht derselbe Lauf.
+  job2Erfolg(await job2(k));
+
+  // Job 0: nur der Lesetoken; App-Token und Vergleichswerte sind fremd, auch ohne Muster im Namen.
+  for (const [name, wert] of [['A6_APP_TOKEN', TOKEN], ['A6_VERGLEICH_ANTHROPIC', harmlos], ['A6_VERGLEICH_LESE_TOKEN', harmlos]]) {
+    const r = await job0('rechner', {}, { [name]: wert });
+    job0Abgelehnt(r, 'job-umgebung-geheimnis');
+    assert.equal(r.aufrufe.length, 0, `Netz trotz ${name}`);
+  }
+});
+
+test('Wache: alle fuenf Einstiege geben nur feste Codes aus und lesen process nur fuer stderr, Exitcode und den Vertrag', () => {
+  assert.equal(EINSTIEGE.length, 5);
+
+  for (const path of EINSTIEGE) {
     const source = readFileSync(path, 'utf8');
     assert.deepEqual([...new Set([...source.matchAll(/\bprocess\.(\w+)/g)].map(m => m[1]))].sort(), ['env', 'exitCode', 'stderr']);
     assert.equal([...source.matchAll(/process\.env/g)].length, 1, 'process.env nur im CLI-Einstieg');
@@ -1346,18 +1509,27 @@ test('Wache: beide Einstiege geben nur feste Codes aus und lesen process nur fue
 });
 
 // Einstiegserkennung: nur genau diese zwei Formen. Ohne import.meta.main (Node vor 22.18.0 und
-// 24.2.0) darf ein Start nie ungeprueft mit Exitcode 0 enden.
+// 24.2.0) darf ein Start nie ungeprueft mit Exitcode 0 enden. Gilt fuer alle fuenf Einstiege.
 const EINSTIEG = {
   [JOB0_PATH]: 'if (import.meta.main === true) {\n  process.exitCode = await main(process.env);\n} else if (import.meta.main !== false) {\n  process.exitCode = await main({});\n}\n',
   [JOB2_PATH]: 'if (import.meta.main === true) {\n  process.exitCode = main(process.env);\n} else if (import.meta.main !== false) {\n  process.exitCode = main({});\n}\n',
+  [JOB1A_PATH]: 'if (import.meta.main === true) {\n  process.exitCode = await main(process.env);\n} else if (import.meta.main !== false) {\n  process.exitCode = await main({});\n}\n',
+  [JOB1B_PATH]: 'if (import.meta.main === true) {\n  process.exitCode = main(process.env);\n} else if (import.meta.main !== false) {\n  process.exitCode = main({});\n}\n',
+  [JOB3_PATH]: 'if (import.meta.main === true) {\n  process.exitCode = await main(process.env);\n} else if (import.meta.main !== false) {\n  process.exitCode = await main({});\n}\n',
 };
 const UNSICHER = {
   [JOB0_PATH]: 'if (import.meta.main) {\n  process.exitCode = await main(process.env);\n}\n',
   [JOB2_PATH]: 'if (import.meta.main) {\n  process.exitCode = main(process.env);\n}\n',
+  [JOB1A_PATH]: 'if (import.meta.main) {\n  process.exitCode = await main(process.env);\n}\n',
+  [JOB1B_PATH]: 'if (import.meta.main) {\n  process.exitCode = main(process.env);\n}\n',
+  [JOB3_PATH]: 'if (import.meta.main) {\n  process.exitCode = await main(process.env);\n}\n',
 };
 
 test('Wache: Einstiegserkennung nur in der fail-closed-Form, der alte Ausdruck und andere Erkennungen sind verboten', () => {
-  for (const path of [JOB0_PATH, JOB2_PATH]) {
+  assert.deepEqual(Object.keys(EINSTIEG).sort(), [...EINSTIEGE].sort());
+  assert.deepEqual(Object.keys(UNSICHER).sort(), [...EINSTIEGE].sort());
+
+  for (const path of EINSTIEGE) {
     const source = readFileSync(path, 'utf8');
     assert.ok(source.endsWith(EINSTIEG[path]), 'erlaubte Einstiegskonstruktion fehlt am Dateiende');
     assert.equal(source.split(EINSTIEG[path]).length, 2, 'Einstieg nicht genau einmal');
@@ -1384,7 +1556,7 @@ function einstiegKopie(path, ersetze) {
 const cli = (args, env = { ...systemEnv() }) => SPAWN(process.execPath, args, { env, encoding: 'utf8', timeout: 60_000, windowsHide: true });
 
 test('Laufzeit: ohne import.meta.main endet jeder Start mit job-umgebung-fehlt; der alte Ausdruck endete mit 0', () => {
-  for (const path of [JOB0_PATH, JOB2_PATH]) {
+  for (const path of EINSTIEGE) {
     // Nachstellung eines Node ohne import.meta.main: die Eigenschaft ist dann undefined.
     const fehlt = s => s.replaceAll('import.meta.main', 'import.meta.mainFehlt');
     const korrigiert = einstiegKopie(path, fehlt);
@@ -1416,7 +1588,7 @@ test('Laufzeit: ohne import.meta.main endet jeder Start mit job-umgebung-fehlt; 
   assert.equal(typeof import.meta.main, 'boolean', 'diese Probe setzt ein Node mit import.meta.main voraus');
 });
 
-test('Wache: kein Workflow ruft die Job-Einstiege auf; nur diese zwei Einstiege sind als Ausnahme benannt', () => {
+test('Wache: kein Workflow ruft die Job-Einstiege auf; genau diese fuenf Einstiege und die Hilfsdatei, keine weitere Jobdatei', () => {
   const workflows = join(ROOT, '.github', 'workflows');
   const files = readdirSync(workflows).filter(name => /\.ya?ml$/.test(name));
   assert.ok(files.length >= 10, 'Gegenprobe: zu wenige Workflows gefunden');
@@ -1427,7 +1599,15 @@ test('Wache: kein Workflow ruft die Job-Einstiege auf; nur diese zwei Einstiege 
   // Kein anderes Skript verweist auf die Job-Skripte.
   const names = readdirSync(SCRIPTS).filter(name => name.endsWith('.mjs'));
   const jobs = names.filter(name => name.startsWith('agent-code-job'));
-  assert.deepEqual(jobs.sort(), ['agent-code-job-abnahme.mjs', 'agent-code-job-auftrag.mjs', 'agent-code-job-gemeinsam.mjs']);
+  // Exakte Liste ohne Platzhalter: jede zusaetzliche Jobdatei braucht eine eigene Freigabe.
+  assert.deepEqual(jobs.sort(), [
+    'agent-code-job-abnahme.mjs',
+    'agent-code-job-auftrag.mjs',
+    'agent-code-job-claude-nach.mjs',
+    'agent-code-job-claude-vor.mjs',
+    'agent-code-job-gemeinsam.mjs',
+    'agent-code-job-veroeffentlichen.mjs',
+  ]);
   const others = names.filter(name => !jobs.includes(name)).map(readScript);
   assert.ok(others.length >= 10);
   assert.ok(others.every(text => !text.includes('agent-code-job')), 'ein anderes Skript verweist auf ein Job-Skript');

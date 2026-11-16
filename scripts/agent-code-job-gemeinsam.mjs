@@ -1,4 +1,5 @@
-// A6.4-2c-1: Gemeinsame Hilfsfunktionen der Job-Einstiege (Job 0 Auftrag, Job 2 Abnahme).
+// A6.4-2c-1 und A6.4-2c-2: Gemeinsame Hilfsfunktionen der Job-Einstiege (Job 0 Auftrag, Job 1a vor
+// Claude, Job 1b nach Claude, Job 2 Abnahme, Job 3 Veroeffentlichung).
 //
 // Wirkungslos bis A6.4-4: Kein Workflow ruft die Einstiege auf. Dieses Modul importiert nur
 // node:fs, node:crypto und node:path, kein Auftragsmodul, startet keinen Prozess und hat keine
@@ -7,11 +8,21 @@
 // Inhalt:
 // - Umgebungsvertrag: genau die festen Namen je Job, jeder Wert streng geprueft. Andere Namen werden
 //   nie gelesen. Dazu ein fester Stolperdraht gegen Zugangsdaten und Node-Schalter in der Umgebung.
-// - Feste Pfade unter RUNNER_TEMP: Schnappschuss, Paket, Pruefordner, eigenes Git-HOME. Kein Pfad
-//   stammt aus dem Issue oder aus einer frei waehlbaren Variable.
+// - Feste Geheimnisnamen je Job (SECRET_NAMES, tief eingefroren). Der Stolperdraht bekommt nie eine
+//   Liste vom Aufrufer, sondern nur die feste Liste seines Jobs. Jeder Geheimnisname eines anderen
+//   Jobs gilt als fremdes Geheimnis, auch wenn er keines der allgemeinen Muster traegt.
+// - Feste Pfade unter RUNNER_TEMP: Schnappschuss, Paket, Pruefordner, Claude-Arbeitsordner,
+//   Pruef-Checkout der Veroeffentlichung, eigenes Git-HOME je Job. Kein Pfad stammt aus dem Issue
+//   oder aus einer frei waehlbaren Variable.
 // - Dateiuebergabe: exklusiv schreiben, begrenzt lesen, keine Symlinks oder Sonderdateien.
 // - Schnappschussformat agent-auftrag-schnappschuss-v1: bauen, kanonisch serialisieren, streng lesen.
-// - Ausgabeschreiber fuer genau die zwei Hash-Ausgaben von Job 0.
+// - Ausgabeschreiber fuer genau die zwei Hash-Ausgaben von Job 0 und genau paket_sha256 von Job 1b.
+//
+// Vertrauensgrenze der Geheimnisnamen (A6.4-2c-2): Die Namen sind nur ein Vertrag fuer eine spaetere,
+// vertrauenswuerdige Workflow-Umgebung. Aus einem Namen folgt weder, dass ein echtes Geheimnis
+// existiert, noch welchen Inhalt es hat, noch dass die Liste vollstaendig ist. Welcher Claude-Zugang
+// und welcher Lesetoken wirklich verwendet werden und ob sie dem Vergleich in Job 1b vollstaendig
+// vorliegen, muss A6.4-4 unabhaengig nachweisen.
 //
 // Grenzen:
 // - Der Stolperdraht prueft die Umgebung erst nach dem Start von Node. Code, der ueber NODE_OPTIONS
@@ -43,9 +54,28 @@ export const PACKAGE_FILE = 'paket-v2.json';
 export const CHECK_DIR = 'a6-abnahme';
 export const HOME_AUFTRAG = 'a6-auftrag-home';
 export const HOME_ABNAHME = 'a6-abnahme-home';
+export const WORK_DIR = 'a6-claude-arbeit';
+export const PUBLISH_CHECK_DIR = 'a6-veroeffentlichung-pruefung';
+export const HOME_CLAUDE_VOR = 'a6-claude-vor-home';
+export const HOME_CLAUDE_NACH = 'a6-claude-nach-home';
+export const HOME_VEROEFFENTLICHEN = 'a6-veroeffentlichen-home';
+export const MAX_PROFILE_FILE_BYTES = 8192;
+export const MIN_COMPARE_LENGTH = 20;
+export const MAX_COMPARE_LENGTH = 4096;
 
 export const OUTPUT_KEYS = Object.freeze(['auftrag_sha256', 'schnappschuss_sha256']);
+export const PACKAGE_OUTPUT_KEY = 'paket_sha256';
 export const UNKNOWN_CODE = 'job-unbekannt';
+
+// Feste Geheimnisnamen je Job. Tief eingefroren; der Stolperdraht liest nur diese Listen.
+export const SECRET_NAMES = Object.freeze({
+  auftrag: Object.freeze(['A6_LESE_TOKEN']),
+  claudeVor: Object.freeze(['A6_LESE_TOKEN']),
+  claudeNach: Object.freeze(['A6_VERGLEICH_ANTHROPIC', 'A6_VERGLEICH_LESE_TOKEN']),
+  abnahme: Object.freeze([]),
+  veroeffentlichen: Object.freeze(['A6_APP_TOKEN']),
+});
+const KNOWN_SECRET_NAMES = Object.freeze([...new Set(Object.values(SECRET_NAMES).flat())].sort());
 
 const HEX40_RE = /^[0-9a-f]{40}$/;
 const HEX64_RE = /^[0-9a-f]{64}$/;
@@ -56,6 +86,7 @@ const SECRET_VALUE_RE = /gh[psoru]_[A-Za-z0-9_]{8,}|github_pat_|sk-ant-|-----BEG
 const NODE_KEY_RE = /^NODE_/i;
 const WINDOWS_KEYS = Object.freeze(['SystemRoot', 'PATHEXT', 'ComSpec', 'windir']);
 const READ_TOKEN_KEY = 'A6_LESE_TOKEN';
+const APP_TOKEN_KEY = 'A6_APP_TOKEN';
 const MAX_PATH_LENGTH = 4096;
 
 const CONTRACT_AUFTRAG = Object.freeze([
@@ -65,6 +96,19 @@ const CONTRACT_AUFTRAG = Object.freeze([
 const CONTRACT_ABNAHME = Object.freeze([
   'GITHUB_REPOSITORY', 'GITHUB_EVENT_NAME', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'GITHUB_WORKFLOW_REF',
   'GITHUB_WORKSPACE', 'RUNNER_TEMP', 'PATH', 'A6_AUFTRAG_SHA256', 'A6_SCHNAPPSCHUSS_SHA256', 'A6_PAKET_SHA256',
+]);
+const CONTRACT_CLAUDE_VOR = Object.freeze([
+  'GITHUB_REPOSITORY', 'GITHUB_EVENT_NAME', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'GITHUB_WORKFLOW_REF',
+  'GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'RUNNER_TEMP', 'PATH', 'A6_AUFTRAG_SHA256', 'A6_SCHNAPPSCHUSS_SHA256', READ_TOKEN_KEY,
+]);
+const CONTRACT_CLAUDE_NACH = Object.freeze([
+  'GITHUB_REPOSITORY', 'GITHUB_EVENT_NAME', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'GITHUB_WORKFLOW_REF',
+  'GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'RUNNER_TEMP', 'PATH', 'A6_AUFTRAG_SHA256', 'A6_SCHNAPPSCHUSS_SHA256',
+  ...SECRET_NAMES.claudeNach,
+]);
+const CONTRACT_VEROEFFENTLICHEN = Object.freeze([
+  'GITHUB_REPOSITORY', 'GITHUB_EVENT_NAME', 'GITHUB_EVENT_PATH', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA',
+  'GITHUB_WORKFLOW_REF', 'GITHUB_WORKSPACE', 'RUNNER_TEMP', 'PATH', 'A6_AUFTRAG_SHA256', 'A6_PAKET_SHA256', APP_TOKEN_KEY,
 ]);
 
 export class JobError extends Error {
@@ -122,8 +166,9 @@ function readEnv(env, key) {
   return typeof value === 'string' ? value : undefined;
 }
 
-// Fest je Job: welcher geheime Name erlaubt ist. Keine frei konfigurierbare Regel.
-function tripwire(env, allowedSecretKey) {
+// Fest je Job: welche geheimen Namen erlaubt sind. allowed ist immer eine Liste aus SECRET_NAMES und
+// wird nur von den Vertragsfunktionen dieses Moduls uebergeben; nach aussen gibt es diese Funktion nicht.
+function tripwire(env, allowed) {
   let keys;
 
   try {
@@ -137,11 +182,12 @@ function tripwire(env, allowedSecretKey) {
       jobFail('job-umgebung-node');
     }
 
-    if (key === allowedSecretKey) {
+    if (allowed.includes(key)) {
       continue;
     }
 
-    if (SECRET_KEY_RE.test(key)) {
+    // Auch ein Geheimnisname eines anderen Jobs ist hier fremd, selbst ohne allgemeines Muster.
+    if (KNOWN_SECRET_NAMES.includes(key) || SECRET_KEY_RE.test(key)) {
       jobFail('job-umgebung-geheimnis');
     }
 
@@ -257,7 +303,7 @@ function checkCommon(env, keys) {
 // Job 0. Ergebnis: eingefrorener, gepruefter Vertrag. Der Lesetoken wird nur weitergereicht.
 export function readAuftragContract(env) {
   const { values, system } = checkCommon(env, CONTRACT_AUFTRAG);
-  tripwire(env, READ_TOKEN_KEY);
+  tripwire(env, SECRET_NAMES.auftrag);
   const temp = values.RUNNER_TEMP;
   const eventPath = checkAbsolute(values.GITHUB_EVENT_PATH, 'job-ereignis-pfad');
   const outputPath = checkAbsolute(values.GITHUB_OUTPUT, 'job-ausgabe-pfad');
@@ -287,13 +333,8 @@ export function readAuftragContract(env) {
 // Job 2. Kein geheimer Name ist erlaubt, auch nicht der Lesetoken von Job 0.
 export function readAbnahmeContract(env) {
   const { values, system } = checkCommon(env, CONTRACT_ABNAHME);
-  tripwire(env, null);
-
-  for (const key of ['A6_AUFTRAG_SHA256', 'A6_SCHNAPPSCHUSS_SHA256', 'A6_PAKET_SHA256']) {
-    if (!HEX64_RE.test(values[key])) {
-      jobFail('job-hash-format');
-    }
-  }
+  tripwire(env, SECRET_NAMES.abnahme);
+  checkHashes(values, ['A6_AUFTRAG_SHA256', 'A6_SCHNAPPSCHUSS_SHA256', 'A6_PAKET_SHA256']);
 
   return Object.freeze({
     repository: values.GITHUB_REPOSITORY,
@@ -309,12 +350,123 @@ export function readAbnahmeContract(env) {
   });
 }
 
+function checkHashes(values, keys) {
+  for (const key of keys) {
+    if (!HEX64_RE.test(values[key])) {
+      jobFail('job-hash-format');
+    }
+  }
+}
+
+function outputBelow(values) {
+  const outputPath = checkAbsolute(values.GITHUB_OUTPUT, 'job-ausgabe-pfad');
+
+  if (!isBelow(outputPath, values.RUNNER_TEMP)) {
+    jobFail('job-ausgabe-pfad');
+  }
+
+  return outputPath;
+}
+
+// Job 1a, vor Claude. Nur der Lesetoken ist erlaubt, kein Zugang fuer Claude und kein App-Token.
+export function readClaudeVorContract(env) {
+  const { values, system } = checkCommon(env, CONTRACT_CLAUDE_VOR);
+  tripwire(env, SECRET_NAMES.claudeVor);
+  checkHashes(values, ['A6_AUFTRAG_SHA256', 'A6_SCHNAPPSCHUSS_SHA256']);
+
+  return Object.freeze({
+    repository: values.GITHUB_REPOSITORY,
+    runId: values.GITHUB_RUN_ID,
+    baseSha: values.GITHUB_SHA,
+    workspace: values.GITHUB_WORKSPACE,
+    runnerTemp: values.RUNNER_TEMP,
+    outputPath: outputBelow(values),
+    path: values.PATH,
+    system: Object.freeze(system),
+    orderSha256: values.A6_AUFTRAG_SHA256,
+    snapshotSha256: values.A6_SCHNAPPSCHUSS_SHA256,
+    token: values[READ_TOKEN_KEY],
+  });
+}
+
+// Job 1b, nach Claude. Genau die zwei Vergleichswerte sind erlaubt und beide Pflicht. Sie dienen nur
+// dem Wertvergleich im Paket; kein Netz, kein Token fuer GitHub. Jeder Wert: gueltiger Text, mindestens
+// MIN_COMPARE_LENGTH Zeichen, hoechstens MAX_COMPARE_LENGTH UTF-16-Einheiten (dieselben Grenzen wie
+// containsSecretValue). Ein Wert wird nie ausgegeben.
+export function readClaudeNachContract(env) {
+  const { values, system } = checkCommon(env, CONTRACT_CLAUDE_NACH);
+  tripwire(env, SECRET_NAMES.claudeNach);
+  checkHashes(values, ['A6_AUFTRAG_SHA256', 'A6_SCHNAPPSCHUSS_SHA256']);
+  const compare = SECRET_NAMES.claudeNach.map(key => values[key]);
+
+  if (compare.length !== 2 || compare.some(value => !value.isWellFormed() || [...value].length < MIN_COMPARE_LENGTH || value.length > MAX_COMPARE_LENGTH)) {
+    jobFail('job-vergleich-wert');
+  }
+
+  return Object.freeze({
+    repository: values.GITHUB_REPOSITORY,
+    runId: values.GITHUB_RUN_ID,
+    baseSha: values.GITHUB_SHA,
+    workspace: values.GITHUB_WORKSPACE,
+    runnerTemp: values.RUNNER_TEMP,
+    outputPath: outputBelow(values),
+    path: values.PATH,
+    system: Object.freeze(system),
+    orderSha256: values.A6_AUFTRAG_SHA256,
+    snapshotSha256: values.A6_SCHNAPPSCHUSS_SHA256,
+    compareValues: Object.freeze(compare),
+  });
+}
+
+// Job 3, Veroeffentlichung. Nur der App-Token ist erlaubt. Keine Ausgabedatei: Job 3 gibt nichts aus.
+export function readVeroeffentlichenContract(env) {
+  const { values, system } = checkCommon(env, CONTRACT_VEROEFFENTLICHEN);
+  tripwire(env, SECRET_NAMES.veroeffentlichen);
+  checkHashes(values, ['A6_AUFTRAG_SHA256', 'A6_PAKET_SHA256']);
+  const eventPath = checkAbsolute(values.GITHUB_EVENT_PATH, 'job-ereignis-pfad');
+
+  if (!isBelow(eventPath, values.RUNNER_TEMP)) {
+    jobFail('job-ereignis-pfad');
+  }
+
+  return Object.freeze({
+    repository: values.GITHUB_REPOSITORY,
+    runId: values.GITHUB_RUN_ID,
+    baseSha: values.GITHUB_SHA,
+    workspace: values.GITHUB_WORKSPACE,
+    runnerTemp: values.RUNNER_TEMP,
+    eventPath,
+    path: values.PATH,
+    system: Object.freeze(system),
+    orderSha256: values.A6_AUFTRAG_SHA256,
+    packageSha256: values.A6_PAKET_SHA256,
+    token: values[APP_TOKEN_KEY],
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Feste Pfade, eigene Ordner, Git-Umgebung
 // ---------------------------------------------------------------------------
 
 export const snapshotPath = runnerTemp => join(runnerTemp, SNAPSHOT_DIR, SNAPSHOT_FILE);
 export const packagePath = runnerTemp => join(runnerTemp, PACKAGE_DIR, PACKAGE_FILE);
+
+// Fester Ordner direkt unter RUNNER_TEMP, der noch nicht existieren darf (auch kein Symlink). Ergebnis:
+// der Pfad. Das Anlegen uebernimmt der Aufrufer (etwa prepareWorkspace).
+export function absentDir(runnerTemp, name, code) {
+  const path = join(runnerTemp, name);
+
+  if (lstatOrNull(path) !== null) {
+    jobFail(code);
+  }
+
+  return path;
+}
+
+// Fester, schon vorhandener Ordner direkt unter RUNNER_TEMP: echtes Verzeichnis, kein Symlink.
+export function existingDir(runnerTemp, name, code) {
+  return checkDirectory(join(runnerTemp, name), code);
+}
 
 // Legt einen neuen Ordner direkt unter RUNNER_TEMP an. Ein vorhandener Ordner wird nie verwendet.
 export function freshDir(runnerTemp, name) {
@@ -432,7 +584,23 @@ export function writeHashOutputs(contract, auftragSha256, schnappschussSha256) {
   }
 
   const text = `${OUTPUT_KEYS[0]}=${auftragSha256}\n${OUTPUT_KEYS[1]}=${schnappschussSha256}\n`;
-  const before = lstatOrNull(contract.outputPath);
+  appendOutput(contract.outputPath, text);
+}
+
+// Haengt genau die eine Ausgabe paket_sha256 von Job 1b an GITHUB_OUTPUT an. Fester Schluessel, Wert
+// 64 kleine Hex-Zeichen. Kein Pfad, kein Inhalt, kein freies JSON.
+export function writePackageOutput(contract, paketSha256) {
+  if (!HEX64_RE.test(paketSha256)) {
+    jobFail('job-ausgabe-format');
+  }
+
+  appendOutput(contract.outputPath, `${PACKAGE_OUTPUT_KEY}=${paketSha256}\n`);
+}
+
+// Einzige anhaengende Schreibstelle: bestehende gewoehnliche Datei, kein Symlink, dieselbe Datei wie
+// geprueft, ein einziger Schreibvorgang.
+function appendOutput(outputPath, text) {
+  const before = lstatOrNull(outputPath);
 
   if (!before || before.isSymbolicLink() || !before.isFile()) {
     jobFail('job-ausgabe-datei');
@@ -441,7 +609,7 @@ export function writeHashOutputs(contract, auftragSha256, schnappschussSha256) {
   let fd;
 
   try {
-    fd = openSync(contract.outputPath, constants.O_WRONLY | constants.O_APPEND | NOFOLLOW);
+    fd = openSync(outputPath, constants.O_WRONLY | constants.O_APPEND | NOFOLLOW);
   } catch {
     jobFail('job-ausgabe-datei');
   }

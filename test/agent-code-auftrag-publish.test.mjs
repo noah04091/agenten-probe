@@ -1544,7 +1544,7 @@ test('Branch-Name: fest aus Issue und Lauf-ID, keine freie Eingabe', () => {
 // ---------------------------------------------------------------------------
 
 const SOURCE = readFileSync(MODULE_PATH, 'utf8');
-const MODULES = ['agent-code-auftrag.mjs', 'agent-code-auftrag-live.mjs', 'agent-code-auftrag-prompt.mjs', 'agent-code-auftrag-paket.mjs', 'agent-code-auftrag-publish.mjs', 'agent-code-auftrag-abnahme.mjs', 'agent-code-auftrag-transport.mjs', 'agent-code-job-auftrag.mjs', 'agent-code-job-abnahme.mjs'];
+const MODULES = ['agent-code-auftrag.mjs', 'agent-code-auftrag-live.mjs', 'agent-code-auftrag-prompt.mjs', 'agent-code-auftrag-paket.mjs', 'agent-code-auftrag-publish.mjs', 'agent-code-auftrag-abnahme.mjs', 'agent-code-auftrag-transport.mjs', 'agent-code-job-auftrag.mjs', 'agent-code-job-abnahme.mjs', 'agent-code-job-claude-vor.mjs', 'agent-code-job-claude-nach.mjs', 'agent-code-job-veroeffentlichen.mjs'];
 
 test('Wache: nur die vorgesehenen Importe, kein Netz-, Prozess-, Umgebungs- oder Protokollzugriff', () => {
   const imports = [...SOURCE.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map(m => m[1]).sort();
@@ -1599,7 +1599,8 @@ test('Wache: kein Workflow und kein anderes Skript verweist auf das Modul', () =
   assert.ok(others.some(text => text.includes('./agent-code-release-plan.mjs')), 'Gegenprobe ohne Treffer');
   assert.ok(others.every(text => !text.includes('agent-code-auftrag')), 'ein Skript verweist auf ein Auftragsmodul');
   // Nur dieses Modul selbst darf die anderen Auftragsmodule importieren, kein anderes Auftragsmodul importiert es.
-  for (const name of MODULES.filter(name => name !== 'agent-code-auftrag-publish.mjs')) {
+  // Einzige Ausnahme ist der Einstieg von Job 3 (A6.4-2c-2), der den Veroeffentlicher aufruft.
+  for (const name of MODULES.filter(name => name !== 'agent-code-auftrag-publish.mjs' && name !== 'agent-code-job-veroeffentlichen.mjs')) {
     assert.ok(!readFileSync(join(scripts, name), 'utf8').includes('agent-code-auftrag-publish'), `${name} verweist auf das Modul`);
   }
   assert.ok(SOURCE.includes("from './agent-code-auftrag.mjs'"), 'Gegenprobe: Import nicht gefunden');
