@@ -52,6 +52,7 @@ import {
 } from '../scripts/agent-code-job-gemeinsam.mjs';
 import { main as mainAuftrag } from '../scripts/agent-code-job-auftrag.mjs';
 import { main as mainAbnahme } from '../scripts/agent-code-job-abnahme.mjs';
+import { loadPolicy } from '../scripts/agent-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SCRIPTS = join(ROOT, 'scripts');
@@ -800,8 +801,12 @@ test('Positiv: requireAccepted nimmt nur den echten Nachweis; ein frei gebautes 
   }
 });
 
-test('Positiv: die produktive Policy fehlt auf main weiterhin; die Tests behaupten sie nicht', () => {
-  assert.equal(existsSync(join(ROOT, '.github', 'agent', 'policy.json')), false);
+// A6.4-3a: Bis der Eigentuemer-PR die Policy einrichtet, ist dieser Test bewusst rot; er wird nicht uebersprungen.
+test('Positiv: die produktive Policy liegt auf main vor und ist ohne Entwurfsmodus gueltig', () => {
+  const pfad = join(ROOT, '.github', 'agent', 'policy.json');
+  assert.equal(existsSync(pfad), true);
+  const bytes = readFileSync(pfad);
+  assert.deepEqual(loadPolicy(bytes), JSON.parse(bytes.toString('utf8')));
   // Muss-Treffer: dieselbe Pruefung findet eine vorhandene Datei.
   assert.equal(existsSync(join(ROOT, 'agent-profiles', 'js-rechner.json')), true);
 });

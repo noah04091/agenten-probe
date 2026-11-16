@@ -416,7 +416,7 @@ werden während der Migration nicht abgeschwächt. Keine neue Aktivierungsvariab
 | A6.4-2c | Bot | Job-Einstiege und Geheimnisprüfung | Abgeschlossen, PR #68, 5797e9a und PR #69, dc7a284 |
 | A6.4-2d | Bot | Vollständige Skript-Hashbindung | Abgeschlossen, PR #70, e40635b; ohne Wirkung bis A6.4-3 und A6.4-4 |
 | A6.4-B | Noah | Build-Prüfung über erlaubte `src/`-Dateien | Offen |
-| A6.4-3 | Noah | Policy, Claude-Einstellungen und Schutzregeln | Offen; Vorpaket A6.4-3-0 (Wachen des Prüfers) als Draft-PR in Prüfung |
+| A6.4-3 | Noah | Policy, Claude-Einstellungen und Schutzregeln | Offen; A6.4-3-0 abgeschlossen (PR #71, 19bd43b); A6.4-3a vorbereitet (Bot-Draft-PR, nicht mergefähig), Eigentümer-PR offen |
 | A6.4-4 | Noah; Bot nur Patchvorbereitung | Neuer gesperrter A6-Workflow, Wächter und Sammeljob | Offen |
 | A6.4-5 | Noah | Geheimnisfreie echte Actions-Generalprobe mit Paket v2 | Offen |
 | A6.4-6 | Noah, gesonderte Freigaben | K1/K2/K3/K4-Restnachweise | Offen |
@@ -527,6 +527,48 @@ Pakete werden nicht erneut geöffnet. A6.4 insgesamt ist offen.
   behandeln. A6.4-3 ist nicht abgeschlossen; produktive Policy, Claude-Einstellungen und
   Schutzworkflow-Änderungen brauchen eigene Eigentümerfreigaben (A6.4-3a, A6.4-3c). A6.4-4 ist nicht
   freigegeben. Keine Agentenaktivierung.
+
+**A6.4-3a: Vorbereitung der produktiven Policy und der Claude-Basiseinstellungen (Stand 16.11.2026):**
+
+- **Sicherheitsnachtrag N1 und N2:** Die ursprünglichen Angriffe U1 und U2 erkennen seit A6.4-3-0 die
+  Testwachen. Zwei weitere Angriffe, N1 und N2, umgehen diese Quelltextwachen weiterhin; beide wurden
+  unabhängig nachgewiesen. Quelltextwachen können beliebig verschleiertes JavaScript nicht vollständig
+  kontrollieren. Der aktuelle Integritätsprüfer enthält diese gefährlichen Änderungen nicht. Die
+  geschützte Policy reicht allein nicht, weil der Prüfer sich damit nur selbst beglaubigen würde. Der
+  unabhängige äußere Hashanker des Prüfers bleibt zwingend, und A6.4-4 muss diese Prüfung vor der
+  allerersten Ausführung des Prüfers durchsetzen. N1 und N2 sind offene Sicherheitsgrenzen, keine
+  erledigten Befunde. Weitere Wortlisten-Patches an den Wachen gibt es nur mit neuer Freigabe.
+- **Bot-Anteil (vier ungeschützte Dateien):** `test/agent-code-integritaet.test.mjs`,
+  `test/agent-code-job.test.mjs`, `test/agent-code-job-veroeffentlichen.test.mjs` und dieser Masterplan.
+  Die bisherigen Abwesenheitsprüfungen der Policy werden zu Positivprüfungen: Policy vorhanden,
+  kanonisch, SHA-256 `590626e65aa8c610e3e4230e667f35ca6a895046d1f609858b1d511b720c4539`, mit
+  `loadPolicy()` ohne Entwurfsmodus gültig, alle übrigen Werte gleich dem Entwurf, genau 26 Skripthashes
+  gleich der Driftfixture und den tatsächlichen Bytes, Claude-Basiseinstellungen byte-gleich mit
+  `test/fixtures/claude-settings.entwurf.json`, der echte Prüfer endet ohne Ausgabe und ohne
+  Schreibzugriff auf `scripts/` und `.github/agent/`. Weiterhin gilt: kein A6-Workflow, kein Workflow
+  ruft einen Job-Einstieg oder den Integritätsprüfer auf, `js-text` bleibt inaktiv.
+- **Bewusst rote CI im Bot-Branch:** Ohne Policy sind dort genau drei Tests rot, sonst keiner. Es gibt
+  keine Ausnahme, kein Überspringen und keinen Umgehungsschalter. Der Bot-PR ist nicht mergefähig und wird
+  nie separat gemergt.
+- **Eigentümer-PR mit sechs Dateien:** die vier Bot-Dateien und die zwei geschützten Dateien
+  `.github/agent/policy.json` (Policy-Entwurf mit den 26 tatsächlichen Skripthashes, kanonisch,
+  3.711 Bytes) und `.github/agent/claude-settings.json` (byte-gleich mit der Fixture,
+  `permissions.allow` leer, 38 Pflichtverbote; profilspezifische Rechte erst in A6.4-4). Zusätzlich
+  zur vollständigen CI: (A) beide Dateien im Git-Tree mit Modus `100644`, (B) SHA-256 des Policy-Blobs
+  gleich dem Wert oben, (C) Einstellungsdatei byte-gleich mit der geprüften Fixture.
+- **Freigabeweg A, Status: Weg A gewählt, noch nicht ausgeführt.** Geplanter Ablauf: (1) Der Bot
+  bereitet ausschließlich die vier ungeschützten Dateien vor. (2) Terminal 1 und ChatGPT prüfen den
+  Bot-Stand. (3) Noah erstellt einen eigenen Eigentümerbranch auf genau diesem geprüften Commit. (4) Sein
+  zusätzlicher Commit legt ausschließlich die zwei geschützten Dateien an. (5) Terminal 1 prüft den
+  endgültigen Eigentümer-PR. (6) ChatGPT bestätigt die unabhängigen Nachweise. (7) Sämtliche
+  Pflichtprüfungen sind grün. (8) Noah entscheidet ausdrücklich über die einmalige Admin-Ausnahme bei
+  `main-freigabe`. (9) `main-pruefungen` bleibt uneingeschränkt wirksam. (10) Der genehmigte
+  Eigentümer-PR wird als normaler Merge-Commit übernommen. (11) Der unvollständige Bot-PR wird ohne Merge
+  geschlossen. (12) Eltern, Dateibaum und CI werden danach erneut geprüft. Die Wahl von Weg A ist kein
+  Nachweis einer ausgeführten oder abschließend genehmigten Ausnahme. Den tatsächlichen Eintrag mit PR,
+  Merge-Commit und Ergebnis bringt der nächste Masterplan-PR (A6.4-3c).
+- **Weiterhin offen:** N1 und N2, S1 bis S4, die beiden Testlücken aus A6.4-2c-2, K1 bis K4. A6.4-3 ist
+  nicht abgeschlossen, A6.4-4 ist nicht freigegeben. Keine Agentenaktivierung.
 
 **Verschoben:** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach
 Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele

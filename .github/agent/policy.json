@@ -1,0 +1,74 @@
+{
+  "schema": "agent-policy-v1",
+  "modelle": [
+    "sonnet"
+  ],
+  "claude_werkzeuge": [
+    "Read",
+    "Edit"
+  ],
+  "max_budget_usd": 1.5,
+  "max_runden": 12,
+  "max_laufzeit_minuten": 20,
+  "max_dateien": 4,
+  "max_auftrag_rahmen_zeichen": 2000,
+  "max_issue_titel_zeichen": 200,
+  "max_issue_text_zeichen": 4000,
+  "gesperrte_praefixe": [
+    ".git/",
+    ".github/",
+    ".claude/",
+    "scripts/",
+    "agent-profiles/",
+    "agent-acceptance/",
+    "node_modules/"
+  ],
+  "gesperrte_dateien": [
+    "CODEOWNERS",
+    "package.json",
+    "package-lock.json",
+    "CLAUDE.md",
+    ".mcp.json",
+    ".gitmodules",
+    ".gitattributes",
+    ".gitignore",
+    ".npmrc"
+  ],
+  "reservierte_ids": [
+    "code-pilot",
+    "test-note"
+  ],
+  "pr_titel_praefixe": [
+    "feat:",
+    "fix:",
+    "test:"
+  ],
+  "skript_hashes": {
+    "scripts/agent-code-acceptance.mjs": "b9f7bf34ac26ccc0b3155b03227dbe76965ea1c3e2c768622b0cb5fbcabd73aa",
+    "scripts/agent-code-activation-check.mjs": "752834eaf034a97f19fd2f791b494cff4824c72f5aa2bf4c09d468f9bba408b7",
+    "scripts/agent-code-auftrag-abnahme.mjs": "2f9f33953e48f6222fc641a6bef643c61d23718f39adce3c4d7297470f0fd14e",
+    "scripts/agent-code-auftrag-live.mjs": "e42657271598da9928d9e08a356da69384feb82b8d5496ce13414fc71b8b3f75",
+    "scripts/agent-code-auftrag-paket.mjs": "01350f5212e7f28fa4c20e7f0c3a19e4091e355fd44efb42a399fdf5febedc10",
+    "scripts/agent-code-auftrag-prompt.mjs": "855f87d65896884f302dbd58420f66ae5b640f38496b3fc6a74b3094dec40cc4",
+    "scripts/agent-code-auftrag-publish.mjs": "243be5b1b64d6b7a8ab9ac85189f3b6d01f56dd895505ba017ae0765d6862bcb",
+    "scripts/agent-code-auftrag-transport.mjs": "7b6e8c1fcc08691b6274d79a38ff4965f1f413cec931e49da6698b23f3d807e8",
+    "scripts/agent-code-auftrag.mjs": "6bcc49ff925c27278c95de20db2a6837ae324da7ec4f27020a68e56e46df5593",
+    "scripts/agent-code-change-check.mjs": "4fbb5f5f5f3def38e259cfeb7006c86f171faeab47c2028a2d2b6dcdb8a2822a",
+    "scripts/agent-code-dryrun.mjs": "8dd7d50376486eae091a41617e6b269fd43e946c9b3f4fe4e853fecffea617e0",
+    "scripts/agent-code-integritaet.mjs": "f345b7c75cd24670073d7462419290fae3f139e3c3e2fd8390a241a9c1ab003f",
+    "scripts/agent-code-issue-live-check.mjs": "1a6f54b91f0a3b2aee77d3209f6b2ca5e7ada7ec398e1a77981ae0905f314f95",
+    "scripts/agent-code-issue-route.mjs": "81328102fec61150556eac754d1d21d9c36dd0700b1ef55ea079b25a4b05de7c",
+    "scripts/agent-code-job-abnahme.mjs": "596e6f0ea17f30c6084ec77cf54ecc3dad844842b4097fada07eb9586ea42f92",
+    "scripts/agent-code-job-auftrag.mjs": "c0544022027547334b6e4537660e1d3c584cfc2bf7097230671f896143983c4c",
+    "scripts/agent-code-job-claude-nach.mjs": "62a5e9416c2e9efd3ee7b83020b05dd76e7a6130f290391e917e60fa01a0ae67",
+    "scripts/agent-code-job-claude-vor.mjs": "8501ec59064bc80cba9e29568f468642037e17e2a47023fc1a84c27044fe889e",
+    "scripts/agent-code-job-gemeinsam.mjs": "2177a918c921033f3514c070c009d47df5616617fb8924151c01018203668033",
+    "scripts/agent-code-job-veroeffentlichen.mjs": "6d5c2e8cddd2116b5758fc3f3fc035303b775515c28b0bf0e3f89afac883baad",
+    "scripts/agent-code-package.mjs": "a7b9661a2f7a08d67e41be6bda52a90c3f66aa4a17a539490a43e65117321679",
+    "scripts/agent-code-publish.mjs": "2fe7c8c72726a9c0e9e37c469cfcb132defb5812cffbcfee9447a91ea22a43f8",
+    "scripts/agent-code-release-plan.mjs": "614773a409bfa1b40ecc6dae7c738dc968317bbda28ae37fe03a64f5f03880cc",
+    "scripts/agent-issue-live-check.mjs": "aa59c496693620a650cbbba89f2cfcf562fd4a6547b7887a402c48f1ae3fea2b",
+    "scripts/agent-issue-route.mjs": "5e248f1481fea2ef6eecfd0de65b6d33d93255577fc8bed46beb99b8111a91ea",
+    "scripts/agent-profile.mjs": "4485a12445c61a1512c372dfc27b6c0944d5c6f8eb9aaadd96af7bb5442c3c7a"
+  }
+}

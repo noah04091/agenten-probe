@@ -49,6 +49,9 @@ const FIXTURE_PFAD = join(ROOT, 'test', 'fixtures', 'agent-skript-hashes.json');
 const FIXTURE_BYTES = readFileSync(FIXTURE_PFAD);
 const FIXTURE = JSON.parse(FIXTURE_BYTES.toString('utf8'));
 const POLICY_ENTWURF = JSON.parse(readFileSync(join(ROOT, 'test', 'fixtures', 'agent-policy.entwurf.json'), 'utf8'));
+const SETTINGS_ENTWURF_BYTES = readFileSync(join(ROOT, 'test', 'fixtures', 'claude-settings.entwurf.json'));
+// A6.4-3a: SHA-256 der freigegebenen produktiven Policy (Pruefpunkt B des Eigentuemer-PR).
+const POLICY_SHA256 = '590626e65aa8c610e3e4230e667f35ca6a895046d1f609858b1d511b720c4539';
 
 const IST_WINDOWS = process.platform === 'win32';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -149,7 +152,7 @@ function abgelehnt(r, code) {
 }
 
 // Zustand aller Eintraege eines Baums: Art, Groesse, Inode, Aenderungszeit und Inhalt.
-function abbild(root) {
+function abbild(root, start = '') {
   const eintraege = [];
   const gehe = rel => {
     for (const name of readdirSync(join(root, rel)).sort()) {
@@ -163,7 +166,7 @@ function abbild(root) {
       }
     }
   };
-  gehe('');
+  gehe(start);
   return eintraege;
 }
 
@@ -585,14 +588,53 @@ test('Positiv: pruefeIntegritaet nutzt process.cwd() als Wurzel und nichts sonst
   t.after(() => process.chdir(alt));
   process.chdir(root);
   assert.equal(integritaet.pruefeIntegritaet(), undefined);
-  // Gegenprobe: im echten Repository fehlt die produktive Policy (A6.4-3).
-  process.chdir(ROOT);
-  assert.ok(!existsSync(join(ROOT, '.github', 'agent', 'policy.json')));
+  // Gegenprobe (A6.4-3a): ein zweiter synthetischer Baum ohne Policy. Derselbe Aufruf scheitert dort,
+  // die Wurzel folgt also allein process.cwd(). Unabhaengig davon, ob das echte Repository eine Policy hat.
+  const ohne = baum().root;
+  rmSync(policyPfad(ohne));
+  assert.ok(!existsSync(policyPfad(ohne)));
+  process.chdir(ohne);
   assert.throws(() => integritaet.pruefeIntegritaet(), error => error.code === 'policy-fehlt');
+  abgelehnt(lauf(ohne), 'policy-fehlt');
+  process.chdir(root);
+  assert.equal(integritaet.pruefeIntegritaet(), undefined);
 });
 
-test('Echtes Repository: ohne produktive Policy bricht die CLI kontrolliert ab', () => {
-  abgelehnt(lauf(ROOT, PRUEFER_PFAD), 'policy-fehlt');
+// A6.4-3a: Auf main liegen die produktive Policy und die Claude-Basiseinstellungen. Bis der
+// Eigentuemer-PR sie einrichtet, ist dieser Test bewusst rot; er wird nicht uebersprungen.
+test('Echtes Repository: produktive Policy und Claude-Basis gueltig, Pruefer besteht ohne Ausgabe und ohne Schreibzugriff', () => {
+  const pfad = join(ROOT, '.github', 'agent', 'policy.json');
+  const settingsPfad = join(ROOT, '.github', 'agent', 'claude-settings.json');
+  const stat = lstatSync(pfad);
+  assert.ok(stat.isFile() && !stat.isSymbolicLink(), 'Policy ist keine gewoehnliche Datei');
+
+  const bytes = readFileSync(pfad);
+  const text = bytes.toString('utf8');
+  assert.ok(text.charCodeAt(0) !== 0xfeff && !text.includes(String.fromCharCode(13)), 'BOM oder CR in der Policy');
+  const policy = JSON.parse(text);
+  assert.equal(canon(policy), text, 'Policy nicht kanonisch');
+  assert.equal(sha256(bytes), POLICY_SHA256);
+  // Volle Pruefung des Profilmoduls ohne Entwurfsmodus.
+  assert.deepEqual(loadPolicy(bytes), policy);
+  // Alle uebrigen Werte entsprechen dem geprueften Entwurf; nur skript_hashes ist befuellt.
+  assert.deepEqual({ ...policy, skript_hashes: POLICY_ENTWURF.skript_hashes }, POLICY_ENTWURF);
+  assert.equal(Object.keys(policy.skript_hashes).length, 26);
+  assert.deepEqual(policy.skript_hashes, FIXTURE);
+
+  for (const [skript, hash] of Object.entries(policy.skript_hashes)) {
+    assert.equal(sha256(readFileSync(join(ROOT, skript))), hash, skript);
+  }
+
+  // Pruefpunkt C: die Claude-Basiseinstellungen sind byte-gleich mit der geprueften Fixture.
+  const settingsStat = lstatSync(settingsPfad);
+  assert.ok(settingsStat.isFile() && !settingsStat.isSymbolicLink(), 'Einstellungen sind keine gewoehnliche Datei');
+  assert.ok(readFileSync(settingsPfad).equals(SETTINGS_ENTWURF_BYTES), 'Claude-Basis weicht von der Fixture ab');
+
+  // Der echte Pruefer im echten Repository: Erfolg ohne Ausgabe, scripts/ und .github/agent/ unveraendert.
+  const vorher = [...abbild(ROOT, 'scripts'), ...abbild(ROOT, '.github/agent')];
+  assert.ok(vorher.length >= 28, 'Gegenprobe: Abbild zu klein');
+  bestanden(lauf(ROOT, PRUEFER_PFAD));
+  assert.deepEqual([...abbild(ROOT, 'scripts'), ...abbild(ROOT, '.github/agent')], vorher);
 });
 
 // ---------------------------------------------------------------------------
