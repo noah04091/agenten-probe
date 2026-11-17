@@ -200,6 +200,11 @@ const POSITIV = [
   fall('P10 Autorregel positiv: Noah aendert Policy und package.json', NOAH, [d('.github/agent/policy.json'), d('package.json'), d('src/rechne.js')], bestanden(3)),
   fall('P11 Sonderzeichen im Profilnamen (Leerzeichen, Umlaut, Tab, Backslash, Zeilenumbruch)', BOT,
     [d('agent-profiles/ä ö.json'), d('agent-profiles/a\tb.json'), d('agent-profiles/c\\d.json'), d('agent-profiles/e\nsrc/f.json')], bestanden(4)),
+  // A6 P-1, KA: Praefix-Gegenprobe fuer den Abnahmebereich, wie P09 fuer die Profile.
+  fall('P12 aehnliches Verzeichnis agent-acceptance-x/ mit src/', BOT, [d('agent-acceptance-x/a.mjs'), d('src/rechne.js')], bestanden(2)),
+  // A6 P-1, KB: PR mit 0 gemeldeten und 0 gelisteten Dateien. Das heutige Verhalten (bestanden) wird hier
+  // festgeschrieben, nicht bewertet; jede Aenderung daran faellt auf.
+  fall('P13 Null-Dateien-Fall: 0 gemeldet, 0 gelistet', BOT, [], bestanden(0)),
 ];
 
 const NEGATIV = [

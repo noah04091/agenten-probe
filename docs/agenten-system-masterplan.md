@@ -410,15 +410,15 @@ werden während der Migration nicht abgeschwächt. Keine neue Aktivierungsvariab
 |---|---|---|---|
 | A6.4-S | Noah | Alten Claude-Agenten sperren, Wächtertest | Abgeschlossen, PR #63 |
 | A6.4-0 | Bot | Masterplan korrigieren und Roadmap festhalten | Jetzt |
-| A6.4-1 | Bot | `head.sha`-Prüfung im allgemeinen Veröffentlicher | Offen |
+| A6.4-1 | Bot | `head.sha`-Prüfung im allgemeinen Veröffentlicher | Im Code umgesetzt (`scripts/agent-code-auftrag-publish.mjs:723`), Negativtest mit fremder Kopf-SHA vorhanden (`test/agent-code-auftrag-publish.test.mjs:1375`), Rot-Beweis in P-1; wirksam erst mit dem A6-Workflow |
 | A6.4-2a | Bot | Produktives unabhängiges Abnahmemodul | Abgeschlossen, PR #66, b764d29 |
 | A6.4-2b | Bot | Sicherer GitHub-Transport | Abgeschlossen, PR #67, ae07e68 |
 | A6.4-2c | Bot | Job-Einstiege und Geheimnisprüfung | Abgeschlossen, PR #68, 5797e9a und PR #69, dc7a284 |
 | A6.4-2d | Bot | Vollständige Skript-Hashbindung | Abgeschlossen, PR #70, e40635b; ohne Wirkung bis A6.4-3 und A6.4-4 |
-| A6.4-B | Noah | Build-Prüfung über erlaubte `src/`-Dateien | Offen |
-| A6.4-3 | Noah | Policy, Claude-Einstellungen und Schutzregeln | Offen; A6.4-3-0 abgeschlossen (PR #71, 19bd43b); A6.4-3a abgeschlossen (Eigentümer-PR #73, 1b2b8bf); A6.4-3c in Vorbereitung (Bot-Draft-PR, nicht mergefähig), Eigentümer-PR offen |
-| A6.4-4 | Noah; Bot nur Patchvorbereitung | Neuer gesperrter A6-Workflow, Wächter und Sammeljob | Offen |
-| A6.4-5 | Noah | Geheimnisfreie echte Actions-Generalprobe mit Paket v2 | Offen |
+| A6.4-B | Noah | Build-Prüfung über erlaubte `src/`-Dateien | Entwurf in P-1 (`entwurf/a6-p1/package.json`), Übernahme durch den Eigentümer-PR offen |
+| A6.4-3 | Noah | Policy, Claude-Einstellungen und Schutzregeln | A6.4-3-0 abgeschlossen (PR #71, 19bd43b); A6.4-3a abgeschlossen (Eigentümer-PR #73, 1b2b8bf); A6.4-3c abgeschlossen (Eigentümer-PR #75, c1243f9) |
+| A6.4-4 | Noah; Bot nur Patchvorbereitung | Neuer gesperrter A6-Workflow, Wächter und Sammeljob | Entwurf in P-1 (Bot-Draft-PR, nicht mergefähig), Eigentümer-PR offen |
+| A6.4-5 | Noah | Geheimnisfreie echte Actions-Generalprobe mit Paket v2 | Probejobs in P-1 entworfen und lokal emuliert; echter Lauf erst auf dem Eigentümer-PR von P-1 |
 | A6.4-6 | Noah, gesonderte Freigaben | K1/K2/K3/K4-Restnachweise | Offen |
 | Bereinigung | Noah | A5-Reste erst nach gesicherter Ablösung entfernen | Später |
 
@@ -565,8 +565,8 @@ Pakete werden nicht erneut geöffnet. A6.4 insgesamt ist offen.
   `main-freigabe`. (9) `main-pruefungen` bleibt uneingeschränkt wirksam. (10) Der genehmigte
   Eigentümer-PR wird als normaler Merge-Commit übernommen. (11) Der unvollständige Bot-PR wird ohne Merge
   geschlossen. (12) Eltern, Dateibaum und CI werden danach erneut geprüft. Die Wahl von Weg A ist kein
-  Nachweis einer ausgeführten oder abschließend genehmigten Ausnahme. Den tatsächlichen Eintrag mit PR,
-  Merge-Commit und Ergebnis bringt der nächste Masterplan-PR (A6.4-3c).
+  Nachweis einer ausgeführten oder abschließend genehmigten Ausnahme. Der tatsächliche Eintrag mit PR,
+  Merge-Commit und Ergebnis steht im nächsten Punkt (nachgetragen in A6.4-3c).
 - **Abschlussnachweis (nachgetragen in A6.4-3c):** Eigentümer-PR #73, Autor `noah04091`, Kopf
   `e44822a8816f436b13934080023896260dc91121`, normaler Merge-Commit
   `1b2b8bf2cd23aeee9a2ad06d283b79391ab6dd2f` mit den Eltern `19bd43b` und `e44822a`. Sechs geprüfte
@@ -574,7 +574,9 @@ Pakete werden nicht erneut geöffnet. A6.4 insgesamt ist offen.
   `590626e65aa8c610e3e4230e667f35ca6a895046d1f609858b1d511b720c4539`, Claude-Einstellungen
   byte-gleich mit dem geprüften Entwurf. `build`, `tests` und `schutzdateien` erfolgreich. Laut
   Eigentümerangabe einmalige genehmigte Ausnahme nur bei `main-freigabe`, keine Ausnahme bei
-  `main-pruefungen`. Keine Aktivierung.
+  `main-pruefungen`. Keine Aktivierung. Der Rule-Suite-Beleg für die Ausnahme ist mit dem Bot-Konto nicht
+  lesbar (`GET repos/noah04091/agenten-probe/rulesets/rule-suites` am 17.11.2026: HTTP 404); er bleibt
+  bis zu einem Nachweis durch Noah oder Terminal 1 eine Eigentümerangabe.
 - **Bot-PR #72:** Kopf `84e4741bcb2b21c33d54d7d1caa113262b44ba9b`. GitHub hat ihn automatisch als
   gemergt markiert, weil sein Commit über PR #73 nach `main` kam. Es gibt keinen eigenen Merge-Commit
   von #72, und der rote Bot-Zwischenstand wurde nicht separat übernommen. Abweichend von Schritt (11)
@@ -614,9 +616,99 @@ Pakete werden nicht erneut geöffnet. A6.4 insgesamt ist offen.
   Dabei sind die von GitHub angekündigten Einschränkungen für `pull_request_target` in öffentlichen
   Repositories zu berücksichtigen (vorgesehene Durchsetzung am 2. Dezember 2026). Keine
   Triggerumstellung in A6.4-3c.
-- **Status:** A6.4-3c in Vorbereitung. Eine Ausnahme für den Eigentümer-PR von A6.4-3c ist weder
-  genehmigt noch ausgeführt. A6.4-3 bleibt insgesamt offen, A6.4-4 ist nicht freigegeben, kein Live-Lauf.
-  Offen bleiben N1 und N2, S1 bis S4, K1 bis K4 und die beiden Testlücken aus A6.4-2c-2.
+- **Status (Stand 16.11.2026, überholt):** A6.4-3c in Vorbereitung. Eine Ausnahme für den Eigentümer-PR
+  von A6.4-3c war zu diesem Zeitpunkt weder genehmigt noch ausgeführt.
+- **Abschlussnachweis (nachgetragen in A6 P-1, selbst auf GitHub gelesen am 17.11.2026):** Eigentümer-PR
+  #75, Autor und Merge durch `noah04091` am 17.11.2026 um 07:37:12 UTC, Kopf
+  `8d2b086f0d9fedf914ae2544108f7959450e6e65`, normaler Merge-Commit
+  `c1243f943fd3c1d45ad64e44fe6135245b6103bd` mit den Eltern `1b2b8bf` und `8d2b086`. Vier Dateien:
+  `.github/workflows/schutz.yml`, dieser Masterplan, `test/agent-profile.test.mjs`,
+  `test/schutz-workflow.test.mjs`. `schutz.yml` auf `c1243f9` hat genau den genehmigten SHA-256
+  `46d5958e6345c19a7999ca0e1544093b4aade4291422d1ef90b4753037ac4ec5`. Auf dem Kopf erfolgreich: `build`,
+  `tests`, `schutzdateien`, `Trockenlauf Job 2 Codepaket pruefen`, `Trockenlauf Job 3 ohne Schreibrechte`.
+  Ob und wie eine Ausnahme bei `main-freigabe` genutzt wurde, ist mit dem Bot-Konto nicht lesbar
+  (Rule-Suites: HTTP 404) und deshalb hier nicht belegt.
+- **Bot-PR #74:** Kopf `e906d3bea66b4ca07796c75ac4d019a24d2296cc`. GitHub hat ihn wie zuvor #72
+  automatisch als gemergt markiert (17.11.2026, 07:37:14 UTC), weil sein Kopf über #75 nach `main` kam.
+  Einen eigenen Merge-Commit von #74 gibt es nicht.
+- **Weiterhin offen nach A6.4-3c:** N1 und N2, S1 bis S4, K1 bis K4, die beiden Testlücken aus
+  A6.4-2c-2 (in P-1 geschlossen, siehe unten), der Null-Dateien-Fall und die Präfix-Gegenprobe für
+  `agent-acceptance-x/` (in P-1 geschlossen, siehe unten).
+
+**A6 P-1: System-Paket (Stand 17.11.2026, Bot-Anteil, Vorbereitung; Grundlage A6-Abschlussplan Fassung 2):**
+
+- **Bot-Anteil (ungeschützt):** Workflow-Entwurf `entwurf/a6-p1/agent-auftrag.yml` (Name fest nach
+  `scripts/agent-code-job-gemeinsam.mjs:41`), gemeinsame Bausteine `entwurf/a6-p1/a6-funktionen.sh`,
+  Sperrdatei für Claude Code 2.1.326 (`entwurf/a6-p1/claude-code/`, jedes Paket mit `sha512`),
+  `entwurf/a6-p1/package.json` (Build über `src/rechne.js` und `src/text.js`), Ausweichlösung
+  `entwurf/a6-p1/ausweich/code-pilot-trockenlauf.yml`, Harness der Generalprobe unter `generalprobe/`,
+  Wächtertest `test/a6-auftrag-workflow.test.mjs`, Test der Generalprobe `test/a6-generalprobe.test.mjs`,
+  KA und KB in `test/schutz-workflow.test.mjs`, je eine hashgebundene Ausnahme in
+  `test/agent-code-job.test.mjs` und `test/agent-code-job-veroeffentlichen.test.mjs`.
+- **Eigentümer-Anteil (geschützt, nur Noah, byte-gleich mit dem Entwurf):**
+  `.github/workflows/agent-auftrag.yml`, `.github/agent/a6-funktionen.sh`,
+  `.github/agent/claude-code/package.json`, `.github/agent/claude-code/package-lock.json`, `package.json`.
+  Die Policy bleibt unverändert, kein Skript unter `scripts/` wird geändert.
+- **Bauart:** Jeder Job-Einstieg startet über `a6_container`: festes Node-Image per Digest, feste
+  Node-Version, keine geerbte Umgebung (nur genannte Namen), fester `PATH` und festes Git aus dem Image,
+  Checkout nur lesbar, im selben Container äußerer Anker des Integritätsprüfers, dann Prüfer, dann
+  Einstieg. Das deckt S1, S2, S4 und P6 baulich ab. Claude läuft als gepinntes Claude Code im eigenen
+  Container nur am internen Docker-Netz, mit den drei Schichten aus Abschnitt 0 des Plans; den Schlüssel
+  setzt allein der Vorschaltcontainer (nginx, Digest, nur `POST /v1/messages` und
+  `/v1/messages/count_tokens`, festes Ziel `api.anthropic.com`, sonst 403). Job 1 bis 3 sind mit
+  `false &&` abgeschaltet und zusätzlich an `issues` auf `refs/heads/main` gebunden. Die Generalprobe
+  läuft in eigenen Jobs ohne Environment und ohne Secrets.
+- **Befund 1 (behoben im Entwurf):** Das Node-Image setzt selbst `NODE_VERSION` und `YARN_VERSION`.
+  Der Stolperdraht der Einstiege lehnt jede `NODE_`-Variable ab (`job-gemeinsam.mjs`), jeder Start im
+  Container wäre mit `job-umgebung-node` gescheitert. Gefunden erst durch die lokale Emulation der
+  Probejobs; der Harness allein konnte es nicht zeigen. `a6_container` entfernt beide und prüft danach.
+- **Befund 2 und Architekturentscheidung (Nachbesserung P-1, abgeschlossen im Entwurf):**
+  `prepareWorkspace` legt den ganzen Baum des Ausgangscommits im Arbeitsordner an
+  (`scripts/agent-code-auftrag-paket.mjs:1066-1073`, Kontrolle `:1080`), also auch `agent-acceptance/`,
+  `.github/` und `scripts/`. Die Annahme in Abschnitt 0 des Plans, die Abnahme liege nicht im
+  Arbeitsordner, traf damit nicht zu. Entscheidung: physische Trennung ohne Änderung an `scripts/`, an
+  der Policy oder an ihren Hashes. `a6-claude-arbeit` behält den vollständigen Baum für die unveränderte
+  Prüfung in Job 1b. Claude bekommt als einzigen beschreibbaren Mount eine eigene Sicht
+  `RUNNER_TEMP/a6-claude-sicht`, je Lauf neu und leer neben dem Arbeitsordner angelegt, mit genau den
+  Profildateien unter denselben relativen Pfaden (`a6_sicht_anlegen`). Lesend eingebunden sind nur die
+  geprüfte Claude-Installation und die erzeugte Einstellungsdatei. Erst wenn kein Container
+  `a6-claude-*` mehr existiert (`a6_claude_beendet`), prüft `a6_sicht_pruefen` die Sicht: exakt die
+  Elternordner und Profildateien, nichts Verstecktes, keine Symlinks, keine Dateien mit mehr als einem
+  Link, keine Sonderdateien, keine Zeilenumbrüche in Namen. Danach prüft `a6_sicht_uebernehmen` alle
+  Ziele und kopiert erst dann die Bytes in die vorhandenen Profilpfade von `a6-claude-arbeit`; dort
+  entsteht nichts Neues. Die Einstellungen werden ohne `jq` aus der geschützten Basis erzeugt, die per
+  SHA-256 (`A6_EINSTELLUNGEN_SHA256`) gebunden ist.
+- **K1b und K1a getrennt:** K1b (Dateisystem- und Netzisolation) ist ohne Claude belegbar und in der
+  Emulation belegt: Der Container sieht genau `src/rechne.js` und `test/rechne.test.js`, nichts aus
+  `agent-acceptance/`, `.github/`, `scripts/`, `agent-profiles/`, kein `.git`, keine Runner-Pfade, keinen
+  Docker-Socket, kein Token, erreicht GitHub und Anthropic nicht direkt; Gegenprobe mit Zusatz-Mount.
+  K1a (Werkzeugverbote von Claude selbst) bleibt offen bis zur gesondert freigegebenen echten Claude-Probe.
+  Gebunden sind bis dahin der wirksame Aufruf und die Einstellungen (Wächter, siehe unten).
+- **Wächter auf den wirksamen Aufruf:** `test/a6-auftrag-workflow.test.mjs` lädt die Funktionsdatei in
+  Bash, ersetzt nur `docker` und `timeout` durch Mitschreiber und vergleicht die tatsächliche
+  Argumentliste des Claude-Containers: Einhängungen genau Sicht, Installation und Einstellungen (nie
+  `RUNNER_TEMP`, Checkout oder `a6-claude-arbeit`), `--tools "Read,Edit"`, `--settings` mit der erzeugten
+  Datei, `--setting-sources ""`, `--permission-mode dontAsk`, `--strict-mcp-config`, der vollständige
+  Aufruf als feste Liste. Dazu Tests der Sicht mit 13 Manipulationen und der strengen Profilpfade.
+- **Belegt (lokal, gepinntes Image, Node 24.22.2, Stand der Nachbesserung):** Eigentümerstand strenges
+  Profil 811 Tests, 807 grün, 0 rot, 4 übersprungen, Abnahme und Build grün; normales Profil 811 Tests,
+  809 grün, 0 rot, 2 übersprungen. Bot-Stand: rot genau die fünf Eigentümer-Anker. Emulation aller
+  Probejobs mit wortgleichen run-Blöcken, echtem Docker, getrennten RUNNER_TEMP und Artefaktkopien:
+  Job 0 bis 3 mit gleichem Paket-SHA-256, 17 Negativfälle am vorgesehenen Code, zehn Manipulationen der
+  Sicht abgelehnt bei unverändertem Arbeitsordner, erlaubte Änderung übernommen, P6, N1/N2, S1, S2/S4,
+  K1b mit Gegenprobe, C (401 und 403), Sammelkette. Das echte Claude Code 2.1.326 erreicht mit allen
+  Schaltern und nur einem Platzhalter den Vorschaltcontainer über `http` und erhält 401 (kein gültiger
+  Aufruf, keine Kosten). 34 Gegenproben mit Rückbau per SHA-256, bei Entwurfsmutationen mit nachgezogenen
+  Ankern, jede rot am vorgesehenen Wächter; einzeln gedeckte Schichten (L2) sind als solche ausgewiesen.
+- **Erst auf dem Eigentümer-PR belegbar:** dass GitHub `agent-auftrag.yml` auf seinem eigenen PR startet
+  (sonst Ausweichlösung b), die Probejobs in echten Actions-Läufen mit echten Artefakten, das Verhalten
+  des flachen Checkouts in Job 3 (Prüf-Checkout aus dem Checkout), Docker-Netze auf dem Runner.
+- **Erst nach dem Merge oder mit gesonderter Freigabe:** K3-Messung (echtes `issues.labeled`), K1a
+  (echter Claude-Lauf, Kosten), K4, P-2 bis P-5, Live 1, Live 2, NF1 bis NF3.
+- **Status:** P-1 in Vorbereitung. Bot-Draft-PR bewusst rot bis zum Eigentümer-Commit, nicht mergefähig,
+  wird nie separat gemergt. Keine Aktivierung, kein Claude-Lauf, keine Secrets, keine Änderung an
+  Rulesets oder Environments. Eine Ausnahme für den Eigentümer-PR von P-1 ist weder genehmigt noch
+  ausgeführt.
 
 **Verschoben:** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach
 Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele
@@ -676,6 +768,9 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 | 13.11.2026 | **A6.3-1 abgeschlossen:** PR #61, Merge-Commit `ce5c3a34fd922e56feb6ff3d0fc4c3bcc956bcee`. **A6.3-2 abgeschlossen:** PR #62, Merge `a8d2052c86d965153c264c9a326fc5a1fa5719fd`, unabhängige adversariale Abschlussprüfung bestanden. Zwei-Profile-Trockenlauf vollständig offline (`test/agent-code-auftrag-zwei-profile.test.mjs`): beide Profile auf gemeinsamem synthetischem Ausgangscommit erfolgreich, vollständige allgemeine Auftragskette offline geprüft, simulierter Job 2 und Job 3 tatsächlich getrennte Node-Prozesse, Paket-SHA-256 über die Prozessgrenze identisch; die Übergabe nutzt ausschließlich die Paketdatei und eine SHA-256-Textdatei. Keine produktive Workflow-Einbindung. Das echte Profil `js-text` bleibt auf `main` inaktiv. **Damit ist A6.3 insgesamt abgeschlossen.** | Die echte GitHub-Actions-Übergabe von Paket v2 bleibt Pflicht für A6.4 (Generalprobe). In A6.3 kein Workflow-Patch, keine reale Profilaktivierung und keine echten Abnahme-PRs. |
 | 13.11.2026 | **A6.4-S abgeschlossen:** PR #63, Merge `17b33909d362a8213b7353444d6e9dfe275af640`. Eigentümer-PR von `noah04091`, gesondert freigegebene Anwendung. Sperrung des Jobs `agentenlauf` in `.github/workflows/claude-agent.yml` über `false &&` als erste Zeile der Job-Bedingung; neuer Wächtertest `test/claude-agent-sperre.test.mjs` mit vollständigem Workflow-Fingerabdruck. Unabhängige Prüfung mit Urteil A, positive Tests und negative Mutationsproben bestanden, GitHub-Pflichtprüfungen vor dem Merge erfolgreich. Gemergt über die bewusst gewählte administrative Merge-Ausnahme durch Noah; das ist **keine** reguläre unabhängige Code-Owner-Freigabe. Keine produktive Claude-Ausführung durch diesen PR. A6.4 insgesamt bleibt offen. | Der alte Agent startet bei passenden Issue-Labels nicht mehr (Pflichtpunkt 9). Die allgemeine A6-Auftragskette ist weiterhin nicht produktiv in GitHub Actions eingebunden. |
 
+| 17.11.2026 | **E1 mit Vorbehalt (A6-Abschlussplan F2, Abschnitt 0):** Claude läuft als gepinntes Claude Code direkt im Container statt über die Action, nur am internen Docker-Netz hinter einem Vorschaltcontainer, der allein den Schlüssel setzt; Werkzeugrechte in drei Schichten (`--tools "Read,Edit"`, geschützte `--settings` mit `--setting-sources ""`, `--strict-mcp-config`, `--permission-mode dontAsk`, `allow` nur mit Pfad). Vorbehalt: Scheitert K1a oder der Nachweis über den Vorschaltcontainer, wird angehalten und neu entschieden, nicht abgeschwächt. | Die Action arbeitet im Checkout, legt Zugangsdaten in die Umgebung und führt Post-Schritte aus (F1, F2, F7). Die Schalter sind für die gepinnte Version 2.1.326 per `--help` im Container belegt; `--max-turns` fehlt in der Hilfe, wird aber angenommen. |
+| 17.11.2026 | **Physisch getrennte Sicht für Claude (Nachbesserung P-1):** Claude bekommt als einzigen beschreibbaren Mount `RUNNER_TEMP/a6-claude-sicht` mit genau den Profildateien; `a6-claude-arbeit` mit dem vollständigen Ausgangsbaum bleibt außerhalb des Containers und unverändert Grundlage von Job 1b. Rückkopie nur nach beendetem Container und vollständiger strenger Prüfung, nur in vorhandene Profilpfade. | Werkzeugrechte allein sind keine physische Grenze; `prepareWorkspace` legt den ganzen Baum an. Die Lösung kommt ohne Änderung an `scripts/` und an den Policy-Hashes aus. |
+
 ## 11. Offene Entscheidungen für Noah
 
 1. Die lokale Skill-Regel „Den Zweig aktualisiert immer der Agent, nie Noah“ (liegt als Patch im Archiv) aktiv übernehmen?
@@ -689,6 +784,7 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 9. Vor A6.6: Ausgabenlimit auf dem Anthropic-Schlüssel setzen? Empfehlung: ja.
 10. Falls K1 zeigt, dass sich Lesen nicht verlässlich begrenzen lässt: A6.6 erst nach Umbau auf Claude Code im Container? Empfehlung: ja, vorab festlegen.
 11. K4: Workload Identity Federation einführen, und neue Live-Läufe erst nach der Schlüsselerneuerung am 02.12.2026? Empfehlung: Entscheidung zusammen mit W1.
+12. ~~P-1, Befund 2: Claude-Arbeitsordner physisch verengen~~ entschieden 17.11.2026: eigene Sicht nur mit den Profildateien, ohne Änderung an `scripts/` oder der Policy, siehe Abschnitt 10 und Abschnitt A6 P-1.
 
 ## 12. Einstieg für eine neue Claude-Code-Sitzung
 

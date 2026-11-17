@@ -1593,13 +1593,26 @@ test('Laufzeit: ohne import.meta.main endet jeder Start mit job-umgebung-fehlt; 
   assert.equal(typeof import.meta.main, 'boolean', 'diese Probe setzt ein Node mit import.meta.main voraus');
 });
 
-test('Wache: kein Workflow ruft die Job-Einstiege auf; genau diese fuenf Einstiege und die Hilfsdatei, keine weitere Jobdatei', () => {
+// A6 P-1: Einzige Ausnahme ist agent-auftrag.yml mit genau dem genehmigten SHA-256 (Zeilenenden LF). Jede
+// andere Fassung und jeder andere Workflow, der auf einen Job-Einstieg verweist, bleibt rot.
+const A6_WORKFLOW_SHA256 = '42380583a6feb11ffcc88bf410b9f92e0e8ef009e50669fe7a4a94ade17dc125';
+// Ausweichfassung (b) von code-pilot-trockenlauf.yml mit denselben Probejobs; nur genau diese Fassung.
+const A6_AUSWEICH_SHA256 = '33a9eb3d567f3e510705bf81983eccc4fd5456c7169542c4a3d34308aaaedede';
+
+test('Wache: ausser dem genehmigten agent-auftrag.yml ruft kein Workflow die Job-Einstiege auf; genau diese fuenf Einstiege und die Hilfsdatei, keine weitere Jobdatei', () => {
   const workflows = join(ROOT, '.github', 'workflows');
   const files = readdirSync(workflows).filter(name => /\.ya?ml$/.test(name));
   assert.ok(files.length >= 10, 'Gegenprobe: zu wenige Workflows gefunden');
-  assert.ok(files.some(name => readFileSync(join(workflows, name), 'utf8').includes('agent-code-package')), 'Gegenprobe ohne Treffer');
-  assert.ok(files.every(name => !/agent-code-job|agent-auftrag\.yml/.test(readFileSync(join(workflows, name), 'utf8'))), 'ein Workflow verweist auf einen Job-Einstieg');
-  assert.ok(!files.includes('agent-auftrag.yml'), 'Workflow agent-auftrag.yml darf in A6.4-2c-1 nicht existieren');
+  const text = name => readFileSync(join(workflows, name), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(files.some(name => text(name).includes('agent-code-package')), 'Gegenprobe ohne Treffer');
+
+  if (files.includes('agent-auftrag.yml')) {
+    assert.equal(sha256(Buffer.from(text('agent-auftrag.yml'), 'utf8')), A6_WORKFLOW_SHA256, 'agent-auftrag.yml ist nicht der genehmigte Stand');
+  }
+
+  const genehmigt = name => name === 'agent-auftrag.yml' || (name === 'code-pilot-trockenlauf.yml' && sha256(Buffer.from(text(name), 'utf8')) === A6_AUSWEICH_SHA256);
+  const andere = files.filter(name => !genehmigt(name));
+  assert.ok(andere.every(name => !/agent-code-job|agent-auftrag\.yml/.test(text(name))), 'ein Workflow verweist auf einen Job-Einstieg');
 
   // Kein anderes Skript verweist auf die Job-Skripte.
   const names = readdirSync(SCRIPTS).filter(name => name.endsWith('.mjs'));

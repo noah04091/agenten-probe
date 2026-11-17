@@ -4,6 +4,6 @@
   "description": "Testumgebung für den Ablauf Issue, Agent, Pull Request, Tests, Freigabe. Kein Produktcode.",
   "scripts": {
     "test": "node --test",
-    "build": "node --check src/rechne.js"
+    "build": "node --check src/rechne.js && node --check src/text.js"
   }
 }
