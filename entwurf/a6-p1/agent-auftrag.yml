@@ -76,6 +76,24 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
 
+      # K3: protokolliert nur SHA-256-Werte von drei Feldern der unveraenderten Ereignisdatei, nie Rohwerte.
+      # Gehasht wird genau die Ausgabe von jq -c samt Zeilenende; body null ergibt den Hash von "null".
+      # Alle Hashes entstehen vor der ersten Ausgabe, ein Fehler in jq oder sha256sum bricht ohne Ausgabe ab.
+      - name: K3 Nutzlast-Hashes protokollieren
+        run: |
+          set -euo pipefail
+          test -f "$GITHUB_EVENT_PATH"
+          jq -e '(.issue | type) == "object" and (.issue | has("title") and has("body") and has("updated_at"))' "$GITHUB_EVENT_PATH" > /dev/null
+          title_sha256="$(jq -c '.issue.title' "$GITHUB_EVENT_PATH" | sha256sum | cut -d ' ' -f 1)"
+          body_sha256="$(jq -c '.issue.body' "$GITHUB_EVENT_PATH" | sha256sum | cut -d ' ' -f 1)"
+          updated_at_sha256="$(jq -c '.issue.updated_at' "$GITHUB_EVENT_PATH" | sha256sum | cut -d ' ' -f 1)"
+          for wert in "$title_sha256" "$body_sha256" "$updated_at_sha256"; do
+            [[ "$wert" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          done
+          printf 'A6-NUTZLAST title %s\n' "$title_sha256"
+          printf 'A6-NUTZLAST body %s\n' "$body_sha256"
+          printf 'A6-NUTZLAST updated_at %s\n' "$updated_at_sha256"
+
       - name: Auftrag pruefen und Schnappschuss erzeugen
         id: einstieg
         env:
