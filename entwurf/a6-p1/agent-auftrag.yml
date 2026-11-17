@@ -1,0 +1,793 @@
+name: Agent-Auftrag
+
+# A6 P-1. Entwurf, Ziel .github/workflows/agent-auftrag.yml (Name fest nach
+# scripts/agent-code-job-gemeinsam.mjs WORKFLOW_REF).
+#
+# Zwei getrennte Pfade:
+# - Live-Pfad (nur issues.labeled bot-auftrag auf main): Job 0 laeuft ohne Secrets. Job 1 bis 3 sind
+#   mit "false &&" abgeschaltet und zusaetzlich an issues und refs/heads/main gebunden; Secrets gibt es
+#   nur ueber das Environment claude-bot, das nur main freigibt.
+# - Generalprobe (nur pull_request aus diesem Repository): eigene Jobs ohne Environment, ohne Secrets,
+#   nur contents: read. Die unveraenderten Einstiege laufen mit synthetischem Umgebungsvertrag gegen ein
+#   nachgebautes GitHub; statt Claude schreibt ein fester Ersatz das Testpaket.
+# Jeder Einstieg startet ueber a6_container aus .github/agent/a6-funktionen.sh: festes Node-Image,
+# leere Umgebung ausser den genannten Namen, fester PATH, Checkout nur lesbar, aeusserer Anker des
+# Integritaetspruefers, dann Integritaetspruefer, dann Einstieg. Die Funktionsdatei wird nur nach dem
+# Vergleich mit A6_FUNKTIONEN_SHA256 geladen.
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.event_name == 'issues' && 'agent-auftrag-live' || format('agent-auftrag-probe-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  A6_FUNKTIONEN_SHA256: 994edb66878ac250923346da5d8175159b3650f1b5909b5c33669cb5e76cc3b1
+  A6_INTEGRITAET_SHA256: f345b7c75cd24670073d7462419290fae3f139e3c3e2fd8390a241a9c1ab003f
+  A6_PROBE_SHA256: 2cad8a9e00512e41b8fddd222df60562e2978544dd97e1600e2cb3ee45f31ca7
+  A6_ATTRAPPE_SHA256: 5a47138a8f702b8b0ffbf34844d4fcb00b76fd5e03156e76b3a6009645b96861
+  A6_ERSATZ_SHA256: 4cc25d2965be98898eb95aee7031152b7638f973c66f773c4da92ead7fd9f477
+  A6_CC_PAKET_SHA256: 411c6bca803f5734aedc66b163a29664580fb590bf7083add0010925bd70e109
+  A6_CC_SPERRE_SHA256: 388cfe18fce9900a47eddfa373561cc128994a17bccb59d2a1be6fffb9f537d2
+  A6_CC_VERSION: 2.1.326
+  A6_NODE_IMAGE: node@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40
+  A6_NODE_VERSION: v24.22.2
+  A6_PROXY_IMAGE: nginxinc/nginx-unprivileged@sha256:7377697a821c131a924a7105fafbe7414db4e9fcc77a6f08f776f33f141ec3f8
+
+jobs:
+  # -------------------------------------------------------------------------------------------------
+  # Live-Pfad
+  # -------------------------------------------------------------------------------------------------
+
+  auftrag:
+    name: Job 0 Auftrag festlegen
+    if: >-
+      github.event_name == 'issues' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'noah04091/agenten-probe' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'bot-auftrag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+      pull-requests: read
+    outputs:
+      auftrag_sha256: ${{ steps.einstieg.outputs.auftrag_sha256 }}
+      schnappschuss_sha256: ${{ steps.einstieg.outputs.schnappschuss_sha256 }}
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Auftrag pruefen und Schnappschuss erzeugen
+        id: einstieg
+        env:
+          A6_LESE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          a6_image_laden "$A6_NODE_IMAGE"
+          a6_container bridge "" agent-code-job-auftrag.mjs \
+            GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_EVENT_PATH GITHUB_RUN_ID GITHUB_RUN_ATTEMPT \
+            GITHUB_SHA GITHUB_WORKFLOW_REF GITHUB_OUTPUT A6_LESE_TOKEN
+
+      - name: Schnappschuss als Artefakt sichern
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: a6-auftrag-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-auftrag/schnappschuss.json
+          if-no-files-found: error
+          retention-days: 1
+
+  claude:
+    name: Job 1 Claude im Container
+    needs: auftrag
+    # SCHALTER: bis P-4 abgeschaltet.
+    if: >-
+      false &&
+      github.event_name == 'issues' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'noah04091/agenten-probe' &&
+      needs.auftrag.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment:
+      name: claude-bot
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+      pull-requests: read
+    outputs:
+      paket_sha256: ${{ steps.nach.outputs.paket_sha256 }}
+    env:
+      A6_AUFTRAG_SHA256: ${{ needs.auftrag.outputs.auftrag_sha256 }}
+      A6_SCHNAPPSCHUSS_SHA256: ${{ needs.auftrag.outputs.schnappschuss_sha256 }}
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Schnappschuss aus Job 0 laden
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: a6-auftrag-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-auftrag
+          digest-mismatch: error
+
+      - name: Job 1a Auftrag erneut pruefen und Arbeitsordner anlegen
+        id: vor
+        env:
+          A6_LESE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          a6_image_laden "$A6_NODE_IMAGE"
+          a6_container bridge "" agent-code-job-claude-vor.mjs \
+            GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA \
+            GITHUB_WORKFLOW_REF GITHUB_OUTPUT A6_AUFTRAG_SHA256 A6_SCHNAPPSCHUSS_SHA256 A6_LESE_TOKEN
+
+      - name: Claude Code aus der Sperrdatei installieren, ohne Schluessel
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          printf '%s  %s\n' "$A6_CC_PAKET_SHA256" .github/agent/claude-code/package.json \
+            "$A6_CC_SPERRE_SHA256" .github/agent/claude-code/package-lock.json | sha256sum -c --status
+          a6_claude_installieren "$GITHUB_WORKSPACE" "$RUNNER_TEMP/a6-claude-code"
+          a6_grenzen "$GITHUB_WORKSPACE" "$RUNNER_TEMP/a6-auftrag/schnappschuss.json"
+          a6_einstellungen "$GITHUB_WORKSPACE" "$RUNNER_TEMP/a6-claude-arbeit" "$RUNNER_TEMP/a6-claude-einstellungen/settings.json"
+
+      - name: Claude im internen Netz hinter dem Vorschaltcontainer ausfuehren
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          A6_PROMPT: ${{ steps.vor.outputs.prompt }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          a6_image_laden "$A6_PROXY_IMAGE"
+          a6_grenzen "$GITHUB_WORKSPACE" "$RUNNER_TEMP/a6-auftrag/schnappschuss.json"
+          a6_proxy_starten
+          export A6_ZEITLIMIT="${A6_LAUFZEIT}m"
+          printf '%s' "$A6_PROMPT" | a6_claude_aufruf "$RUNNER_TEMP/a6-claude-protokoll.jsonl"
+          jq -s -e 'map(select(.type == "result")) | length == 1 and .[0].is_error == false' \
+            "$RUNNER_TEMP/a6-claude-protokoll.jsonl" > /dev/null
+          jq -s -r 'map(select(.type == "result"))[0] | "Claude beendet: Runden \(.num_turns), Kosten \(.total_cost_usd) USD"' \
+            "$RUNNER_TEMP/a6-claude-protokoll.jsonl"
+
+      - name: Claude-Container, Vorschaltcontainer und Netze entfernen
+        if: always()
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          a6_aufraeumen
+          test -z "$(docker ps -aq --filter 'name=^a6-')"
+
+      - name: Frischen Checkout fuer Job 1b laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Job 1b Paket bauen und auf Geheimnisse pruefen
+        id: nach
+        env:
+          A6_VERGLEICH_ANTHROPIC: ${{ secrets.ANTHROPIC_API_KEY }}
+          A6_VERGLEICH_LESE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          a6_container none "" agent-code-job-claude-nach.mjs \
+            GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA \
+            GITHUB_WORKFLOW_REF GITHUB_OUTPUT A6_AUFTRAG_SHA256 A6_SCHNAPPSCHUSS_SHA256 \
+            A6_VERGLEICH_ANTHROPIC A6_VERGLEICH_LESE_TOKEN
+
+      - name: Paket als Artefakt sichern
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: a6-paket-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-paket/paket-v2.json
+          if-no-files-found: error
+          retention-days: 1
+
+  abnahme:
+    name: Job 2 Abnahme ohne Netz
+    needs: [auftrag, claude]
+    # SCHALTER: bis P-4 abgeschaltet.
+    if: >-
+      false &&
+      github.event_name == 'issues' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'noah04091/agenten-probe' &&
+      needs.auftrag.result == 'success' &&
+      needs.claude.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions: {}
+    env:
+      A6_AUFTRAG_SHA256: ${{ needs.auftrag.outputs.auftrag_sha256 }}
+      A6_SCHNAPPSCHUSS_SHA256: ${{ needs.auftrag.outputs.schnappschuss_sha256 }}
+      A6_PAKET_SHA256: ${{ needs.claude.outputs.paket_sha256 }}
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Schnappschuss laden
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: a6-auftrag-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-auftrag
+          digest-mismatch: error
+
+      - name: Paket laden
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: a6-paket-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-paket
+          digest-mismatch: error
+
+      - name: Job 2 unabhaengige Abnahme
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          a6_image_laden "$A6_NODE_IMAGE"
+          a6_container none "" agent-code-job-abnahme.mjs \
+            GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA \
+            GITHUB_WORKFLOW_REF A6_AUFTRAG_SHA256 A6_SCHNAPPSCHUSS_SHA256 A6_PAKET_SHA256
+
+  veroeffentlichen:
+    name: Job 3 Draft-PR veroeffentlichen
+    needs: [auftrag, claude, abnahme]
+    # SCHALTER: bis P-4 abgeschaltet. Kein always(): nur nach erfolgreichem Job 2.
+    if: >-
+      false &&
+      github.event_name == 'issues' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'noah04091/agenten-probe' &&
+      needs.auftrag.result == 'success' &&
+      needs.claude.result == 'success' &&
+      needs.abnahme.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: claude-bot
+    permissions:
+      contents: read
+    env:
+      A6_AUFTRAG_SHA256: ${{ needs.auftrag.outputs.auftrag_sha256 }}
+      A6_PAKET_SHA256: ${{ needs.claude.outputs.paket_sha256 }}
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Paket laden
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: a6-paket-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-paket
+          digest-mismatch: error
+
+      - name: Getrennten Pruef-Checkout anlegen
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git clone -q --no-local --no-checkout "$GITHUB_WORKSPACE" "$RUNNER_TEMP/a6-veroeffentlichung-pruefung"
+          git -C "$RUNNER_TEMP/a6-veroeffentlichung-pruefung" checkout -q --detach "$GITHUB_SHA"
+
+      - name: Kurzlebiges App-Token nur fuer diesen Job erzeugen
+        id: app_token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: noah04091
+          repositories: agenten-probe
+          permission-contents: write
+          permission-issues: read
+          permission-pull-requests: write
+
+      - name: Job 3 Draft-PR veroeffentlichen
+        env:
+          A6_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          a6_image_laden "$A6_NODE_IMAGE"
+          a6_container bridge "" agent-code-job-veroeffentlichen.mjs \
+            GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_EVENT_PATH GITHUB_RUN_ID GITHUB_RUN_ATTEMPT \
+            GITHUB_SHA GITHUB_WORKFLOW_REF A6_AUFTRAG_SHA256 A6_PAKET_SHA256 A6_APP_TOKEN
+
+  # -------------------------------------------------------------------------------------------------
+  # Generalprobe: nur pull_request aus diesem Repository, ohne Environment, ohne Secrets
+  # -------------------------------------------------------------------------------------------------
+
+  probe_auftrag:
+    name: Generalprobe Job 0
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      basis_sha: ${{ steps.probe.outputs.basis_sha }}
+      auftrag_sha256: ${{ steps.probe.outputs.auftrag_sha256 }}
+      schnappschuss_sha256: ${{ steps.probe.outputs.schnappschuss_sha256 }}
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Job 0 mit falschem git und NODE_OPTIONS in der Aufruferumgebung
+        id: probe
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          a6_image_laden "$A6_NODE_IMAGE"
+          O="$RUNNER_TEMP/a6-probe"
+          a6_probe schritt auftrag-vorbereiten "$O"
+
+          # S2 und S4: ein falsches git und ein Vorlader liegen in der Umgebung des Aufrufers.
+          F="$RUNNER_TEMP/a6-falsch"
+          mkdir -p "$F/bin"
+          printf '#!/bin/sh\ntouch "%s"\nexit 1\n' "$F/git-lief" > "$F/bin/git"
+          chmod +x "$F/bin/git"
+          printf 'require("node:fs").writeFileSync("%s", "x");\n' "$F/vorlader-lief" > "$F/vorlader.cjs"
+          # Gegenprobe: beide wirken, wenn man sie laesst.
+          ( PATH="$F/bin:$PATH" git --version || true )
+          test -e "$F/git-lief"
+          NODE_OPTIONS="--require $F/vorlader.cjs" node -e '' && test -e "$F/vorlader-lief"
+          rm "$F/git-lief" "$F/vorlader-lief"
+
+          (
+            a6_kontrakt_laden "$O/kontrakt.env"
+            export PATH="$F/bin:$PATH" NODE_OPTIONS="--require $F/vorlader.cjs"
+            a6_container none generalprobe/github-attrappe.mjs agent-code-job-auftrag.mjs \
+              GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_EVENT_PATH GITHUB_RUN_ID GITHUB_RUN_ATTEMPT \
+              GITHUB_SHA GITHUB_WORKFLOW_REF GITHUB_OUTPUT A6_LESE_TOKEN
+          )
+          test ! -e "$F/git-lief"
+          test ! -e "$F/vorlader-lief"
+          echo "S2/S4: falsches git und Vorlader blieben ohne Wirkung."
+          a6_probe schritt auftrag-auswerten "$O" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Probeartefakt Job 0 sichern
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: a6-probe-auftrag-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-probe/artefakt/
+          if-no-files-found: error
+          retention-days: 1
+
+  probe_claude:
+    name: Generalprobe Job 1 mit Ersatz statt Claude
+    needs: probe_auftrag
+    if: needs.probe_auftrag.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      paket_sha256: ${{ steps.nach.outputs.paket_sha256 }}
+    env:
+      P_BASIS: ${{ needs.probe_auftrag.outputs.basis_sha }}
+      P_AUFTRAG: ${{ needs.probe_auftrag.outputs.auftrag_sha256 }}
+      P_SCHNAPPSCHUSS: ${{ needs.probe_auftrag.outputs.schnappschuss_sha256 }}
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Probeartefakt Job 0 laden
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: a6-probe-auftrag-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-probe-art-auftrag
+          digest-mismatch: error
+
+      - name: Job 1a
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          a6_image_laden "$A6_NODE_IMAGE"
+          O="$RUNNER_TEMP/a6-probe"
+          a6_probe schritt claude-vorbereiten "$O" "$RUNNER_TEMP/a6-probe-art-auftrag" "$P_BASIS" "$P_AUFTRAG" "$P_SCHNAPPSCHUSS"
+          (
+            a6_kontrakt_laden "$O/kontrakt.env"
+            a6_container none generalprobe/github-attrappe.mjs agent-code-job-claude-vor.mjs \
+              GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA \
+              GITHUB_WORKFLOW_REF GITHUB_OUTPUT A6_AUFTRAG_SHA256 A6_SCHNAPPSCHUSS_SHA256 A6_LESE_TOKEN
+          )
+
+      - name: Claude-Container hinter dem Vorschaltcontainer (Platzhalter, Ersatz, Isolation)
+        env:
+          ANTHROPIC_API_KEY: a6-probe-platzhalter-ungueltig-0000000000
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          printf '%s  %s\n' "$A6_ERSATZ_SHA256" generalprobe/claude-ersatz.mjs | sha256sum -c --status
+          a6_image_laden "$A6_NODE_IMAGE"
+          a6_image_laden "$A6_PROXY_IMAGE"
+          O="$RUNNER_TEMP/a6-probe"
+          ERSATZ="$GITHUB_WORKSPACE/generalprobe/claude-ersatz.mjs"
+          LESEPROBE="$GITHUB_WORKSPACE/README.md"
+          export RUNNER_TEMP="$O/t"
+          CHECKOUT="$O/checkout"
+          printf '%s  %s\n' "$A6_CC_PAKET_SHA256" "$CHECKOUT/.github/agent/claude-code/package.json" \
+            "$A6_CC_SPERRE_SHA256" "$CHECKOUT/.github/agent/claude-code/package-lock.json" | sha256sum -c --status
+          a6_claude_installieren "$CHECKOUT" "$RUNNER_TEMP/a6-claude-code"
+          a6_grenzen "$CHECKOUT" "$RUNNER_TEMP/a6-auftrag/schnappschuss.json"
+          a6_einstellungen "$CHECKOUT" "$RUNNER_TEMP/a6-claude-arbeit" "$RUNNER_TEMP/a6-claude-einstellungen/settings.json"
+          a6_proxy_starten
+          export A6_ZEITLIMIT=5m
+
+          # 1. Echter Claude-Aufruf mit allen Schaltern, nur mit Platzhalter: muss den Vorschaltcontainer
+          #    ueber http erreichen und dort 401 bekommen. Kein gueltiger Aufruf, keine Kosten.
+          if printf '%s' 'Generalprobe: keine Aktion.' | a6_claude_aufruf "$O/claude-platzhalter.jsonl"; then
+            echo "FEHLER: Claude-Aufruf mit Platzhalter war erfolgreich"
+            exit 1
+          fi
+          jq -s -e '
+            (map(select(.type == "system" and .subtype == "init")) | length == 1) and
+            (map(select(.type == "system" and .subtype == "init"))[0] |
+              (.tools | sort) == ["Edit", "Read"] and .permissionMode == "dontAsk" and .mcp_servers == []) and
+            (map(select(.type == "result")) | length == 1 and .[0].is_error == true)
+          ' "$O/claude-platzhalter.jsonl" > /dev/null
+          docker logs "a6-proxy-$(a6_lauf)" 2>/dev/null | grep -E '"POST /v1/messages(\?[^ "]*)? HTTP/1\.1" .*status=401 upstream=[0-9.]+:443 upstream_status=401' > /dev/null
+          echo "C: Claude erreichte den Vorschaltcontainer, Anthropic antwortete 401 auf den Platzhalter."
+
+          # 2. Ersatz statt Claude im selben Container: Isolation (K1b), Vorschaltcontainer (C), Testpaket.
+          A6_EINHAENGEN=(--mount "type=bind,src=$ERSATZ,dst=/opt/a6/claude-ersatz.mjs,readonly")
+          a6_claude_container node /opt/a6/claude-ersatz.mjs isolation /arbeit http://a6-proxy:8080 "$ANTHROPIC_API_KEY"
+
+          # 3. Gegenprobe K1b: eine zusaetzliche Einhaengung waere sichtbar.
+          A6_EINHAENGEN+=(--mount "type=bind,src=$LESEPROBE,dst=/opt/a6/gegenprobe.md,readonly")
+          a6_claude_container node /opt/a6/claude-ersatz.mjs gegenprobe /opt/a6/gegenprobe.md
+
+      - name: Claude-Container, Vorschaltcontainer und Netze entfernen
+        if: always()
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          a6_aufraeumen
+          test -z "$(docker ps -aq --filter 'name=^a6-')"
+
+      - name: Job 1b auf frischem synthetischem Checkout
+        id: nach
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          O="$RUNNER_TEMP/a6-probe"
+          a6_probe schritt claude-nach-vorbereiten "$O" "$RUNNER_TEMP/a6-probe-art-auftrag" "$P_BASIS" "$P_AUFTRAG" "$P_SCHNAPPSCHUSS"
+          (
+            a6_kontrakt_laden "$O/kontrakt.env"
+            a6_container none "" agent-code-job-claude-nach.mjs \
+              GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA \
+              GITHUB_WORKFLOW_REF GITHUB_OUTPUT A6_AUFTRAG_SHA256 A6_SCHNAPPSCHUSS_SHA256 \
+              A6_VERGLEICH_ANTHROPIC A6_VERGLEICH_LESE_TOKEN
+          )
+          a6_probe schritt claude-auswerten "$O" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Probeartefakt Paket sichern
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: a6-probe-paket-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-probe/artefakt/paket-v2.json
+          if-no-files-found: error
+          retention-days: 1
+
+  probe_abnahme:
+    name: Generalprobe Job 2
+    needs: [probe_auftrag, probe_claude]
+    if: needs.probe_auftrag.result == 'success' && needs.probe_claude.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      P_BASIS: ${{ needs.probe_auftrag.outputs.basis_sha }}
+      P_AUFTRAG: ${{ needs.probe_auftrag.outputs.auftrag_sha256 }}
+      P_SCHNAPPSCHUSS: ${{ needs.probe_auftrag.outputs.schnappschuss_sha256 }}
+      P_PAKET: ${{ needs.probe_claude.outputs.paket_sha256 }}
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Probeartefakt Job 0 laden
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: a6-probe-auftrag-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-probe-art-auftrag
+          digest-mismatch: error
+
+      - name: Probeartefakt Paket laden
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: a6-probe-paket-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-probe-art-paket
+          digest-mismatch: error
+
+      - name: Job 2 ohne Netz, dazu S1, P6 und der aeussere Anker
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          a6_image_laden "$A6_NODE_IMAGE"
+          O="$RUNNER_TEMP/a6-probe"
+          a6_probe schritt abnahme-vorbereiten "$O" "$RUNNER_TEMP/a6-probe-art-auftrag" "$P_BASIS" "$P_AUFTRAG" "$P_SCHNAPPSCHUSS" "$P_PAKET" "$RUNNER_TEMP/a6-probe-art-paket"
+          NAMEN=(GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA
+            GITHUB_WORKFLOW_REF A6_AUFTRAG_SHA256 A6_SCHNAPPSCHUSS_SHA256 A6_PAKET_SHA256)
+
+          ( a6_kontrakt_laden "$O/kontrakt.env"; a6_container none "" agent-code-job-abnahme.mjs "${NAMEN[@]}" )
+          test "$(sha256sum "$O/t/a6-paket/paket-v2.json" | cut -d' ' -f1)" = "$P_PAKET"
+          echo "Job 2: Abnahme bestanden, Paket-SHA-256 $P_PAKET wie in Job 1b."
+
+          # P6: abweichende erwartete Node-Version wird vor jedem Einstieg abgelehnt.
+          if ( a6_kontrakt_laden "$O/kontrakt.env"; A6_NODE_VERSION=v0.0.0 a6_container none "" agent-code-job-abnahme.mjs "${NAMEN[@]}" ) 2> "$O/p6.err"; then
+            echo "FEHLER: P6 nicht abgelehnt"; exit 1
+          fi
+          grep -qx 'A6-START node-version' "$O/p6.err"
+          echo "P6: abweichende Node-Version abgelehnt."
+
+          # N1/N2: Integritaetspruefer und Policy passend veraendert; der aeussere Anker lehnt ab.
+          M="$O/mutiert"
+          cp -a "$O/checkout" "$M"
+          printf '\n// N1/N2-Probe\n' >> "$M/scripts/agent-code-integritaet.mjs"
+          NEU="$(sha256sum "$M/scripts/agent-code-integritaet.mjs" | cut -d' ' -f1)"
+          jq --arg h "$NEU" '.skript_hashes["scripts/agent-code-integritaet.mjs"] = $h' "$M/.github/agent/policy.json" > "$O/policy.neu"
+          cp "$O/policy.neu" "$M/.github/agent/policy.json"
+          if ( a6_kontrakt_laden "$O/kontrakt.env"; export GITHUB_WORKSPACE="$M"; a6_container none "" agent-code-job-abnahme.mjs "${NAMEN[@]}" ) 2> "$O/anker.err"; then
+            echo "FEHLER: veraenderter Pruefer nicht abgelehnt"; exit 1
+          fi
+          grep -qx 'A6-START anker' "$O/anker.err"
+          echo "N1/N2: veraenderter Integritaetspruefer am aeusseren Anker abgelehnt."
+
+          # S1: der Checkout ist im Einstiegscontainer nur lesbar.
+          ( a6_kontrakt_laden "$O/kontrakt.env"
+            if docker run --rm --pull=never --network none --read-only --cap-drop ALL --user "$(id -u):$(id -g)" \
+              --mount "type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE,readonly" \
+              "$A6_NODE_IMAGE" touch "$GITHUB_WORKSPACE/scripts/agent-code-job-abnahme.mjs" 2> "$O/s1.err"; then
+              echo "FEHLER: Checkout im Container beschreibbar"; exit 1
+            fi
+            grep -q 'Read-only file system' "$O/s1.err" )
+          echo "S1: Checkout im Container nur lesbar."
+
+  probe_veroeffentlichen:
+    name: Generalprobe Job 3 gegen nachgebautes GitHub
+    needs: [probe_auftrag, probe_claude, probe_abnahme]
+    if: needs.probe_abnahme.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      P_BASIS: ${{ needs.probe_auftrag.outputs.basis_sha }}
+      P_AUFTRAG: ${{ needs.probe_auftrag.outputs.auftrag_sha256 }}
+      P_SCHNAPPSCHUSS: ${{ needs.probe_auftrag.outputs.schnappschuss_sha256 }}
+      P_PAKET: ${{ needs.probe_claude.outputs.paket_sha256 }}
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Probeartefakt Job 0 laden
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: a6-probe-auftrag-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-probe-art-auftrag
+          digest-mismatch: error
+
+      - name: Probeartefakt Paket laden
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: a6-probe-paket-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/a6-probe-art-paket
+          digest-mismatch: error
+
+      - name: Job 3 ohne Netz gegen das nachgebaute GitHub
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          a6_image_laden "$A6_NODE_IMAGE"
+          O="$RUNNER_TEMP/a6-probe"
+          a6_probe schritt veroeffentlichen-vorbereiten "$O" "$RUNNER_TEMP/a6-probe-art-auftrag" "$P_BASIS" "$P_AUFTRAG" "$P_SCHNAPPSCHUSS" "$P_PAKET" "$RUNNER_TEMP/a6-probe-art-paket"
+          (
+            a6_kontrakt_laden "$O/kontrakt.env"
+            a6_container none generalprobe/github-attrappe.mjs agent-code-job-veroeffentlichen.mjs \
+              GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_EVENT_PATH GITHUB_RUN_ID GITHUB_RUN_ATTEMPT \
+              GITHUB_SHA GITHUB_WORKFLOW_REF A6_AUFTRAG_SHA256 A6_PAKET_SHA256 A6_APP_TOKEN
+          )
+          test "$(sha256sum "$O/t/a6-paket/paket-v2.json" | cut -d' ' -f1)" = "$P_PAKET"
+          a6_probe schritt veroeffentlichen-auswerten "$O"
+          echo "Job 3: genau die erwarteten Schreibaufrufe an das nachgebaute GitHub, Paket-SHA-256 $P_PAKET wie in Job 1b und 2."
+
+  probe_negativ:
+    name: Generalprobe Negativfaelle
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Jeder Negativfall scheitert an seinem Mechanismus
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          a6_image_laden "$A6_NODE_IMAGE"
+          a6_probe negativ "$RUNNER_TEMP/a6-negativ"
+
+  probe_sammel_a:
+    name: Generalprobe Sammelkette erfolgreicher Job
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Erfolg
+        run: echo "Pflichtjob erfolgreich."
+
+  probe_sammel_b:
+    name: Generalprobe Sammelkette absichtlich uebersprungener Job
+    needs: probe_sammel_a
+    if: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Nie ausgefuehrt
+        run: exit 1
+
+  probe_sammel_pruefung:
+    name: Generalprobe Sammelpruefung lehnt uebersprungenen Job ab
+    needs: [probe_sammel_a, probe_sammel_b]
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Sammelpruefung mit den echten needs-Daten
+        env:
+          R_A: ${{ needs.probe_sammel_a.result }}
+          R_B: ${{ needs.probe_sammel_b.result }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          test "$R_A" = "success"
+          test "$R_B" = "skipped"
+          if a6_sammel "probe_sammel_a=$R_A" "probe_sammel_b=$R_B" > "$RUNNER_TEMP/sammel.txt"; then
+            echo "FEHLER: Sammelpruefung hat einen uebersprungenen Pflichtjob angenommen"; exit 1
+          fi
+          test "$(cat "$RUNNER_TEMP/sammel.txt")" = "SAMMEL-FEHLER probe_sammel_b: skipped"
+          a6_sammel "probe_sammel_a=$R_A"
+          echo "Sammelpruefung: uebersprungener Pflichtjob abgelehnt, erfolgreicher angenommen."
+
+  # -------------------------------------------------------------------------------------------------
+  # Sammeljob (spaeter Pflichtcheck, P-4)
+  # -------------------------------------------------------------------------------------------------
+
+  sammel:
+    name: agent-auftrag-sammel
+    needs:
+      - auftrag
+      - claude
+      - abnahme
+      - veroeffentlichen
+      - probe_auftrag
+      - probe_claude
+      - probe_abnahme
+      - probe_veroeffentlichen
+      - probe_negativ
+      - probe_sammel_pruefung
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Pflichtjobs auswerten
+        env:
+          R_AUFTRAG: ${{ needs.auftrag.result }}
+          R_CLAUDE: ${{ needs.claude.result }}
+          R_ABNAHME: ${{ needs.abnahme.result }}
+          R_VEROEFFENTLICHEN: ${{ needs.veroeffentlichen.result }}
+          R_PROBE_AUFTRAG: ${{ needs.probe_auftrag.result }}
+          R_PROBE_CLAUDE: ${{ needs.probe_claude.result }}
+          R_PROBE_ABNAHME: ${{ needs.probe_abnahme.result }}
+          R_PROBE_VEROEFFENTLICHEN: ${{ needs.probe_veroeffentlichen.result }}
+          R_PROBE_NEGATIV: ${{ needs.probe_negativ.result }}
+          R_PROBE_SAMMEL: ${{ needs.probe_sammel_pruefung.result }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          LIVE=("auftrag=$R_AUFTRAG" "claude=$R_CLAUDE" "abnahme=$R_ABNAHME" "veroeffentlichen=$R_VEROEFFENTLICHEN")
+          if [[ "$GITHUB_EVENT_NAME" == "issues" ]]; then
+            echo "Issue-Lauf: alle vier Live-Jobs muessen erfolgreich sein."
+            a6_sammel "${LIVE[@]}"
+          else
+            echo "PR-Lauf: Live-Pfad bewusst aus, Generalprobe muss vollstaendig bestanden sein."
+            a6_sammel_uebersprungen "${LIVE[@]}"
+            a6_sammel "probe_auftrag=$R_PROBE_AUFTRAG" "probe_claude=$R_PROBE_CLAUDE" "probe_abnahme=$R_PROBE_ABNAHME" \
+              "probe_veroeffentlichen=$R_PROBE_VEROEFFENTLICHEN" "probe_negativ=$R_PROBE_NEGATIV" "probe_sammel_pruefung=$R_PROBE_SAMMEL"
+          fi

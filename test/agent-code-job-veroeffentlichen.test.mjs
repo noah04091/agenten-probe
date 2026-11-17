@@ -723,12 +723,26 @@ test('Vertrag: Job 3 liest nur die festen Namen, kennt keine Ausgabedatei und ke
 
 // A6.4-3a: Die produktive Policy liegt vor, aktiviert aber nichts. Bis der Eigentuemer-PR sie einrichtet,
 // ist dieser Test bewusst rot; er wird nicht uebersprungen.
-test('Regression: Policy vorhanden, kein A6-Workflow, kein Workflow ruft Job-Einstieg oder Integritaetspruefer auf', () => {
+// A6 P-1: Einzige Ausnahme ist agent-auftrag.yml mit genau dem genehmigten SHA-256 (Zeilenenden LF). Jede
+// andere Fassung und jeder andere Workflow mit diesen Namen bleibt rot.
+const A6_WORKFLOW_SHA256 = '62d48a31fb3506f0b569a340c6b579b6a34fc21608805744403f774ad0192818';
+// Ausweichfassung (b) von code-pilot-trockenlauf.yml mit denselben Probejobs; nur genau diese Fassung.
+const A6_AUSWEICH_SHA256 = '1a12a590c1a49c310e30114d2e21f33f86a58116a314fda8d3af16e6f0aaeac2';
+
+test('Regression: Policy vorhanden, ausser dem genehmigten agent-auftrag.yml ruft kein Workflow Job-Einstieg oder Integritaetspruefer auf', () => {
   const workflows = join(ROOT, '.github', 'workflows');
   const files = readdirSync(workflows).filter(name => /\.ya?ml$/.test(name));
   assert.ok(files.length >= 10, 'Gegenprobe: zu wenige Workflows gefunden');
-  assert.ok(!files.includes('agent-auftrag.yml'));
-  assert.ok(files.every(name => !/agent-code-job|agent-code-integritaet|A6_APP_TOKEN|A6_VERGLEICH/.test(readFileSync(join(workflows, name), 'utf8'))));
+  const text = name => readFileSync(join(workflows, name), 'utf8').replace(/\r\n/g, '\n');
+
+  if (files.includes('agent-auftrag.yml')) {
+    assert.equal(sha256(Buffer.from(text('agent-auftrag.yml'), 'utf8')), A6_WORKFLOW_SHA256, 'agent-auftrag.yml ist nicht der genehmigte Stand');
+    assert.ok(/agent-code-job-veroeffentlichen\.mjs/.test(text('agent-auftrag.yml')), 'Muss-Treffer im genehmigten Workflow');
+  }
+
+  const genehmigt = name => name === 'agent-auftrag.yml' || (name === 'code-pilot-trockenlauf.yml' && sha256(Buffer.from(text(name), 'utf8')) === A6_AUSWEICH_SHA256);
+  const andere = files.filter(name => !genehmigt(name));
+  assert.ok(andere.every(name => !/agent-code-job|agent-code-integritaet|A6_APP_TOKEN|A6_VERGLEICH/.test(text(name))));
   assert.ok(files.some(name => readFileSync(join(workflows, name), 'utf8').includes('agent-code-package')), 'Muss-Treffer der Suche');
   assert.equal(existsSync(join(ROOT, '.github', 'agent', 'policy.json')), true);
   // Das Profil js-text ist auf main weiterhin inaktiv; die Tests aktivieren es nur in temporaeren Repositories.
