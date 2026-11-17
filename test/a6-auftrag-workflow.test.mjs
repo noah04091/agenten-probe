@@ -24,7 +24,7 @@ const lies = pfad => readFileSync(join(ROOT, pfad), 'utf8').replace(/\r\n/g, '\n
 const sha256 = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
 
 // Genehmigter Stand des Workflow-Entwurfs (Zeilenenden LF). Jede Aenderung am Entwurf braucht diesen Wert neu.
-const A6_WORKFLOW_SHA256 = '42380583a6feb11ffcc88bf410b9f92e0e8ef009e50669fe7a4a94ade17dc125';
+const A6_WORKFLOW_SHA256 = '0285a05ac955714eb44f51760a1b166ca07f3fd64c69b71be2534f3b6f04d8ec';
 
 const ENTWURF = 'entwurf/a6-p1';
 const ZIELE = Object.freeze([
@@ -544,6 +544,168 @@ test('Sicht: im Workflow liegt die Sicht neben dem Arbeitsordner, Pruefung und R
   }
 
   assert.ok(FN.includes("docker ps -aq --filter 'name=^a6-claude-'"));
+});
+
+// ---------------------------------------------------------------------------
+// K3: Nutzlast-Hashes in Job 0 (nur SHA-256 von title, body, updated_at aus GITHUB_EVENT_PATH)
+// ---------------------------------------------------------------------------
+
+const K3_NAME = 'K3 Nutzlast-Hashes protokollieren';
+const K3_FELDER = Object.freeze(['title', 'body', 'updated_at']);
+const K3_SKRIPT = Object.freeze([
+  'set -euo pipefail',
+  'test -f "$GITHUB_EVENT_PATH"',
+  `jq -e '(.issue | type) == "object" and (.issue | has("title") and has("body") and has("updated_at"))' "$GITHUB_EVENT_PATH" > /dev/null`,
+  ...K3_FELDER.map(f => `${f}_sha256="$(jq -c '.issue.${f}' "$GITHUB_EVENT_PATH" | sha256sum | cut -d ' ' -f 1)"`),
+  'for wert in "$title_sha256" "$body_sha256" "$updated_at_sha256"; do',
+  '  [[ "$wert" =~ ^[0-9a-f]{64}$ ]] || exit 1',
+  'done',
+  ...K3_FELDER.map(f => `printf 'A6-NUTZLAST ${f} %s\\n' "$${f}_sha256"`),
+]);
+
+const schrittName = s => /^ {6}- name: (.+)$/m.exec(s)?.[1];
+
+// Struktur: genau zwischen Repository laden und Auftragspruefung, nur name und run, keine Interpolation,
+// kein Fehler-Verschlucken, Skript zeilengenau. Ergebnis: das Skript des Schritts.
+function k3Struktur(wf) {
+  const s = schritte(jobs(wf).get('auftrag'));
+  const namen = s.map(schrittName);
+  assert.deepEqual(namen.slice(0, 3), ['Repository laden', K3_NAME, 'Auftrag pruefen und Schnappschuss erzeugen'], `Reihenfolge in Job 0: ${namen}`);
+  assert.equal(namen.filter(n => n === K3_NAME).length, 1, 'Messschritt doppelt');
+  const k3 = s[1];
+  assert.ok(!k3.includes('${{'), 'Interpolation im Messschritt');
+  const zeilen = k3.split('\n').filter(z => z.trim() !== '');
+  assert.deepEqual(zeilen.slice(0, 2), [`      - name: ${K3_NAME}`, '        run: |'], 'Messschritt hat weitere Schluessel');
+  const skript = zeilen.slice(2);
+  assert.ok(skript.every(z => z.startsWith('          ')), 'unerwartete Zeile im Messschritt');
+  assert.deepEqual(skript.map(z => z.slice(10)), [...K3_SKRIPT], 'Skript des Messschritts weicht ab');
+  return skript.map(z => z.slice(10)).join('\n') + '\n';
+}
+
+// Ersatz fuer jq und sha256sum als Shell-Funktionen (keine ausfuehrbare Datei in /tmp noetig).
+const K3_ERSATZ = Object.freeze({
+  jq_x: 'jq() { case "$1" in -e) return 0;; -cj) printf \'"x"\';; *) printf \'"x"\\n\';; esac; }',
+  jq_fehler: 'jq() { return 5; }',
+  jq_body_fehler: 'jq() { case "$*" in *.issue.body*) return 5;; esac; if [ "$1" = -e ]; then return 0; fi; printf \'"x"\\n\'; }',
+  sha_fehler: 'sha256sum() { cat > /dev/null; return 3; }',
+});
+
+function k3Lauf(skript, ereignis, ersatz = []) {
+  const dir = mkdtempSync(join(tmpdir(), 'a6-k3-'));
+
+  try {
+    const datei = join(dir, 'ereignis.json');
+    writeFileSync(datei, typeof ereignis === 'string' ? ereignis : JSON.stringify(ereignis));
+    const vorspann = ersatz.map(n => K3_ERSATZ[n]).join('\n');
+    const r = spawnSync('bash', ['-c', `${vorspann}\n${skript}`], { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH, GITHUB_EVENT_PATH: datei } });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, eintraege: readdirSync(dir).sort() };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const k3Soll = werte => K3_FELDER.map(f => `A6-NUTZLAST ${f} ${sha256(`${werte[f]}\n`)}\n`).join('');
+const K3_EREIGNIS = { action: 'labeled', issue: { number: 83, title: 'x', body: null, updated_at: 'x' } };
+
+// Verhalten ohne echtes jq: richtige Hash-Pipeline und keine Ausgabe, sobald jq oder sha256sum scheitert.
+function k3Verhalten(skript) {
+  const x = k3Lauf(skript, K3_EREIGNIS, ['jq_x']);
+  assert.deepEqual([x.status, x.stdout], [0, k3Soll({ title: '"x"', body: '"x"', updated_at: '"x"' })], 'Hash-Ausgabe falsch');
+
+  for (const ersatz of [['jq_fehler'], ['jq_body_fehler'], ['jq_x', 'sha_fehler']]) {
+    const r = k3Lauf(skript, K3_EREIGNIS, ersatz);
+    assert.notEqual(r.status, 0, `${ersatz}: Fehler verdeckt`);
+    assert.equal(r.stdout, '', `${ersatz}: Messnachweis trotz Fehler`);
+  }
+}
+
+const k3Gesamt = wf => k3Verhalten(k3Struktur(wf));
+
+test('K3: Messschritt direkt nach Repository laden und vor der Auftragspruefung, nur Hashes, Fehler in jq ohne Ausgabe', () => {
+  k3Gesamt(WF);
+  // Job 0 hat genau vier Schritte: Laden, Messen, Auftrag pruefen, Schnappschuss sichern.
+  assert.equal(schritte(J.get('auftrag')).length, 4);
+});
+
+test('K3: mit echtem jq genau drei Hashes der jq-c-Darstellung, body null als JSON-null, nie Rohwerte, nichts ausgefuehrt', t => {
+  if (spawnSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' }).status !== 0) {
+    t.skip('jq fehlt in dieser Umgebung; Struktur und Fehlerfaelle prueft der Test davor ohne jq');
+    return;
+  }
+
+  const skript = k3Struktur(WF);
+  const titel = 'K3 "Titel" $(touch boese) `touch boese2` ; touch boese3 \u00FC';
+  const beschreibung = 'Zeile 1\nZeile 2 mit \\ und "Zitat"';
+
+  for (const [body, sollBody] of [[null, 'null'], [beschreibung, JSON.stringify(beschreibung)]]) {
+    const ereignis = { action: 'labeled', label: { name: 'bot-auftrag' }, issue: { number: 83, title: titel, body, updated_at: '2026-11-17T10:00:00Z', user: { login: 'x' } } };
+    const r = k3Lauf(skript, ereignis);
+    assert.deepEqual([r.status, r.stderr], [0, '']);
+    assert.equal(r.stdout, k3Soll({ title: JSON.stringify(titel), body: sollBody, updated_at: '"2026-11-17T10:00:00Z"' }));
+    assert.ok(!r.stdout.includes('Titel') && !r.stdout.includes('Zeile'), 'Rohwert im Protokoll');
+    assert.deepEqual(r.eintraege, ['ereignis.json'], 'Inhalt des Issues wurde ausgefuehrt');
+  }
+
+  // body null und body "null" sind verschieden.
+  assert.notEqual(sha256('null\n'), sha256('"null"\n'));
+
+  // Fehlendes Feld, fehlendes issue, kaputtes JSON, fehlende Datei: Abbruch ohne Messnachweis.
+  const ohne = feld => ({ issue: Object.fromEntries(Object.entries({ title: 't', body: null, updated_at: 'u' }).filter(([k]) => k !== feld)) });
+  for (const [name, ereignis] of [['title', ohne('title')], ['body', ohne('body')], ['updated_at', ohne('updated_at')], ['issue', { action: 'labeled' }], ['issue-kein-objekt', { issue: 'x' }], ['json', '{"issue": ']]) {
+    const r = k3Lauf(skript, ereignis);
+    assert.notEqual(r.status, 0, `${name}: angenommen`);
+    assert.equal(r.stdout, '', `${name}: Messnachweis trotz Fehler`);
+  }
+
+  const fehlt = spawnSync('bash', ['-c', skript], { encoding: 'utf8', env: { PATH: process.env.PATH, GITHUB_EVENT_PATH: '/a6-gibt-es-nicht/ereignis.json' } });
+  assert.deepEqual([fehlt.status !== 0, fehlt.stdout], [true, '']);
+});
+
+// Gegenproben: jede Mutation des Workflow-Texts muss am K3-Waechter scheitern.
+const K3_TITEL_ZEILE = `          title_sha256="$(jq -c '.issue.title' "$GITHUB_EVENT_PATH" | sha256sum | cut -d ' ' -f 1)"\n`;
+const K3_BODY_ZEILE = `          body_sha256="$(jq -c '.issue.body' "$GITHUB_EVENT_PATH" | sha256sum | cut -d ' ' -f 1)"\n`;
+const K3_BODY_AUSGABE = `          printf 'A6-NUTZLAST body %s\\n' "$body_sha256"\n`;
+const k3Block = wf => {
+  const start = wf.indexOf(`      - name: ${K3_NAME}\n`);
+  const ende = wf.indexOf('      - name: Auftrag pruefen und Schnappschuss erzeugen\n');
+  assert.ok(start > 0 && ende > start);
+  return wf.slice(start, ende);
+};
+const ersetze = (wf, alt, neu) => {
+  assert.equal(wf.split(alt).length, 2, `Mutation nicht eindeutig: ${alt}`);
+  return wf.replace(alt, () => neu);
+};
+const K3_MUTATIONEN = Object.freeze({
+  schritt_fehlt: wf => wf.replace(k3Block(wf), ''),
+  hinter_auftragspruefung: wf => {
+    const block = k3Block(wf);
+    const ohne = wf.replace(block, '');
+    const nach = ohne.indexOf('      - name: Schnappschuss als Artefakt sichern\n');
+    return ohne.slice(0, nach) + block + ohne.slice(nach);
+  },
+  interpolation_titel: wf => ersetze(wf, K3_TITEL_ZEILE, `          printf '%s' "\${{ github.event.issue.title }}" > /dev/null\n${K3_TITEL_ZEILE}`),
+  interpolation_env: wf => ersetze(wf, `      - name: ${K3_NAME}\n`, `      - name: ${K3_NAME}\n        env:\n          TITEL: \${{ github.event.issue.title }}\n`),
+  ausgabe_body_fehlt: wf => ersetze(wf, K3_BODY_AUSGABE, ''),
+  falscher_hash: wf => ersetze(wf, K3_TITEL_ZEILE, K3_TITEL_ZEILE.replace('sha256sum', 'md5sum')),
+  hash_ohne_zeilenende: wf => ersetze(wf, K3_TITEL_ZEILE, K3_TITEL_ZEILE.replace("jq -c '.issue.title'", "jq -cj '.issue.title'")),
+  pipefail_fehlt: wf => ersetze(wf, '          set -euo pipefail\n          test -f "$GITHUB_EVENT_PATH"\n', '          set -eu\n          test -f "$GITHUB_EVENT_PATH"\n'),
+  hash_in_printf: wf => ersetze(ersetze(wf, K3_BODY_ZEILE, ''), K3_BODY_AUSGABE, `          printf 'A6-NUTZLAST body %s\\n' "$(jq -c '.issue.body' "$GITHUB_EVENT_PATH" | sha256sum | cut -d ' ' -f 1)"\n`),
+  fehler_verschluckt: wf => ersetze(wf, `      - name: ${K3_NAME}\n`, `      - name: ${K3_NAME}\n        continue-on-error: true\n`),
+  rohwert_ausgabe: wf => ersetze(wf, K3_BODY_AUSGABE, `${K3_BODY_AUSGABE}          jq -r '.issue.title' "$GITHUB_EVENT_PATH"\n`),
+});
+
+test('K3: Gegenproben, jede Mutation des Messschritts scheitert am Waechter', () => {
+  for (const [name, mutation] of Object.entries(K3_MUTATIONEN)) {
+    const mutiert = mutation(WF);
+    assert.notEqual(mutiert, WF, `${name}: Mutation wirkungslos`);
+    assert.throws(() => k3Gesamt(mutiert), assert.AssertionError, `${name}: nicht erkannt`);
+  }
+
+  // Verhalten allein (ohne Strukturpruefung): diese Mutationen fallen auch beim Ausfuehren auf.
+  for (const name of ['falscher_hash', 'hash_ohne_zeilenende', 'pipefail_fehlt', 'hash_in_printf', 'ausgabe_body_fehlt']) {
+    const skript = k3Block(K3_MUTATIONEN[name](WF)).split('\n').filter(z => z.startsWith('          ')).map(z => z.slice(10)).join('\n');
+    assert.throws(() => k3Verhalten(skript), assert.AssertionError, `${name}: im Verhalten nicht erkannt`);
+  }
 });
 
 // Ausweichloesung (b): nur falls GitHub agent-auftrag.yml auf seinem eigenen PR nicht startet.
