@@ -37,7 +37,10 @@
 // - Fehler tragen feste Codes und feste Texte. Kein Text aus Netzfehlern, keine Kopfzeilen, kein Token.
 //
 // Grenzen, die dieses Modul nicht schliessen kann:
-// - Die Tokenpruefung ist nur eine Form- und Verwechslungssperre (ghs_). Herkunft, App-Installation,
+// - Die Tokenpruefung ist nur eine Form- und Verwechslungssperre (ghs_). Sie kennt genau zwei Formen:
+//   das alte Format ghs_ mit [A-Za-z0-9_] und das seit 02.10.2026 voreingestellte zustandslose Format
+//   ghs_APPID_JWT (Dezimalzahl, Unterstrich, drei base64url-Abschnitte mit zwei Punkten). Den Inhalt
+//   des JWT prueft der Transport nicht; GitHub verlangt, ihn als undurchsichtig zu behandeln. Herkunft, App-Installation,
 //   Repository-Begrenzung und Rechte des Tokens muessen A6.4-2c und A6.4-4 belegen.
 // - Die produktive TLS-Verbindung zu GitHub, echte Rate-Limits, Workflow-Einstieg, Job- und
 //   Laufbindung, Prozessbaum-Isolation und das Entfernen unerlaubter Node- und Proxy-Variablen aus
@@ -64,7 +67,9 @@ const MAX_PATH_LENGTH = 512;
 const MAX_LINK_LENGTH = 8192;
 const USER_AGENT = 'noah04091-agenten-probe-a6-transport';
 const API_VERSION = '2022-11-28';
+// Altes Format und zustandsloses Format ghs_APPID_JWT. Beide nur mit ghs_, die Obergrenze gilt fuer beide.
 const TOKEN_RE = /^ghs_[A-Za-z0-9_]+$/;
+const TOKEN_JWT_RE = /^ghs_[1-9][0-9]{0,19}_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 const RUN_ID_RE = /^[1-9][0-9]{0,15}$/;
 const BRANCH_RE = /^wp\/[1-9][0-9]{0,7}-agent-[1-9][0-9]{0,15}-1$/;
 const PATH_CHARS_RE = /^[A-Za-z0-9/._?=&-]+$/;
@@ -137,7 +142,7 @@ function readInput(input) {
   if (
     typeof fields.token !== 'string' ||
     fields.token.length > MAX_TOKEN_LENGTH ||
-    !TOKEN_RE.test(fields.token)
+    !(TOKEN_RE.test(fields.token) || TOKEN_JWT_RE.test(fields.token))
   ) {
     fail('transport-token', 'Token fehlt oder ist kein Installationstoken (ghs_)');
   }

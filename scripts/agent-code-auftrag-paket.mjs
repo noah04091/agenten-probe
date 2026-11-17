@@ -176,11 +176,15 @@ function deepFreeze(value) {
 // Geheimnispruefung
 // ---------------------------------------------------------------------------
 
-// Mindestlaengen nach dem Praefix: echte GitHub-Token haben 36 Zeichen (ghp_ und Verwandte) oder 82
-// (github_pat_), Anthropic-Schluessel deutlich mehr. 20 Zeichen trennen Token von Erwaehnungen.
+// Mindestlaengen nach dem Praefix: echte GitHub-Token haben 36 Zeichen (ghp_ und Verwandte), rund 520
+// (zustandsloses ghs_APPID_JWT) oder 82 (github_pat_), Anthropic-Schluessel deutlich mehr. 20 Zeichen
+// trennen Token von Erwaehnungen.
 const SECRET_PATTERNS = Object.freeze([
   ['anthropic-schluessel', /sk-ant-[A-Za-z0-9_-]{20,}/],
   ['github-token', /gh[psour]_[A-Za-z0-9]{20,}/],
+  // Zustandsloses Installationstoken ghs_APPID_JWT: die kurze App-ID mit Unterstrich davor wuerde das
+  // Muster oben unterbrechen. Punkte und Bindestriche gehoeren zum JWT.
+  ['github-token', /ghs_[0-9]{1,20}_[A-Za-z0-9_.-]{20,}/],
   ['github-pat', /github_pat_[A-Za-z0-9_]{20,}/],
   ['privater-schluessel', /-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z ]{0,6}-----/],
   ['aws-zugangsschluessel', /(?:AKIA|ASIA)[0-9A-Z]{16}/],

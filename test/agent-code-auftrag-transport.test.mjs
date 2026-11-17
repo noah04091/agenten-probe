@@ -245,7 +245,7 @@ test('Eingabe: Issue-Nummer nach Auftragsvertrag, Lauf-ID nach sicherem Format',
   }
 });
 
-test('Token: nur ghs_ mit [A-Za-z0-9_], begrenzte Laenge, geprueft vor jeder Anfrage', () => {
+test('Token: altes Format nur ghs_ mit [A-Za-z0-9_], begrenzte Laenge, geprueft vor jeder Anfrage', () => {
   const aufrufe = attrappe(json(200, {}));
 
   for (const make of [createReadTransport, createPublishTransport]) {
@@ -1101,6 +1101,138 @@ test('Token: in keinem Fehler, keiner Antwort und keinem Fehlerpfad sichtbar; nu
   // Antworttext ist Sache des Fachmoduls; Kopfzeilen mit Token fallen weg.
   attrappe(req => antworte(req, { kopf: ['X-Token', TOKEN, 'Authorization', TOKEN], teile: ['{}'] }));
   keinToken(await schreibe()({ method: 'GET', path: LIVE_GET[0] }));
+});
+
+// Zustandsloses Installationstoken ghs_APPID_JWT (GitHub, voreingestellt seit 02.10.2026). Alle Werte
+// sind synthetisch: Kopf und Nutzlast sind base64url aus festen Testtexten, die Signatur ist erfunden.
+const b64url = text => Buffer.from(text, 'utf8').toString('base64url');
+const JWT_KOPF = b64url('{"alg":"RS256","typ":"JWT","test":"ohne-wirkung"}');
+const JWT_NUTZLAST = b64url('{"nur":"test","ohne":"wirkung","n":123456789}');
+const JWT_SIGNATUR = 'NurTest-Signatur_ohne-Wirkung-0123456789';
+const jwtToken = (appId = '123456', signatur = JWT_SIGNATUR) => `ghs_${appId}_${JWT_KOPF}.${JWT_NUTZLAST}.${signatur}`;
+const TOKEN_JWT = jwtToken();
+
+// Kein Teil des Tokens nach dem Praefix darf in Fehlern, Ergebnissen oder Funktionen auftauchen.
+function keinJwtTeil(value, token) {
+  const texte = [inspect(value, { depth: 10, showHidden: true }), String(value?.stack ?? ''), String(value?.message ?? '')];
+
+  try {
+    texte.push(String(JSON.stringify(value)));
+  } catch {
+    // nicht serialisierbar ist hier kein Befund
+  }
+
+  const teile = [token, token.slice(4), ...token.slice(4).split(/[._]/).filter(teil => teil.length >= 8)];
+
+  for (const text of texte) {
+    for (const teil of teile) {
+      assert.ok(!text.includes(teil), 'Tokenteil offengelegt');
+    }
+  }
+}
+
+test('Token: zustandsloses Format ghs_APPID_JWT wird angenommen, mit Grenzen und nur im Authorization-Kopf', async () => {
+  // Gegenprobe: der Kopf ist wirklich base64url mit Bindestrich oder Unterstrich, sonst prueft der Test sie nicht.
+  assert.ok(TOKEN_JWT.length > 100 && TOKEN_JWT.split('.').length === 3);
+  assert.ok(/[-]/.test(TOKEN_JWT.slice(4)) && /_/.test(TOKEN_JWT.slice(4)));
+
+  const gut = [
+    TOKEN_JWT,
+    jwtToken('1'),
+    jwtToken('12'),
+    jwtToken('9'.repeat(20)),
+    'ghs_1_a.b.c',
+    'ghs_7_-.-._',
+    'ghs_42_ab-cd_ef.gh-ij_kl.mn-op_qr',
+  ];
+  const kopfUndNutzlast = `ghs_123456_${JWT_KOPF}.${JWT_NUTZLAST}.`;
+  const genau1024 = kopfUndNutzlast + 's'.repeat(1024 - kopfUndNutzlast.length);
+  assert.equal(genau1024.length, 1024);
+  gut.push(genau1024);
+
+  for (const make of [createReadTransport, createPublishTransport]) {
+    for (const token of gut) {
+      assert.equal(typeof make(input({ token })), 'function', token.length);
+    }
+  }
+
+  const schlecht = [
+    `${genau1024}s`,
+    jwtToken('0'),
+    jwtToken('0123'),
+    jwtToken('9'.repeat(21)),
+    jwtToken('12a'),
+    jwtToken(''),
+    `ghs_123456_${JWT_KOPF}.${JWT_NUTZLAST}`,
+    `ghs_123456_${JWT_KOPF}.${JWT_NUTZLAST}.${JWT_SIGNATUR}.x`,
+    `ghs_123456_${JWT_KOPF}..${JWT_SIGNATUR}`,
+    `ghs_123456_.${JWT_NUTZLAST}.${JWT_SIGNATUR}`,
+    `ghs_123456_${JWT_KOPF}.${JWT_NUTZLAST}.`,
+    `ghs_123456.${JWT_KOPF}.${JWT_NUTZLAST}.${JWT_SIGNATUR}`,
+    'ghs_1_a.b.c=',
+    'ghs_1_a+b.c.d',
+    'ghs_1_a/b.c.d',
+    'ghs_1_a.b.c:d',
+    'ghs_1_a.b.c;',
+    'ghs_1_ä.b.c',
+    'ghs_1_a.b.c ',
+    ' ghs_1_a.b.c',
+    'ghs_1_a.b c.d',
+    'ghs_1_a.b.c\n',
+    'ghs_1_a.b.c\r\nX-Boese: 1',
+    'ghs_1_a.b.c\t',
+    'ghs_1_a.b\u0000.c',
+    'ghs_1_a.b\u007f.c',
+    'ghp_123456_a.b.c',
+    'gho_123456_a.b.c',
+    'ghu_123456_a.b.c',
+    'ghr_123456_a.b.c',
+    'GHS_123456_a.b.c',
+    'github_pat_123456_a.b.c',
+    `Bearer ${TOKEN_JWT}`,
+    `${TOKEN_JWT}\n`,
+    TOKEN_JWT.replace('ghs_', 'ghp_'),
+    new String(TOKEN_JWT),
+    undefined,
+    '',
+  ];
+
+  const aufrufe = attrappe(json(200, {}));
+
+  for (const make of [createReadTransport, createPublishTransport]) {
+    for (const token of schlecht) {
+      assert.throws(() => make(input({ token })), error => {
+        assert.equal(error.name, 'OrderError', String(error));
+        assert.equal(error.code, 'transport-token');
+        keinToken(error);
+
+        if (typeof token === 'string' && token.length > 12) {
+          keinJwtTeil(error, token.trim());
+        }
+
+        return true;
+      });
+    }
+  }
+
+  assert.equal(aufrufe.length, 0, 'eine Anfrage vor der Tokenpruefung');
+
+  // Im Lauf steht das zustandslose Token nur im Authorization-Kopf, nie im Pfad, Ergebnis oder Fehler.
+  for (const make of [lese, schreibe]) {
+    const ok = attrappe(json(200, { ok: true }));
+    const transport = make({ token: TOKEN_JWT });
+    const ergebnis = await transport({ method: 'GET', path: LIVE_GET[0] });
+    assert.equal(ok.length, 1);
+    assert.equal(ok[0].options.headers.Authorization, `Bearer ${TOKEN_JWT}`);
+    assert.ok(!ok[0].options.path.includes(TOKEN_JWT.slice(4)));
+    keinJwtTeil(ergebnis, TOKEN_JWT);
+    keinJwtTeil(transport, TOKEN_JWT);
+
+    attrappe(netzfehler('ECONNREFUSED'));
+    const fehler = await make({ token: TOKEN_JWT })({ method: 'GET', path: LIVE_GET[0] }).then(() => null, error => error);
+    assert.equal(fehler?.code, 'transport-netz');
+    keinJwtTeil(fehler, TOKEN_JWT);
+  }
 });
 
 // ---------------------------------------------------------------------------
