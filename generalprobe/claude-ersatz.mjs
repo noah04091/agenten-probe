@@ -85,13 +85,14 @@ async function isolation(arbeit, proxy, platzhalter) {
   };
 
   // K1b: Dateisystem
-  // Befund P-1: prepareWorkspace legt den ganzen Baum des Ausgangscommits an. Das wird hier nicht
-  // geschoent, sondern ausgewiesen; geschuetzt sind diese Dateien nur durch die Werkzeugrechte (K1a).
+  // Physische Trennung: Der Container sieht nur die Sicht mit genau den Profildateien. Der volle
+  // Ausgangsbaum (a6-claude-arbeit) mit Abnahmen, .github/ und scripts/ liegt ausserhalb.
   const dateien = dateienUnter(arbeit);
-  melde(dateien.includes('src/rechne.js') && dateien.includes('test/rechne.test.js'), `Profildateien vorhanden (Arbeitsordner insgesamt ${dateien.length} Dateien)`);
-  const geschuetzt = dateien.filter(pfad => /^(agent-acceptance|\.github|scripts|agent-profiles)\//.test(pfad));
-  process.stdout.write(`ERSATZ-HINWEIS im Arbeitsordner sichtbar, nur durch Werkzeugrechte geschuetzt: ${geschuetzt.length} Dateien unter agent-acceptance/, .github/, scripts/, agent-profiles/\n`);
-  melde(!existsSync(join(arbeit, '.git')), 'kein .git im Arbeitsordner');
+  melde(JSON.stringify(dateien) === JSON.stringify(['src/rechne.js', 'test/rechne.test.js']), `Sicht enthaelt genau die Profildateien (${dateien.join(', ')})`);
+
+  for (const pfad of ['agent-acceptance', '.github', 'scripts', 'agent-profiles', 'package.json', '.git']) {
+    melde(!existsSync(join(arbeit, pfad)), `nicht sichtbar in der Sicht: ${pfad}`);
+  }
 
   for (const pfad of ['/home/runner', '/github', '/__w', '/var/run/docker.sock', '/run/docker.sock', '/opt/hostedtoolcache']) {
     melde(!existsSync(pfad), `nicht sichtbar: ${pfad}`);

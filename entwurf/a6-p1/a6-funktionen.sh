@@ -5,7 +5,7 @@
 # Baustein genau einmal.
 #
 # Erwartete Umgebung (vom Workflow gesetzt): A6_NODE_IMAGE, A6_NODE_VERSION, A6_PROXY_IMAGE,
-# A6_INTEGRITAET_SHA256, A6_ATTRAPPE_SHA256, A6_PROBE_SHA256, A6_ERSATZ_SHA256, A6_CC_VERSION,
+# A6_INTEGRITAET_SHA256, A6_ATTRAPPE_SHA256, A6_PROBE_SHA256, A6_ERSATZ_SHA256, A6_CC_VERSION, A6_EINSTELLUNGEN_SHA256,
 # GITHUB_WORKSPACE, RUNNER_TEMP, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT.
 
 # Laedt ein Image mit festem Digest und prueft, dass genau dieser Digest vorliegt.
@@ -146,22 +146,118 @@ a6_grenzen() {
 }
 
 # Claude-Einstellungen: geschuetzte Basis (allow leer, 38 Verbote) plus allow nur fuer die Profildateien,
-# je Read und Edit mit Pfad.
-# ACHTUNG (Befund P-1): prepareWorkspace legt den ganzen Baum des Ausgangscommits im Arbeitsordner an,
-# auch agent-acceptance/, .github/ und scripts/. Diese Dateien schuetzen hier nur die Werkzeugrechte
-# (allow nur fuer die Profildateien, dontAsk, Verbote der Basis). Belegt wird das erst durch K1a.
-# Geprueft wird: jede Profildatei ist eine gewoehnliche Datei, und es gibt kein .git.
+# je Read und Edit mit Pfad. Die Pfade gelten relativ zu /arbeit im Claude-Container, also zur Sicht.
+# Hintergrund (Befund P-1): prepareWorkspace legt im Arbeitsordner a6-claude-arbeit den ganzen Baum des
+# Ausgangscommits an. Claude bekommt deshalb nie diesen Ordner, sondern nur die Sicht (a6_sicht_anlegen).
+# Geprueft wird hier: jede Profildatei ist im Arbeitsordner eine gewoehnliche Datei, und es gibt kein .git.
 #   a6_einstellungen CHECKOUT ARBEIT ZIEL
+# Die Basis muss genau die geschuetzte Datei mit dem inline genehmigten SHA-256 A6_EINSTELLUNGEN_SHA256 sein.
+# Erzeugt wird ohne jq: der einzige Eintrag "allow": [], wird durch die Pfadregeln ersetzt, alles andere
+# bleibt byte-gleich.
 a6_einstellungen() {
   local checkout="$1" arbeit="$2" ziel="$3"
-  local datei
+  local datei pfade basis regeln="" leer='"allow": [],'
+  pfade="$(a6_profilpfade)" || return 1
   [[ ! -e "$arbeit/.git" && ! -L "$arbeit/.git" ]] || { echo "A6-CLAUDE arbeitsordner-git" >&2; return 1; }
   while IFS= read -r datei; do
-    [[ -f "$arbeit/$datei" && ! -L "$arbeit/$datei" ]] || { echo "A6-CLAUDE arbeitsordner $datei" >&2; return 1; }
-  done < <(jq -r '.[]' <<< "$A6_DATEIEN")
+    a6_echte_datei "$arbeit" "$datei" || { echo "A6-CLAUDE arbeitsordner $datei" >&2; return 1; }
+    regeln+="${regeln:+, }\"Read(./$datei)\", \"Edit(./$datei)\""
+  done <<< "$pfade"
+  printf '%s  %s\n' "$A6_EINSTELLUNGEN_SHA256" "$checkout/.github/agent/claude-settings.json" | sha256sum -c --status \
+    || { echo "A6-CLAUDE einstellungen-basis" >&2; return 1; }
+  basis="$(cat "$checkout/.github/agent/claude-settings.json"; printf x)"
+  basis="${basis%x}"
+  [[ "$basis" == *"$leer"* && "${basis#*"$leer"}" != *"$leer"* ]] || { echo "A6-CLAUDE einstellungen-allow" >&2; return 1; }
   mkdir -p "$(dirname "$ziel")"
-  jq --argjson d "$A6_DATEIEN" '.permissions.allow = [$d[] | ("Read(./" + . + ")"), ("Edit(./" + . + ")")]' \
-    "$checkout/.github/agent/claude-settings.json" > "$ziel"
+  printf '%s' "${basis/"$leer"/"\"allow\": [$regeln],"}" > "$ziel"
+}
+
+# ---------------------------------------------------------------------------------------------------
+# Sicht fuer Claude: physisch getrennter Ordner nur mit den Profildateien
+# ---------------------------------------------------------------------------------------------------
+# Die Sicht liegt als eigener Ordner direkt unter RUNNER_TEMP neben a6-claude-arbeit und wird je Lauf neu
+# und leer angelegt. Sie enthaelt genau die Profildateien (A6_DATEIEN, Form src/<name> oder test/<name>)
+# unter denselben relativen Pfaden, sodass Read(./...) und Edit(./...) unveraendert greifen. Nur sie wird
+# beschreibbar in den Claude-Container eingebunden. a6-claude-arbeit und die unabhaengige Pruefung in
+# Job 1b bleiben unveraendert.
+
+# Gewoehnliche Datei unter einem echten Wurzelordner: Elternordner echtes Verzeichnis, Datei kein Symlink,
+# genau ein Link.
+#   a6_echte_datei WURZEL PFAD
+a6_echte_datei() {
+  local wurzel="$1" datei="$2"
+  [[ -d "$wurzel" && ! -L "$wurzel" ]] || return 1
+  [[ -d "$wurzel/${datei%/*}" && ! -L "$wurzel/${datei%/*}" ]] || return 1
+  [[ -f "$wurzel/$datei" && ! -L "$wurzel/$datei" ]] || return 1
+  [[ "$(stat -c %h -- "$wurzel/$datei")" == "1" ]] || return 1
+}
+
+# Profilpfade aus A6_DATEIEN (kompakte JSON-Liste aus a6_grenzen), ohne jq und streng: jeder Eintrag genau
+# src/<name> oder test/<name>, kein Name beginnt mit einem Punkt.
+a6_profilpfade() {
+  local eintrag='"(src|test)/[A-Za-z0-9_-][A-Za-z0-9._-]*"'
+  local datei rest
+  [[ "$A6_DATEIEN" =~ ^\[$eintrag(,$eintrag)*\]$ ]] || { echo "A6-SICHT profil" >&2; return 1; }
+  rest="${A6_DATEIEN:1:${#A6_DATEIEN}-2}"
+  while IFS= read -r datei; do
+    datei="${datei#\"}"
+    datei="${datei%\"}"
+    [[ "$datei" =~ ^(src|test)/[A-Za-z0-9_-][A-Za-z0-9._-]*$ ]] || { echo "A6-SICHT pfad" >&2; return 1; }
+    printf '%s\n' "$datei"
+  done <<< "${rest//,/$'\n'}"
+}
+
+#   a6_sicht_anlegen ARBEIT SICHT
+a6_sicht_anlegen() {
+  local arbeit="$1" sicht="$2" datei pfade
+  pfade="$(a6_profilpfade)" || return 1
+  [[ ! -e "$sicht" && ! -L "$sicht" ]] || { echo "A6-SICHT vorhanden" >&2; return 1; }
+  mkdir -m 0700 "$sicht"
+  while IFS= read -r datei; do
+    a6_echte_datei "$arbeit" "$datei" || { echo "A6-SICHT quelle" >&2; return 1; }
+    [[ -d "$sicht/${datei%/*}" ]] || mkdir -m 0700 "$sicht/${datei%/*}"
+    ( set -C; cat -- "$arbeit/$datei" > "$sicht/$datei" ) || { echo "A6-SICHT kopie" >&2; return 1; }
+    chmod 0600 "$sicht/$datei"
+  done <<< "$pfade"
+}
+
+# Nach dem Claude-Lauf: Die Sicht enthaelt exakt die Elternordner und die Profildateien, nichts sonst (auch
+# nichts Verstecktes), jede Profildatei gewoehnlich und mit genau einem Link, jeder Ordner ein echtes
+# Verzeichnis. Jede Abweichung bricht ab.
+#   a6_sicht_pruefen SICHT
+a6_sicht_pruefen() {
+  local sicht="$1" pfade ist soll
+  pfade="$(a6_profilpfade)" || return 1
+  [[ -d "$sicht" && ! -L "$sicht" ]] || { echo "A6-SICHT ordner" >&2; return 1; }
+  if [[ -n "$(find "$sicht" -mindepth 1 -name $'*\n*' -print -quit)" ]]; then
+    echo "A6-SICHT name" >&2
+    return 1
+  fi
+  ist="$(find "$sicht" -mindepth 1 \( -type d -printf 'd %P\n' \) -o -printf '%y %n %P\n' | LC_ALL=C sort)"
+  soll="$( { cut -d/ -f1 <<< "$pfade" | LC_ALL=C sort -u | sed 's/^/d /'; sed 's/^/f 1 /' <<< "$pfade"; } | LC_ALL=C sort)"
+  [[ "$ist" == "$soll" ]] || { echo "A6-SICHT inhalt" >&2; return 1; }
+}
+
+# Prueft, dass kein Claude-Container mehr existiert (auch kein angehaltener).
+a6_claude_beendet() {
+  [[ -z "$(docker ps -aq --filter 'name=^a6-claude-')" ]] || { echo "A6-SICHT claude-laeuft" >&2; return 1; }
+}
+
+# Erst vollstaendige Pruefung der Sicht und aller Ziele, dann Rueckkopie der Bytes nur in die vorhandenen
+# Profilpfade von a6-claude-arbeit. Dort entsteht nichts Neues.
+#   a6_sicht_uebernehmen ARBEIT SICHT
+a6_sicht_uebernehmen() {
+  local arbeit="$1" sicht="$2" datei pfade
+  a6_sicht_pruefen "$sicht" || return 1
+  pfade="$(a6_profilpfade)" || return 1
+  while IFS= read -r datei; do
+    a6_echte_datei "$arbeit" "$datei" || { echo "A6-SICHT ziel" >&2; return 1; }
+    a6_echte_datei "$sicht" "$datei" || { echo "A6-SICHT inhalt" >&2; return 1; }
+  done <<< "$pfade"
+  while IFS= read -r datei; do
+    cat -- "$sicht/$datei" > "$arbeit/$datei"
+    cmp -s -- "$sicht/$datei" "$arbeit/$datei" || { echo "A6-SICHT rueckkopie" >&2; return 1; }
+  done <<< "$pfade"
 }
 
 # Vorschaltcontainer: zwei Netze, Schluessel nur hier (aus der Umgebung des Aufrufers, nie auf der
@@ -266,7 +362,7 @@ A6_PROXY_KONFIGURATION
 }
 
 # Der Container, in dem Claude laeuft (und in der Probe der Ersatz): nur am internen Netz, nur der
-# Arbeitsordner beschreibbar, Zusatz-Einhaengungen nur lesbar ueber das Feld A6_EINHAENGEN, kein Token,
+# Sicht (a6-claude-sicht, nur Profildateien) beschreibbar, Zusatz-Einhaengungen nur lesbar ueber das Feld A6_EINHAENGEN, kein Token,
 # nur ein Platzhalter als Schluessel. Zeitlimit A6_ZEITLIMIT (z. B. 15m), danach wird der Container entfernt.
 #   a6_claude_container BEFEHL...
 a6_claude_container() {
@@ -276,7 +372,7 @@ a6_claude_container() {
     --network "a6-intern-$lauf" --pull=never --read-only --cap-drop ALL \
     --security-opt no-new-privileges --pids-limit 256 --memory 2g --cpus 2 \
     --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 \
-    --mount "type=bind,src=$RUNNER_TEMP/a6-claude-arbeit,dst=/arbeit" \
+    --mount "type=bind,src=$RUNNER_TEMP/a6-claude-sicht,dst=/arbeit" \
     "${A6_EINHAENGEN[@]}" --workdir /arbeit \
     --env HOME=/tmp --env PATH=/usr/local/bin:/usr/bin:/bin \
     --env ANTHROPIC_BASE_URL=http://a6-proxy:8080 \

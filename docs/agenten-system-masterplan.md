@@ -662,18 +662,44 @@ Pakete werden nicht erneut geöffnet. A6.4 insgesamt ist offen.
   Der Stolperdraht der Einstiege lehnt jede `NODE_`-Variable ab (`job-gemeinsam.mjs`), jeder Start im
   Container wäre mit `job-umgebung-node` gescheitert. Gefunden erst durch die lokale Emulation der
   Probejobs; der Harness allein konnte es nicht zeigen. `a6_container` entfernt beide und prüft danach.
-- **Befund 2 (offene Entscheidung):** `prepareWorkspace` legt den ganzen Baum des Ausgangscommits im
-  Arbeitsordner an (`scripts/agent-code-auftrag-paket.mjs:1066-1073`, Kontrolle `:1080`), also auch
-  `agent-acceptance/`, `.github/` und `scripts/`. Die Annahme in Abschnitt 0 des Plans, die Abnahme liege
-  nicht im Arbeitsordner, trifft damit nicht zu. Geschützt sind diese Dateien im Claude-Container nur
-  durch die Werkzeugrechte. K1a muss deshalb gerade das Lesen der eigenen Abnahmedatei als Köder prüfen.
-  Ob der Arbeitsordner physisch auf die Profildateien verengt wird, ist vor P-4 zu entscheiden.
-- **Belegt (lokal, gepinntes Image, Node 24.22.2):** Gesamtsuite im Eigentümerstand grün; im Bot-Stand
-  rot genau die Eigentümer-Anker. Emulation aller Probejobs mit wortgleichen run-Blöcken, echtem Docker,
-  getrennten RUNNER_TEMP und Artefaktkopien: Job 0 bis 3 mit gleichem Paket-SHA-256, 17 Negativfälle am
-  vorgesehenen Code, P6, N1/N2, S1, S2/S4, K1b mit Gegenprobe, C (401 und 403), Sammelkette. Das echte
-  Claude Code 2.1.326 erreicht mit allen Schaltern und nur einem Platzhalter den Vorschaltcontainer über
-  `http` und erhält 401 (kein gültiger Aufruf, keine Kosten).
+- **Befund 2 und Architekturentscheidung (Nachbesserung P-1, abgeschlossen im Entwurf):**
+  `prepareWorkspace` legt den ganzen Baum des Ausgangscommits im Arbeitsordner an
+  (`scripts/agent-code-auftrag-paket.mjs:1066-1073`, Kontrolle `:1080`), also auch `agent-acceptance/`,
+  `.github/` und `scripts/`. Die Annahme in Abschnitt 0 des Plans, die Abnahme liege nicht im
+  Arbeitsordner, traf damit nicht zu. Entscheidung: physische Trennung ohne Änderung an `scripts/`, an
+  der Policy oder an ihren Hashes. `a6-claude-arbeit` behält den vollständigen Baum für die unveränderte
+  Prüfung in Job 1b. Claude bekommt als einzigen beschreibbaren Mount eine eigene Sicht
+  `RUNNER_TEMP/a6-claude-sicht`, je Lauf neu und leer neben dem Arbeitsordner angelegt, mit genau den
+  Profildateien unter denselben relativen Pfaden (`a6_sicht_anlegen`). Lesend eingebunden sind nur die
+  geprüfte Claude-Installation und die erzeugte Einstellungsdatei. Erst wenn kein Container
+  `a6-claude-*` mehr existiert (`a6_claude_beendet`), prüft `a6_sicht_pruefen` die Sicht: exakt die
+  Elternordner und Profildateien, nichts Verstecktes, keine Symlinks, keine Dateien mit mehr als einem
+  Link, keine Sonderdateien, keine Zeilenumbrüche in Namen. Danach prüft `a6_sicht_uebernehmen` alle
+  Ziele und kopiert erst dann die Bytes in die vorhandenen Profilpfade von `a6-claude-arbeit`; dort
+  entsteht nichts Neues. Die Einstellungen werden ohne `jq` aus der geschützten Basis erzeugt, die per
+  SHA-256 (`A6_EINSTELLUNGEN_SHA256`) gebunden ist.
+- **K1b und K1a getrennt:** K1b (Dateisystem- und Netzisolation) ist ohne Claude belegbar und in der
+  Emulation belegt: Der Container sieht genau `src/rechne.js` und `test/rechne.test.js`, nichts aus
+  `agent-acceptance/`, `.github/`, `scripts/`, `agent-profiles/`, kein `.git`, keine Runner-Pfade, keinen
+  Docker-Socket, kein Token, erreicht GitHub und Anthropic nicht direkt; Gegenprobe mit Zusatz-Mount.
+  K1a (Werkzeugverbote von Claude selbst) bleibt offen bis zur gesondert freigegebenen echten Claude-Probe.
+  Gebunden sind bis dahin der wirksame Aufruf und die Einstellungen (Wächter, siehe unten).
+- **Wächter auf den wirksamen Aufruf:** `test/a6-auftrag-workflow.test.mjs` lädt die Funktionsdatei in
+  Bash, ersetzt nur `docker` und `timeout` durch Mitschreiber und vergleicht die tatsächliche
+  Argumentliste des Claude-Containers: Einhängungen genau Sicht, Installation und Einstellungen (nie
+  `RUNNER_TEMP`, Checkout oder `a6-claude-arbeit`), `--tools "Read,Edit"`, `--settings` mit der erzeugten
+  Datei, `--setting-sources ""`, `--permission-mode dontAsk`, `--strict-mcp-config`, der vollständige
+  Aufruf als feste Liste. Dazu Tests der Sicht mit 13 Manipulationen und der strengen Profilpfade.
+- **Belegt (lokal, gepinntes Image, Node 24.22.2, Stand der Nachbesserung):** Eigentümerstand strenges
+  Profil 811 Tests, 807 grün, 0 rot, 4 übersprungen, Abnahme und Build grün; normales Profil 811 Tests,
+  809 grün, 0 rot, 2 übersprungen. Bot-Stand: rot genau die fünf Eigentümer-Anker. Emulation aller
+  Probejobs mit wortgleichen run-Blöcken, echtem Docker, getrennten RUNNER_TEMP und Artefaktkopien:
+  Job 0 bis 3 mit gleichem Paket-SHA-256, 17 Negativfälle am vorgesehenen Code, zehn Manipulationen der
+  Sicht abgelehnt bei unverändertem Arbeitsordner, erlaubte Änderung übernommen, P6, N1/N2, S1, S2/S4,
+  K1b mit Gegenprobe, C (401 und 403), Sammelkette. Das echte Claude Code 2.1.326 erreicht mit allen
+  Schaltern und nur einem Platzhalter den Vorschaltcontainer über `http` und erhält 401 (kein gültiger
+  Aufruf, keine Kosten). 34 Gegenproben mit Rückbau per SHA-256, bei Entwurfsmutationen mit nachgezogenen
+  Ankern, jede rot am vorgesehenen Wächter; einzeln gedeckte Schichten (L2) sind als solche ausgewiesen.
 - **Erst auf dem Eigentümer-PR belegbar:** dass GitHub `agent-auftrag.yml` auf seinem eigenen PR startet
   (sonst Ausweichlösung b), die Probejobs in echten Actions-Läufen mit echten Artefakten, das Verhalten
   des flachen Checkouts in Job 3 (Prüf-Checkout aus dem Checkout), Docker-Netze auf dem Runner.
@@ -743,6 +769,7 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 | 13.11.2026 | **A6.4-S abgeschlossen:** PR #63, Merge `17b33909d362a8213b7353444d6e9dfe275af640`. Eigentümer-PR von `noah04091`, gesondert freigegebene Anwendung. Sperrung des Jobs `agentenlauf` in `.github/workflows/claude-agent.yml` über `false &&` als erste Zeile der Job-Bedingung; neuer Wächtertest `test/claude-agent-sperre.test.mjs` mit vollständigem Workflow-Fingerabdruck. Unabhängige Prüfung mit Urteil A, positive Tests und negative Mutationsproben bestanden, GitHub-Pflichtprüfungen vor dem Merge erfolgreich. Gemergt über die bewusst gewählte administrative Merge-Ausnahme durch Noah; das ist **keine** reguläre unabhängige Code-Owner-Freigabe. Keine produktive Claude-Ausführung durch diesen PR. A6.4 insgesamt bleibt offen. | Der alte Agent startet bei passenden Issue-Labels nicht mehr (Pflichtpunkt 9). Die allgemeine A6-Auftragskette ist weiterhin nicht produktiv in GitHub Actions eingebunden. |
 
 | 17.11.2026 | **E1 mit Vorbehalt (A6-Abschlussplan F2, Abschnitt 0):** Claude läuft als gepinntes Claude Code direkt im Container statt über die Action, nur am internen Docker-Netz hinter einem Vorschaltcontainer, der allein den Schlüssel setzt; Werkzeugrechte in drei Schichten (`--tools "Read,Edit"`, geschützte `--settings` mit `--setting-sources ""`, `--strict-mcp-config`, `--permission-mode dontAsk`, `allow` nur mit Pfad). Vorbehalt: Scheitert K1a oder der Nachweis über den Vorschaltcontainer, wird angehalten und neu entschieden, nicht abgeschwächt. | Die Action arbeitet im Checkout, legt Zugangsdaten in die Umgebung und führt Post-Schritte aus (F1, F2, F7). Die Schalter sind für die gepinnte Version 2.1.326 per `--help` im Container belegt; `--max-turns` fehlt in der Hilfe, wird aber angenommen. |
+| 17.11.2026 | **Physisch getrennte Sicht für Claude (Nachbesserung P-1):** Claude bekommt als einzigen beschreibbaren Mount `RUNNER_TEMP/a6-claude-sicht` mit genau den Profildateien; `a6-claude-arbeit` mit dem vollständigen Ausgangsbaum bleibt außerhalb des Containers und unverändert Grundlage von Job 1b. Rückkopie nur nach beendetem Container und vollständiger strenger Prüfung, nur in vorhandene Profilpfade. | Werkzeugrechte allein sind keine physische Grenze; `prepareWorkspace` legt den ganzen Baum an. Die Lösung kommt ohne Änderung an `scripts/` und an den Policy-Hashes aus. |
 
 ## 11. Offene Entscheidungen für Noah
 
@@ -757,7 +784,7 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 9. Vor A6.6: Ausgabenlimit auf dem Anthropic-Schlüssel setzen? Empfehlung: ja.
 10. Falls K1 zeigt, dass sich Lesen nicht verlässlich begrenzen lässt: A6.6 erst nach Umbau auf Claude Code im Container? Empfehlung: ja, vorab festlegen.
 11. K4: Workload Identity Federation einführen, und neue Live-Läufe erst nach der Schlüsselerneuerung am 02.12.2026? Empfehlung: Entscheidung zusammen mit W1.
-12. P-1, Befund 2: Den Claude-Arbeitsordner vor P-4 physisch auf die Profildateien verengen, statt die übrigen Dateien des Ausgangsbaums nur über Werkzeugrechte zu schützen? Empfehlung: ja, als eigenes Paket vor K1a. Es ändert `scripts/agent-code-auftrag-paket.mjs` und damit die Policy-Hashes, gehört also in einen Eigentümer-PR.
+12. ~~P-1, Befund 2: Claude-Arbeitsordner physisch verengen~~ entschieden 17.11.2026: eigene Sicht nur mit den Profildateien, ohne Änderung an `scripts/` oder der Policy, siehe Abschnitt 10 und Abschnitt A6 P-1.
 
 ## 12. Einstieg für eine neue Claude-Code-Sitzung
 

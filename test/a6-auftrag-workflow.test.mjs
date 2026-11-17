@@ -13,8 +13,9 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -23,7 +24,7 @@ const lies = pfad => readFileSync(join(ROOT, pfad), 'utf8').replace(/\r\n/g, '\n
 const sha256 = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
 
 // Genehmigter Stand des Workflow-Entwurfs (Zeilenenden LF). Jede Aenderung am Entwurf braucht diesen Wert neu.
-const A6_WORKFLOW_SHA256 = '62d48a31fb3506f0b569a340c6b579b6a34fc21608805744403f774ad0192818';
+const A6_WORKFLOW_SHA256 = '42380583a6feb11ffcc88bf410b9f92e0e8ef009e50669fe7a4a94ade17dc125';
 
 const ENTWURF = 'entwurf/a6-p1';
 const ZIELE = Object.freeze([
@@ -111,6 +112,7 @@ test('Entwurf: jeder inline gepinnte SHA-256 stimmt mit der Datei ueberein, auch
   assert.equal(env('A6_PROBE_SHA256'), sha256(lies('generalprobe/probe.mjs')));
   assert.equal(env('A6_ATTRAPPE_SHA256'), sha256(lies('generalprobe/github-attrappe.mjs')));
   assert.equal(env('A6_ERSATZ_SHA256'), sha256(lies('generalprobe/claude-ersatz.mjs')));
+  assert.equal(env('A6_EINSTELLUNGEN_SHA256'), sha256(lies('.github/agent/claude-settings.json')));
   assert.equal(env('A6_CC_PAKET_SHA256'), sha256(lies(`${ENTWURF}/claude-code/package.json`)));
   assert.equal(env('A6_CC_SPERRE_SHA256'), sha256(lies(`${ENTWURF}/claude-code/package-lock.json`)));
   // Der aeussere Anker ist der SHA-256 der Rohbytes des Pruefers; er stimmt mit der Policy ueberein, stammt
@@ -308,8 +310,244 @@ test('Build: der Entwurf von package.json baut jede src-Datei jedes Profils', ()
   assert.deepEqual({ ...JSON.parse(lies(`${ENTWURF}/package.json`)), scripts: { ...heute.scripts, build: heute.scripts.build } }, heute);
 });
 
+// ---------------------------------------------------------------------------
+// Wirksamer Claude-Aufruf: Funktionsdatei in Bash laden, nur docker und timeout durch Mitschreiber ersetzen
+// ---------------------------------------------------------------------------
+
+const RT = '/a6-rt';
+const WS = '/a6-ws';
+
+// Fuehrt a6_claude_aufruf aus und liefert die tatsaechliche Argumentliste von "docker run".
+function wirksamerAufruf() {
+  const skript = [
+    'source "$1"',
+    'docker() { if [[ "$1" == run ]]; then printf "%s\\0" "$@" > "$2.argv"; fi; return 0; }',
+    'timeout() { while [[ "$1" == --* ]]; do shift; done; shift; "$@"; }',
+    'export RUNNER_TEMP=/a6-rt GITHUB_WORKSPACE=/a6-ws GITHUB_RUN_ID=11 GITHUB_RUN_ATTEMPT=1 A6_NODE_IMAGE=a6-image',
+    'export A6_ZEITLIMIT=5m A6_MODELL=sonnet A6_RUNDEN=8 A6_BUDGET=1.5',
+    'a6_claude_aufruf /dev/null < /dev/null',
+    'printf "NUTZER %s\\n" "$(id -u):$(id -g)"',
+  ].join('\n');
+  const ziel = join(mkdtempSync(join(tmpdir(), 'a6-aufruf-')), 'docker');
+  const r = spawnSync('bash', ['-c', skript.replace('"$2.argv"', JSON.stringify(`${ziel}.argv`)), 'probe', join(ROOT, ENTWURF, 'a6-funktionen.sh')], { encoding: 'utf8' });
+  assert.equal(r.error, undefined, 'bash nicht verfuegbar');
+  assert.equal(r.status, 0, r.stderr);
+  const argv = readFileSync(`${ziel}.argv`, 'utf8').split('\0').slice(0, -1);
+  rmSync(dirname(ziel), { recursive: true, force: true });
+  const nutzer = /^NUTZER (\d+:\d+)$/m.exec(r.stdout)[1];
+  const bild = argv.indexOf('a6-image');
+  assert.ok(bild > 0, 'Image nicht im Aufruf');
+  return { argv, nutzer, docker: argv.slice(0, bild), claude: argv.slice(bild + 1) };
+}
+
+const optionen = (liste, name) => liste.flatMap((wert, i) => (wert === name ? [liste[i + 1]] : []));
+
+test('Claude-Aufruf: Einhaengungen genau Sicht, Installation und Einstellungen, nie RUNNER_TEMP, Checkout oder Ausgangsbaum', () => {
+  const { docker } = wirksamerAufruf();
+  assert.deepEqual(optionen(docker, '--mount'), [
+    `type=bind,src=${RT}/a6-claude-sicht,dst=/arbeit`,
+    `type=bind,src=${RT}/a6-claude-code/app,dst=/opt/claude-code,readonly`,
+    `type=bind,src=${RT}/a6-claude-einstellungen/settings.json,dst=/opt/a6/settings.json,readonly`,
+  ]);
+
+  for (const m of optionen(docker, '--mount')) {
+    const quelle = /src=([^,]+)/.exec(m)[1];
+    assert.notEqual(quelle, RT, 'ganzes RUNNER_TEMP eingebunden');
+    assert.ok(!quelle.startsWith(WS), 'Checkout eingebunden');
+    assert.ok(!quelle.includes('a6-claude-arbeit'), 'vollstaendiger Ausgangsbaum eingebunden');
+  }
+
+  assert.ok(!docker.some(a => /^(-v|--volume|--volumes-from|--mount=|--tmpfs=|--privileged|--network=host)/.test(a)), 'weitere Einhaengung oder Rechte');
+  assert.deepEqual(optionen(docker, '--tmpfs'), ['/tmp:rw,nosuid,nodev,size=256m,mode=1777']);
+  assert.equal(optionen(docker, '--workdir')[0], '/arbeit');
+
+  // Zusatz-Einhaengungen im Workflow: nur lesbar und nur unter /opt/a6/.
+  const zusatz = [...WF.matchAll(/A6_EINHAENGEN\+?=\((.*)\)$/gm)].map(m => m[1]);
+  assert.ok(zusatz.length >= 2, 'Muss-Treffer: Zusatz-Einhaengungen der Probe');
+  for (const z of zusatz) {
+    assert.match(z, /^--mount "type=bind,src=\$(ERSATZ|LESEPROBE),dst=\/opt\/a6\/[a-z-]+\.(mjs|md),readonly"$/, z);
+  }
+});
+
+test('Claude-Aufruf: Werkzeuge genau Read und Edit, keine weiteren Werkzeugschalter', () => {
+  const { claude } = wirksamerAufruf();
+  assert.equal(claude[0], '/opt/claude-code/node_modules/.bin/claude');
+  assert.deepEqual(optionen(claude, '--tools'), ['Read,Edit']);
+  assert.ok(!claude.some(a => /^--(allowed-?tools|allowedTools|disallowed-?tools|disallowedTools|dangerously|add-dir|tools=)/i.test(a)), claude.join(' '));
+  // Kein Werkzeugname steht lose im Aufruf, der variadische Schalter --tools schluckt sonst Folgewerte.
+  assert.ok(!claude.some(a => /^(Bash|Write|Glob|Grep|WebFetch|WebSearch|Task|Agent|NotebookEdit)\b/.test(a)), claude.join(' '));
+});
+
+test('Claude-Aufruf: geschuetzte Einstellungen, setting-sources leer, dontAsk, strict-mcp-config', () => {
+  const { claude, docker } = wirksamerAufruf();
+  assert.deepEqual(optionen(claude, '--settings'), ['/opt/a6/settings.json']);
+  assert.deepEqual(optionen(claude, '--setting-sources'), ['']);
+  assert.deepEqual(optionen(claude, '--permission-mode'), ['dontAsk']);
+  assert.equal(claude.filter(a => a === '--strict-mcp-config').length, 1);
+  assert.ok(!claude.includes('--mcp-config'));
+  // Die Einstellungsdatei im Container ist die erzeugte Datei aus der geschuetzten Basis.
+  assert.ok(optionen(docker, '--mount').includes(`type=bind,src=${RT}/a6-claude-einstellungen/settings.json,dst=/opt/a6/settings.json,readonly`));
+  // Die erzeugte Datei: Basis unveraendert, allow nur Read und Edit mit Pfad der Profildateien.
+  const dir = mkdtempSync(join(tmpdir(), 'a6-einstellungen-'));
+
+  try {
+    const checkout = join(dir, 'checkout');
+    const arbeit = join(dir, 'arbeit');
+    mkdirSync(join(checkout, '.github', 'agent'), { recursive: true });
+    mkdirSync(join(arbeit, 'src'), { recursive: true });
+    mkdirSync(join(arbeit, 'test'), { recursive: true });
+    writeFileSync(join(checkout, '.github', 'agent', 'claude-settings.json'), readFileSync(join(ROOT, '.github', 'agent', 'claude-settings.json')));
+    writeFileSync(join(arbeit, 'src', 'rechne.js'), 'x\n');
+    writeFileSync(join(arbeit, 'test', 'rechne.test.js'), 'x\n');
+    const anker = /^ {2}A6_EINSTELLUNGEN_SHA256: ([0-9a-f]{64})$/m.exec(WF)[1];
+    const erzeuge = (ziel, a = anker) => spawnSync('bash', ['-c', 'source "$1"; a6_einstellungen "$2" "$3" "$4"', 'probe', join(ROOT, ENTWURF, 'a6-funktionen.sh'), checkout, arbeit, join(dir, ziel)], {
+      encoding: 'utf8', env: { PATH: process.env.PATH, A6_DATEIEN: '["src/rechne.js","test/rechne.test.js"]', A6_EINSTELLUNGEN_SHA256: a },
+    });
+    const r = erzeuge('aus/settings.json');
+    assert.equal(r.status, 0, r.stderr);
+    const basis = JSON.parse(lies('.github/agent/claude-settings.json'));
+    const erzeugt = JSON.parse(readFileSync(join(dir, 'aus', 'settings.json'), 'utf8'));
+    assert.deepEqual(erzeugt.permissions.allow, ['Read(./src/rechne.js)', 'Edit(./src/rechne.js)', 'Read(./test/rechne.test.js)', 'Edit(./test/rechne.test.js)']);
+    assert.deepEqual({ ...erzeugt, permissions: { ...erzeugt.permissions, allow: [] } }, basis);
+    assert.deepEqual(basis.permissions.allow, []);
+    assert.ok(basis.permissions.deny.includes('Bash') && basis.permissions.deny.length >= 38);
+    // Die Basis ist an den genehmigten SHA-256 gebunden; jede andere Basis wird abgelehnt.
+    assert.equal(anker, sha256(lies('.github/agent/claude-settings.json')));
+    const falsch = erzeuge('falsch/settings.json', 'f'.repeat(64));
+    assert.deepEqual([falsch.status, falsch.stderr], [1, 'A6-CLAUDE einstellungen-basis\n']);
+    assert.ok(!existsSync(join(dir, 'falsch', 'settings.json')));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Claude-Aufruf: der vollstaendige wirksame Aufruf ist genau festgelegt, und Claude startet nur ueber a6_claude_aufruf', () => {
+  const { argv, nutzer } = wirksamerAufruf();
+  assert.deepEqual(argv, [
+    'run', '--rm', '-i', '--name', 'a6-claude-11-1', '--network', 'a6-intern-11-1', '--pull=never', '--read-only', '--cap-drop', 'ALL',
+    '--security-opt', 'no-new-privileges', '--pids-limit', '256', '--memory', '2g', '--cpus', '2', '--user', nutzer,
+    '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m,mode=1777',
+    '--mount', `type=bind,src=${RT}/a6-claude-sicht,dst=/arbeit`,
+    '--mount', `type=bind,src=${RT}/a6-claude-code/app,dst=/opt/claude-code,readonly`,
+    '--mount', `type=bind,src=${RT}/a6-claude-einstellungen/settings.json,dst=/opt/a6/settings.json,readonly`,
+    '--workdir', '/arbeit', '--env', 'HOME=/tmp', '--env', 'PATH=/usr/local/bin:/usr/bin:/bin',
+    '--env', 'ANTHROPIC_BASE_URL=http://a6-proxy:8080', '--env', 'ANTHROPIC_API_KEY=a6-platzhalter-kein-schluessel',
+    '--env', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1', '--env', 'DISABLE_AUTOUPDATER=1', 'a6-image',
+    '/opt/claude-code/node_modules/.bin/claude', '-p', '--tools', 'Read,Edit', '--settings', '/opt/a6/settings.json',
+    '--setting-sources', '', '--strict-mcp-config', '--permission-mode', 'dontAsk', '--model', 'sonnet', '--max-turns', '8',
+    '--max-budget-usd', '1.5', '--no-session-persistence', '--output-format', 'stream-json', '--verbose',
+  ]);
+  // Im Workflow startet Claude nur ueber a6_claude_aufruf; kein eigener docker-Aufruf mit Claude.
+  assert.equal((WF.match(/a6_claude_aufruf /g) ?? []).length, 2);
+  assert.ok(!/docker run[^\n]*claude|node_modules\/\.bin\/claude/.test(WF));
+  assert.equal((FN.match(/node_modules\/\.bin\/claude/g) ?? []).length, 2, 'nur Versionspruefung und a6_claude_aufruf');
+});
+
+// ---------------------------------------------------------------------------
+// Sicht: Anlegen, Pruefen, Rueckkopie (reines Dateisystem, ohne Docker)
+// ---------------------------------------------------------------------------
+
+function sichtLauf(vorbereiten, befehl) {
+  const dir = mkdtempSync(join(tmpdir(), 'a6-sicht-'));
+
+  try {
+    const arbeit = join(dir, 'a6-claude-arbeit');
+    const sicht = join(dir, 'a6-claude-sicht');
+    for (const [pfad, inhalt] of [['src/rechne.js', 'alt rechne\n'], ['test/rechne.test.js', 'alt test\n'], ['src/text.js', 'text\n'], ['agent-acceptance/issue-1.mjs', 'abnahme\n'], ['scripts/x.mjs', 'skript\n'], ['.github/agent/policy.json', '{}\n']]) {
+      mkdirSync(join(arbeit, dirname(pfad)), { recursive: true });
+      writeFileSync(join(arbeit, pfad), inhalt);
+    }
+
+    const env = { PATH: process.env.PATH, A6_DATEIEN: '["src/rechne.js","test/rechne.test.js"]' };
+    const anlegen = spawnSync('bash', ['-c', 'source "$1"; a6_sicht_anlegen "$2" "$3"', 'probe', join(ROOT, ENTWURF, 'a6-funktionen.sh'), arbeit, sicht], { encoding: 'utf8', env });
+    vorbereiten?.({ dir, arbeit, sicht });
+    const vorher = readFileSync(join(arbeit, 'src', 'rechne.js'), 'utf8');
+    const r = befehl === undefined
+      ? anlegen
+      : spawnSync('bash', ['-c', `source "$1"; ${befehl} "$2" "$3"`, 'probe', join(ROOT, ENTWURF, 'a6-funktionen.sh'), arbeit, sicht], { encoding: 'utf8', env });
+    const liste = d => (existsSync(d) ? spawnSync('find', [d, '-mindepth', '1', '-printf', '%y %P\n'], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean).sort() : null);
+    return { anlegen, r, sicht: liste(sicht), arbeit: liste(arbeit), rechne: readFileSync(join(arbeit, 'src', 'rechne.js'), 'utf8'), test: readFileSync(join(arbeit, 'test', 'rechne.test.js'), 'utf8'), vorher };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('Sicht: enthaelt genau die Profildateien, eine erlaubte Aenderung wird uebernommen, im Arbeitsordner entsteht nichts Neues', () => {
+  const a = sichtLauf();
+  assert.equal(a.anlegen.status, 0, a.anlegen.stderr);
+  assert.deepEqual(a.sicht, ['d src', 'd test', 'f src/rechne.js', 'f test/rechne.test.js']);
+  const u = sichtLauf(({ sicht }) => writeFileSync(join(sicht, 'src', 'rechne.js'), 'neu rechne\n'), 'a6_sicht_uebernehmen');
+  assert.equal(u.r.status, 0, u.r.stderr);
+  assert.equal(u.rechne, 'neu rechne\n');
+  assert.equal(u.test, 'alt test\n');
+  assert.deepEqual(u.arbeit, a.arbeit, 'Arbeitsordner hat neue oder fehlende Eintraege');
+  // Anlegen scheitert, wenn die Sicht schon existiert oder eine Quelle ein Symlink ist.
+  const vorhanden = sichtLauf(undefined, 'a6_sicht_anlegen');
+  assert.equal(vorhanden.r.status, 1);
+  assert.equal(vorhanden.r.stderr, 'A6-SICHT vorhanden\n');
+});
+
+const SICHT_FAELLE = Object.freeze({
+  zusatzdatei: ({ sicht }) => writeFileSync(join(sicht, 'src', 'neu.js'), 'x\n'),
+  versteckte_datei: ({ sicht }) => writeFileSync(join(sicht, '.versteckt'), 'x\n'),
+  versteckt_im_ordner: ({ sicht }) => writeFileSync(join(sicht, 'test', '.x'), 'x\n'),
+  zusatzordner: ({ sicht }) => mkdirSync(join(sicht, 'agent-acceptance')),
+  symlink_statt_datei: ({ sicht, arbeit }) => { rmSync(join(sicht, 'src', 'rechne.js')); symlinkSync(join(arbeit, 'agent-acceptance', 'issue-1.mjs'), join(sicht, 'src', 'rechne.js')); },
+  symlink_statt_ordner: ({ sicht, dir }) => { renameSync(join(sicht, 'src'), join(dir, 'src-aussen')); symlinkSync(join(dir, 'src-aussen'), join(sicht, 'src')); },
+  hardlink_nach_aussen: ({ sicht, dir }) => linkSync(join(sicht, 'src', 'rechne.js'), join(dir, 'aussen.js')),
+  hardlink_innen: ({ sicht }) => linkSync(join(sicht, 'src', 'rechne.js'), join(sicht, 'test', 'rechne.test.js.2')),
+  datei_fehlt: ({ sicht }) => rmSync(join(sicht, 'test', 'rechne.test.js')),
+  fifo_statt_datei: ({ sicht }) => { rmSync(join(sicht, 'src', 'rechne.js')); spawnSync('mkfifo', [join(sicht, 'src', 'rechne.js')]); },
+  ordner_statt_datei: ({ sicht }) => { rmSync(join(sicht, 'src', 'rechne.js')); mkdirSync(join(sicht, 'src', 'rechne.js')); },
+  zeilenumbruch_im_namen: ({ sicht }) => writeFileSync(join(sicht, 'src', 'a\nf 1 src'), 'x\n'),
+  sicht_ist_symlink: ({ sicht, dir }) => { renameSync(sicht, join(dir, 'echt')); symlinkSync(join(dir, 'echt'), sicht); },
+});
+const SICHT_CODES = Object.freeze({ zeilenumbruch_im_namen: 'A6-SICHT name\n', sicht_ist_symlink: 'A6-SICHT ordner\n' });
+
+test('Sicht: jede Manipulation wird vor der Rueckkopie abgelehnt, der Arbeitsordner bleibt unveraendert', () => {
+  for (const [name, fall] of Object.entries(SICHT_FAELLE)) {
+    const x = sichtLauf(k => { writeFileSync(join(k.sicht, 'src', 'rechne.js'), 'neu\n'); fall(k); }, 'a6_sicht_uebernehmen');
+    assert.equal(x.anlegen.status, 0, x.anlegen.stderr);
+    assert.equal(x.r.status, 1, `${name} angenommen`);
+    assert.equal(x.r.stderr, SICHT_CODES[name] ?? 'A6-SICHT inhalt\n', name);
+    assert.equal(x.rechne, 'alt rechne\n', `${name}: Arbeitsordner veraendert`);
+  }
+
+  // Ziel im Arbeitsordner als Symlink: keine Rueckkopie.
+  const ziel = sichtLauf(({ arbeit }) => { rmSync(join(arbeit, 'test', 'rechne.test.js')); symlinkSync(join(arbeit, 'scripts', 'x.mjs'), join(arbeit, 'test', 'rechne.test.js')); }, 'a6_sicht_uebernehmen');
+  assert.equal(ziel.r.status, 1);
+  assert.equal(ziel.r.stderr, 'A6-SICHT ziel\n');
+  assert.equal(ziel.rechne, 'alt rechne\n', 'Rueckkopie begann vor der vollstaendigen Pruefung');
+});
+
+test('Sicht: Profilpfade werden streng gelesen, alles andere wird abgelehnt', () => {
+  const pfade = dateien => spawnSync('bash', ['-c', 'source "$1"; a6_profilpfade', 'probe', join(ROOT, ENTWURF, 'a6-funktionen.sh')], { encoding: 'utf8', env: { PATH: process.env.PATH, A6_DATEIEN: dateien } });
+  const gut = pfade('["src/rechne.js","test/rechne.test.js"]');
+  assert.deepEqual([gut.status, gut.stdout], [0, 'src/rechne.js\ntest/rechne.test.js\n']);
+
+  for (const falsch of ['[]', '["scripts/x.mjs"]', '["src/../x"]', '["src/.x"]', '["src/a/b.js"]', '["src/a.js", "test/b.js"]', '["src/a.js"', 'src/a.js', '["src/a.js","agent-acceptance/x.mjs"]', '["src/a\nb.js"]']) {
+    const r = pfade(falsch);
+    assert.deepEqual([r.status, r.stderr], [1, 'A6-SICHT profil\n'], falsch);
+  }
+});
+
+test('Sicht: im Workflow liegt die Sicht neben dem Arbeitsordner, Pruefung und Rueckkopie erst nach dem Claude-Container', () => {
+  for (const job of ['claude', 'probe_claude']) {
+    const t = J.get(job);
+    const anlegen = t.indexOf('a6_sicht_anlegen "$RUNNER_TEMP/a6-claude-arbeit" "$RUNNER_TEMP/a6-claude-sicht"');
+    const aufruf = t.indexOf('a6_claude_aufruf ');
+    const aufraeumen = t.indexOf('a6_aufraeumen');
+    const beendet = t.indexOf('a6_claude_beendet');
+    const uebernehmen = t.indexOf('a6_sicht_uebernehmen "', beendet);
+    const job1b = t.indexOf('agent-code-job-claude-nach.mjs');
+    assert.ok(anlegen > 0 && anlegen < aufruf && aufruf < aufraeumen && aufraeumen < beendet && beendet < uebernehmen && uebernehmen < job1b, `${job}: Reihenfolge ${[anlegen, aufruf, aufraeumen, beendet, uebernehmen, job1b]}`);
+  }
+
+  assert.ok(FN.includes("docker ps -aq --filter 'name=^a6-claude-'"));
+});
+
 // Ausweichloesung (b): nur falls GitHub agent-auftrag.yml auf seinem eigenen PR nicht startet.
-const A6_AUSWEICH_SHA256 = '1a12a590c1a49c310e30114d2e21f33f86a58116a314fda8d3af16e6f0aaeac2';
+const A6_AUSWEICH_SHA256 = '33a9eb3d567f3e510705bf81983eccc4fd5456c7169542c4a3d34308aaaedede';
 
 test('Ausweichloesung: ergaenzt den heutigen Trockenlauf nur und traegt Umgebung und Probejobs wortgleich', () => {
   const aus = lies(`${ENTWURF}/ausweich/code-pilot-trockenlauf.yml`);

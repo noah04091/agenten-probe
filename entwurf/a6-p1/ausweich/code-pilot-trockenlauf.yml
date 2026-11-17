@@ -19,11 +19,12 @@ defaults:
     shell: bash
 
 env:
-  A6_FUNKTIONEN_SHA256: 994edb66878ac250923346da5d8175159b3650f1b5909b5c33669cb5e76cc3b1
+  A6_FUNKTIONEN_SHA256: eb1e9cc938b017cb40bd7bd447aa498b10ba8a1b6419809b8e8418b41f8b3e41
   A6_INTEGRITAET_SHA256: f345b7c75cd24670073d7462419290fae3f139e3c3e2fd8390a241a9c1ab003f
   A6_PROBE_SHA256: 2cad8a9e00512e41b8fddd222df60562e2978544dd97e1600e2cb3ee45f31ca7
   A6_ATTRAPPE_SHA256: 5a47138a8f702b8b0ffbf34844d4fcb00b76fd5e03156e76b3a6009645b96861
-  A6_ERSATZ_SHA256: 4cc25d2965be98898eb95aee7031152b7638f973c66f773c4da92ead7fd9f477
+  A6_ERSATZ_SHA256: c3df54ccf644cc57bec2c7143da1e7b82df42b18dcf01ed0989d8a01c7656bbe
+  A6_EINSTELLUNGEN_SHA256: b5f1f21638ae7c927ff18d5f0b71e062437addfa40ad4ce94d2d68b7d8f92ed6
   A6_CC_PAKET_SHA256: 411c6bca803f5734aedc66b163a29664580fb590bf7083add0010925bd70e109
   A6_CC_SPERRE_SHA256: 388cfe18fce9900a47eddfa373561cc128994a17bccb59d2a1be6fffb9f537d2
   A6_CC_VERSION: 2.1.326
@@ -386,6 +387,7 @@ jobs:
           a6_claude_installieren "$CHECKOUT" "$RUNNER_TEMP/a6-claude-code"
           a6_grenzen "$CHECKOUT" "$RUNNER_TEMP/a6-auftrag/schnappschuss.json"
           a6_einstellungen "$CHECKOUT" "$RUNNER_TEMP/a6-claude-arbeit" "$RUNNER_TEMP/a6-claude-einstellungen/settings.json"
+          a6_sicht_anlegen "$RUNNER_TEMP/a6-claude-arbeit" "$RUNNER_TEMP/a6-claude-sicht"
           a6_proxy_starten
           export A6_ZEITLIMIT=5m
 
@@ -420,6 +422,52 @@ jobs:
           source .github/agent/a6-funktionen.sh
           a6_aufraeumen
           test -z "$(docker ps -aq --filter 'name=^a6-')"
+
+      - name: Sicht pruefen, Manipulationen ablehnen, Aenderung uebernehmen
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          O="$RUNNER_TEMP/a6-probe"
+          export RUNNER_TEMP="$O/t"
+          a6_grenzen "$O/checkout" "$RUNNER_TEMP/a6-auftrag/schnappschuss.json"
+          a6_claude_beendet
+          SICHT="$RUNNER_TEMP/a6-claude-sicht"
+          ARBEIT="$RUNNER_TEMP/a6-claude-arbeit"
+          VORHER="$(cd "$ARBEIT" && find . -printf '%y %n %s %P\n' | LC_ALL=C sort | sha256sum)"
+          NAMEN="$(cd "$ARBEIT" && find . -printf '%y %n %P\n' | LC_ALL=C sort | sha256sum)"
+
+          # Jede Manipulation an einer Kopie der Sicht muss vor der Rueckkopie abgelehnt werden.
+          for fall in zusatzdatei versteckt zusatzordner leerer-ordner symlink-datei symlink-ordner hardlink-aussen fehlt fifo ordner-statt-datei; do
+            K="$O/sichtprobe-$fall"
+            cp -a "$SICHT" "$K"
+            case "$fall" in
+              zusatzdatei) printf 'x\n' > "$K/src/neu.js" ;;
+              versteckt) printf 'x\n' > "$K/.versteckt" ;;
+              zusatzordner) mkdir -p "$K/agent-acceptance" && printf 'x\n' > "$K/agent-acceptance/issue-1.mjs" ;;
+              leerer-ordner) mkdir "$K/scripts" ;;
+              symlink-datei) rm "$K/src/rechne.js" && ln -s "$ARBEIT/agent-acceptance/issue-9001.mjs" "$K/src/rechne.js" ;;
+              symlink-ordner) mv "$K/src" "$O/src-$fall" && ln -s "$O/src-$fall" "$K/src" ;;
+              hardlink-aussen) ln "$K/src/rechne.js" "$O/hardlink-$fall" ;;
+              fehlt) rm "$K/test/rechne.test.js" ;;
+              fifo) rm "$K/src/rechne.js" && mkfifo "$K/src/rechne.js" ;;
+              ordner-statt-datei) rm "$K/src/rechne.js" && mkdir "$K/src/rechne.js" ;;
+            esac
+            if a6_sicht_uebernehmen "$ARBEIT" "$K" 2> "$O/sicht-$fall.err"; then
+              echo "FEHLER: Sicht mit $fall angenommen"; exit 1
+            fi
+            grep -qx 'A6-SICHT inhalt' "$O/sicht-$fall.err"
+            echo "Sicht: $fall abgelehnt."
+          done
+          test "$(cd "$ARBEIT" && find . -printf '%y %n %s %P\n' | LC_ALL=C sort | sha256sum)" = "$VORHER"
+          echo "Arbeitsordner durch die abgelehnten Faelle unveraendert."
+
+          # Die echte Sicht: geprueft und nur in die vorhandenen Profilpfade zurueckkopiert.
+          a6_sicht_uebernehmen "$ARBEIT" "$SICHT"
+          cmp "$SICHT/src/rechne.js" "$ARBEIT/src/rechne.js"
+          grep -q 'function quadrat(a)' "$ARBEIT/src/rechne.js"
+          test "$(cd "$ARBEIT" && find . -printf '%y %n %P\n' | LC_ALL=C sort | sha256sum)" = "$NAMEN"
+          echo "Sicht: Aenderung der erlaubten Datei uebernommen, im Arbeitsordner nichts Neues angelegt."
 
       - name: Job 1b auf frischem synthetischem Checkout
         id: nach
