@@ -552,6 +552,7 @@ jobs:
 
           # 4. K2: ein zweiter Ersatz legt in einer eigenen, gleich angelegten Sicht eine Git-Ablage mit
           #    core.fsmonitor an. Der naechste Schritt muss sie vor jeder Rueckkopie ablehnen.
+          mkdir -m 0700 "$O/k2"
           a6_sicht_anlegen "$RUNNER_TEMP/a6-claude-arbeit" "$O/k2/a6-claude-sicht"
           A6_EINHAENGEN=(--mount "type=bind,src=$K2ERSATZ,dst=/opt/a6/claude-ersatz-k2.mjs,readonly")
           ( export RUNNER_TEMP="$O/k2"; a6_claude_container node /opt/a6/claude-ersatz-k2.mjs git-ablage /arbeit )
