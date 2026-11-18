@@ -1,4 +1,4 @@
-// Lokale Modell-Attrappe fuer die Formaterfassung: beantwortet POST /v1/messages mit festen tool_use-Bloecken.
+// A6 P-4, nur Dokumentation, nie im Workflow oder in Tests ausgefuehrt. Lokale Modell-Attrappe fuer die Formaterfassung: beantwortet POST /v1/messages mit festen tool_use-Bloecken.
 // Nur im internen Docker-Netz, ohne Schluessel, ohne Anthropic. Schritt = Zahl der assistant-Nachrichten.
 import { createServer } from 'node:http';
 import { appendFileSync } from 'node:fs';

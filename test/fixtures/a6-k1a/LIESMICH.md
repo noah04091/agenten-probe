@@ -9,8 +9,8 @@ Echte stream-json-Ausgabe von Claude Code 2.1.326 (Sperrdatei `entwurf/a6-p1/cla
   `--permission-mode dontAsk`, `--model sonnet`, `--max-turns 8`, `--max-budget-usd 1.5`,
   `--output-format stream-json --verbose`. Arbeitsordner `/arbeit` mit genau `src/rechne.js` und
   `test/rechne.test.js`.
-- Das Modell ersetzte eine lokale Attrappe (`erfassung/attrappe.mjs`) in einem internen Docker-Netz ohne
-  Ausgang. Sie antwortet mit festen `tool_use`-Blöcken aus einem Plan (`erfassung/plan-*.json`). Alles
+- Das Modell ersetzte eine lokale Attrappe (`docs/a6-k1a-erfassung/attrappe.mjs`) in einem internen Docker-Netz ohne
+  Ausgang. Sie antwortet mit festen `tool_use`-Blöcken aus einem Plan (`docs/a6-k1a-erfassung/plan-*.json`). Alles
   ausser den Modellantworten stammt von Claude Code selbst: Ereignisse, Erlaubnisentscheidungen,
   Ablehnungen, Ergebnisse.
 

@@ -110,7 +110,7 @@ Einstellungen.
 **Konzept, ohne Secrets und ohne Anthropic:**
 1. Die gepinnte Claude-Code-Version wird wie in `a6_claude_installieren` installiert. Sie läuft mit
    demselben Aufruf wie `a6_claude_aufruf` in einem internen Docker-Netz ohne Ausgang.
-2. Das Modell ersetzt eine lokale Attrappe (`test/fixtures/a6-k1a/erfassung/attrappe.mjs`) mit dem
+2. Das Modell ersetzt eine lokale Attrappe (`docs/a6-k1a-erfassung/attrappe.mjs`) mit dem
    festen Plan `plan-katalog.json`. Kein Schlüssel, nur der Platzhalter.
 3. **Lauf A** mit der produktiven Einstellungsdatei. Erwartet: alle neun Fälle wie in der Tabelle,
    `A6-DIAGNOSE ok`.
