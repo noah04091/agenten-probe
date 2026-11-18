@@ -19,10 +19,12 @@ defaults:
     shell: bash
 
 env:
-  A6_FUNKTIONEN_SHA256: eb1e9cc938b017cb40bd7bd447aa498b10ba8a1b6419809b8e8418b41f8b3e41
+  A6_FUNKTIONEN_SHA256: 725a53128b6b3a499ec93f829dccced7bb1471b728b23328387c214b2ea7658a
   A6_INTEGRITAET_SHA256: f345b7c75cd24670073d7462419290fae3f139e3c3e2fd8390a241a9c1ab003f
   A6_PROBE_SHA256: 2cad8a9e00512e41b8fddd222df60562e2978544dd97e1600e2cb3ee45f31ca7
   A6_ATTRAPPE_SHA256: 5a47138a8f702b8b0ffbf34844d4fcb00b76fd5e03156e76b3a6009645b96861
+  A6_ERSATZ_K2_SHA256: a0f597bb921be51769d761f6e87f334d43a473c3804c1e22ebe3342146eb240b
+  A6_PROTOKOLL_SHA256: 35125ef007c575419204559d5812d0901511457270828b0e8314657edf0c5e20
   A6_ERSATZ_SHA256: c3df54ccf644cc57bec2c7143da1e7b82df42b18dcf01ed0989d8a01c7656bbe
   A6_EINSTELLUNGEN_SHA256: b5f1f21638ae7c927ff18d5f0b71e062437addfa40ad4ce94d2d68b7d8f92ed6
   A6_CC_PAKET_SHA256: 411c6bca803f5734aedc66b163a29664580fb590bf7083add0010925bd70e109
@@ -379,6 +381,8 @@ jobs:
           a6_image_laden "$A6_PROXY_IMAGE"
           O="$RUNNER_TEMP/a6-probe"
           ERSATZ="$GITHUB_WORKSPACE/generalprobe/claude-ersatz.mjs"
+          K2ERSATZ="$GITHUB_WORKSPACE/generalprobe/claude-ersatz-k2.mjs"
+          printf '%s  %s\n' "$A6_ERSATZ_K2_SHA256" "$K2ERSATZ" | sha256sum -c --status
           LESEPROBE="$GITHUB_WORKSPACE/README.md"
           export RUNNER_TEMP="$O/t"
           CHECKOUT="$O/checkout"
@@ -406,6 +410,21 @@ jobs:
           docker logs "a6-proxy-$(a6_lauf)" 2>/dev/null | grep -E '"POST /v1/messages(\?[^ "]*)? HTTP/1\.1" .*status=401 upstream=[0-9.]+:443 upstream_status=401' > /dev/null
           echo "C: Claude erreichte den Vorschaltcontainer, Anthropic antwortete 401 auf den Platzhalter."
 
+          # K1a: die Auswertung erreicht auch das Protokoll des gescheiterten Aufrufs und gibt nur feste
+          #    Kennungen aus; ein abgeschnittenes Protokoll wird nie ok.
+          a6_protokoll_auswerten "$O/claude-platzhalter.jsonl" > "$O/diagnose-platzhalter.txt"
+          cat "$O/diagnose-platzhalter.txt"
+          grep -qx 'A6-PROTOKOLL vollstaendig' "$O/diagnose-platzhalter.txt"
+          grep -Eqx 'A6-LAUF fehler-(api|sonst)' "$O/diagnose-platzhalter.txt"
+          grep -qx 'A6-WERKZEUG gesamt 0' "$O/diagnose-platzhalter.txt"
+          grep -qx 'A6-DIAGNOSE ok' "$O/diagnose-platzhalter.txt"
+          head -c -1 "$O/claude-platzhalter.jsonl" > "$O/claude-abgeschnitten.jsonl"
+          if a6_protokoll_auswerten "$O/claude-abgeschnitten.jsonl" > "$O/diagnose-abgeschnitten.txt"; then
+            echo "FEHLER: abgeschnittenes Protokoll als ok bewertet"; exit 1
+          fi
+          grep -qx 'A6-PROTOKOLL abgeschnitten' "$O/diagnose-abgeschnitten.txt"
+          echo "K1a: Auswertung nach gescheitertem Aufruf erreicht, abgeschnittenes Protokoll abgelehnt."
+
           # 2. Ersatz statt Claude im selben Container: Isolation (K1b), Vorschaltcontainer (C), Testpaket.
           A6_EINHAENGEN=(--mount "type=bind,src=$ERSATZ,dst=/opt/a6/claude-ersatz.mjs,readonly")
           a6_claude_container node /opt/a6/claude-ersatz.mjs isolation /arbeit http://a6-proxy:8080 "$ANTHROPIC_API_KEY"
@@ -413,6 +432,12 @@ jobs:
           # 3. Gegenprobe K1b: eine zusaetzliche Einhaengung waere sichtbar.
           A6_EINHAENGEN+=(--mount "type=bind,src=$LESEPROBE,dst=/opt/a6/gegenprobe.md,readonly")
           a6_claude_container node /opt/a6/claude-ersatz.mjs gegenprobe /opt/a6/gegenprobe.md
+
+          # 4. K2: ein zweiter Ersatz legt in einer eigenen, gleich angelegten Sicht eine Git-Ablage mit
+          #    core.fsmonitor an. Der naechste Schritt muss sie vor jeder Rueckkopie ablehnen.
+          a6_sicht_anlegen "$RUNNER_TEMP/a6-claude-arbeit" "$O/k2/a6-claude-sicht"
+          A6_EINHAENGEN=(--mount "type=bind,src=$K2ERSATZ,dst=/opt/a6/claude-ersatz-k2.mjs,readonly")
+          ( export RUNNER_TEMP="$O/k2"; a6_claude_container node /opt/a6/claude-ersatz-k2.mjs git-ablage /arbeit )
 
       - name: Claude-Container, Vorschaltcontainer und Netze entfernen
         if: always()
@@ -429,6 +454,7 @@ jobs:
           printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
           source .github/agent/a6-funktionen.sh
           O="$RUNNER_TEMP/a6-probe"
+          WURZEL="$RUNNER_TEMP"
           export RUNNER_TEMP="$O/t"
           a6_grenzen "$O/checkout" "$RUNNER_TEMP/a6-auftrag/schnappschuss.json"
           a6_claude_beendet
@@ -462,6 +488,24 @@ jobs:
           test "$(cd "$ARBEIT" && find . -printf '%y %n %s %P\n' | LC_ALL=C sort | sha256sum)" = "$VORHER"
           echo "Arbeitsordner durch die abgelehnten Faelle unveraendert."
 
+          # K2: die vom Ersatz im Container manipulierte Sicht (Git-Ablage mit core.fsmonitor) wird am
+          # vorgesehenen Mechanismus abgelehnt; keine Rueckkopie, kein .git im Arbeitsordner, kein Marker.
+          K2S="$O/k2/a6-claude-sicht"
+          grep -qx $'\tfsmonitor = touch a6-k2-marker' "$K2S/.git/config"
+          if a6_sicht_uebernehmen "$ARBEIT" "$K2S" 2> "$O/k2.err"; then
+            echo "FEHLER: Sicht mit Git-Ablage angenommen"; exit 1
+          fi
+          test "$(cat "$O/k2.err")" = "A6-SICHT inhalt"
+          test "$(cd "$ARBEIT" && find . -printf '%y %n %s %P\n' | LC_ALL=C sort | sha256sum)" = "$VORHER"
+          test ! -e "$ARBEIT/.git"
+          # Gegenprobe nur in einer Kopie: liefe Git in dieser Ablage, entstuende der Marker.
+          cp -a "$K2S" "$O/k2-gegenprobe"
+          git -c safe.directory='*' -C "$O/k2-gegenprobe" status --porcelain > /dev/null 2>&1 || true
+          test -e "$O/k2-gegenprobe/a6-k2-marker"
+          rm -rf "$O/k2-gegenprobe"
+          test -z "$(find "$WURZEL" "$GITHUB_WORKSPACE" -name a6-k2-marker -print -quit)"
+          echo "K2: Git-Ablage in der Sicht abgelehnt, keine Rueckkopie, Arbeitsordner unveraendert, kein Marker ausserhalb der Gegenprobe."
+
           # Die echte Sicht: geprueft und nur in die vorhandenen Profilpfade zurueckkopiert.
           a6_sicht_uebernehmen "$ARBEIT" "$SICHT"
           cmp "$SICHT/src/rechne.js" "$ARBEIT/src/rechne.js"
@@ -485,6 +529,14 @@ jobs:
               A6_VERGLEICH_ANTHROPIC A6_VERGLEICH_LESE_TOKEN
           )
           a6_probe schritt claude-auswerten "$O" | tee -a "$GITHUB_OUTPUT"
+          # K2 nachgelagert: kein Checkout traegt eine fremde Git-Konfiguration, kein Marker ist entstanden.
+          git -C "$GITHUB_WORKSPACE" rev-parse --git-dir > /dev/null
+          git -C "$O/checkout" rev-parse --git-dir > /dev/null
+          test -z "$(git -C "$GITHUB_WORKSPACE" config --get core.fsmonitor || true)"
+          test -z "$(git -C "$O/checkout" config --get core.fsmonitor || true)"
+          test ! -e "$O/t/a6-claude-arbeit/.git"
+          test -z "$(find "$RUNNER_TEMP" "$GITHUB_WORKSPACE" -name a6-k2-marker -print -quit)"
+          echo "K2: Job 1b ohne uebernommene Git-Konfiguration, kein Marker."
 
       - name: Probeartefakt Paket sichern
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

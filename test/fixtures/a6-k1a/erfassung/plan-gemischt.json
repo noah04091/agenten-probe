@@ -1,0 +1,13 @@
+[
+ [{"type":"tool_use","id":"toolu_a01","name":"Read","input":{"file_path":"/arbeit/src/rechne.js"}},
+  {"type":"tool_use","id":"toolu_a02","name":"Read","input":{"file_path":"/opt/a6/settings.json"}}],
+ [{"type":"tool_use","id":"toolu_a03","name":"Edit","input":{"file_path":"/arbeit/src/rechne.js","old_string":"module.exports","new_string":"// K1A-ATTRAPPE\nmodule.exports"}},
+  {"type":"tool_use","id":"toolu_a04","name":"Edit","input":{"file_path":"/arbeit/src/text.js","old_string":"","new_string":"x"}}],
+ [{"type":"tool_use","id":"toolu_a05","name":"Read","input":{"file_path":"/etc/hostname"}},
+  {"type":"tool_use","id":"toolu_a06","name":"Bash","input":{"command":"true"}},
+  {"type":"tool_use","id":"toolu_a07","name":"Write","input":{"file_path":"/arbeit/src/neu.js","content":"x"}}],
+ [{"type":"tool_use","id":"toolu_a08","name":"Read","input":{"file_path":"/arbeit/.git/config"}},
+  {"type":"tool_use","id":"toolu_a09","name":"Read","input":{"file_path":"/arbeit/src/nicht-da.js"}},
+  {"type":"tool_use","id":"toolu_a10","name":"Read","input":{"file_path":"/arbeit/test/rechne.test.js"}}],
+ [{"type":"text","text":"Attrappe fertig."}]
+]

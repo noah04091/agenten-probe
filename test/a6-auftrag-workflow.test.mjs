@@ -13,23 +13,26 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+
+import { K2_KONFIG, K2_MARKER, legeGitAblageAn } from '../generalprobe/claude-ersatz-k2.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const lies = pfad => readFileSync(join(ROOT, pfad), 'utf8').replace(/\r\n/g, '\n');
 const sha256 = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
 
 // Genehmigter Stand des Workflow-Entwurfs (Zeilenenden LF). Jede Aenderung am Entwurf braucht diesen Wert neu.
-const A6_WORKFLOW_SHA256 = '0285a05ac955714eb44f51760a1b166ca07f3fd64c69b71be2534f3b6f04d8ec';
+const A6_WORKFLOW_SHA256 = '0a324699670cd83a594f182acad0a878dab88200f63ba8d7885469d2c9fc2a95';
 
 const ENTWURF = 'entwurf/a6-p1';
 const ZIELE = Object.freeze([
   [`${ENTWURF}/agent-auftrag.yml`, '.github/workflows/agent-auftrag.yml'],
   [`${ENTWURF}/a6-funktionen.sh`, '.github/agent/a6-funktionen.sh'],
+  [`${ENTWURF}/a6-protokoll.mjs`, '.github/agent/a6-protokoll.mjs'],
   [`${ENTWURF}/claude-code/package.json`, '.github/agent/claude-code/package.json'],
   [`${ENTWURF}/claude-code/package-lock.json`, '.github/agent/claude-code/package-lock.json'],
   [`${ENTWURF}/package.json`, 'package.json'],
@@ -112,6 +115,8 @@ test('Entwurf: jeder inline gepinnte SHA-256 stimmt mit der Datei ueberein, auch
   assert.equal(env('A6_PROBE_SHA256'), sha256(lies('generalprobe/probe.mjs')));
   assert.equal(env('A6_ATTRAPPE_SHA256'), sha256(lies('generalprobe/github-attrappe.mjs')));
   assert.equal(env('A6_ERSATZ_SHA256'), sha256(lies('generalprobe/claude-ersatz.mjs')));
+  assert.equal(env('A6_ERSATZ_K2_SHA256'), sha256(lies('generalprobe/claude-ersatz-k2.mjs')));
+  assert.equal(env('A6_PROTOKOLL_SHA256'), sha256(lies(`${ENTWURF}/a6-protokoll.mjs`)));
   assert.equal(env('A6_EINSTELLUNGEN_SHA256'), sha256(lies('.github/agent/claude-settings.json')));
   assert.equal(env('A6_CC_PAKET_SHA256'), sha256(lies(`${ENTWURF}/claude-code/package.json`)));
   assert.equal(env('A6_CC_SPERRE_SHA256'), sha256(lies(`${ENTWURF}/claude-code/package-lock.json`)));
@@ -139,17 +144,33 @@ test('Entwurf: genau diese Jobs, Ereignisse issues.labeled und pull_request, ein
   }
 });
 
-test('Entwurf: Trennung der Pfade, Job 1 bis 3 abgeschaltet und an issues auf main gebunden', () => {
-  const live = bedingung(J.get('auftrag'));
-  assert.ok(live.includes("github.event_name == 'issues'") && live.includes("github.ref == 'refs/heads/main'") && live.includes("github.event.label.name == 'bot-auftrag'"));
-  assert.ok(!live.includes('false'), 'Job 0 laeuft ohne Schalter');
+// P-4: Die Live-Jobs haben keinen Schalter mehr. Jede Bedingung ist vollstaendig festgelegt: nur issues auf
+// main in diesem Repository, Job 0 nur fuer das Label bot-auftrag, Job 1 bis 3 nur nach erfolgreichen
+// Vorgaengern, nie always(). Startfreigabe und K3 prueft Job 0 (agent-code-job-auftrag.mjs) und Job 1a erneut.
+const LIVE_RAHMEN = "github.event_name == 'issues' && github.ref == 'refs/heads/main' && github.repository == 'noah04091/agenten-probe'";
+const LIVE_BEDINGUNGEN = Object.freeze({
+  auftrag: `${LIVE_RAHMEN} && github.event.action == 'labeled' && github.event.label.name == 'bot-auftrag'`,
+  claude: `${LIVE_RAHMEN} && needs.auftrag.result == 'success'`,
+  abnahme: `${LIVE_RAHMEN} && needs.auftrag.result == 'success' && needs.claude.result == 'success'`,
+  veroeffentlichen: `${LIVE_RAHMEN} && needs.auftrag.result == 'success' && needs.claude.result == 'success' && needs.abnahme.result == 'success'`,
+});
+const LIVE_NEEDS = Object.freeze({ auftrag: null, claude: 'needs: auftrag', abnahme: 'needs: [auftrag, claude]', veroeffentlichen: 'needs: [auftrag, claude, abnahme]' });
+const LIVE_ZEIT = Object.freeze({ auftrag: 10, claude: 40, abnahme: 20, veroeffentlichen: 10 });
 
-  for (const name of ['claude', 'abnahme', 'veroeffentlichen']) {
-    const b = bedingung(J.get(name));
-    assert.ok(b.startsWith('false && '), `${name} nicht mit false && abgeschaltet`);
-    assert.ok(b.includes("github.event_name == 'issues'") && b.includes("github.ref == 'refs/heads/main'"), `${name} nicht an issues und main gebunden`);
-    assert.ok(!b.includes('always()'), `${name} mit always()`);
+test('Entwurf: Trennung der Pfade, Job 1 bis 3 ohne Schalter nur fuer issues auf main und nur nach erfolgreichen Vorgaengern (P-4)', () => {
+  for (const name of LIVE) {
+    const t = J.get(name);
+    assert.equal(bedingung(t), LIVE_BEDINGUNGEN[name], `${name}: Bedingung`);
+    assert.ok(!/\bfalse\b|always\(\)|\|\||!/.test(bedingung(t)), `${name}: Schalter, always() oder Oder in der Bedingung`);
+    const needs = /^ {4}needs: .+$/m.exec(t)?.[0].trim() ?? null;
+    assert.equal(needs, LIVE_NEEDS[name], `${name}: needs`);
+    assert.match(t, new RegExp(`^ {4}timeout-minutes: ${LIVE_ZEIT[name]}$`, 'm'), `${name}: Zeitgrenze`);
+    assert.ok(!t.includes('continue-on-error'), `${name}: continue-on-error`);
   }
+
+  // Der Schalter ist nur im Entwurf entfernt; der Kopfkommentar sagt es, und keine Bedingung traegt ihn.
+  assert.ok(!/^ {6}false &&$/m.test(WF), 'false && in einer Bedingung');
+  assert.match(WF, /P-4: die bisherigen "false &&"-/);
 
   // Environment nur in Job 1 und Job 3; nie in der Probe.
   const mitEnvironment = [...J].filter(([, t]) => /^ {4}environment:/m.test(t)).map(([n]) => n);
@@ -365,7 +386,7 @@ test('Claude-Aufruf: Einhaengungen genau Sicht, Installation und Einstellungen, 
   const zusatz = [...WF.matchAll(/A6_EINHAENGEN\+?=\((.*)\)$/gm)].map(m => m[1]);
   assert.ok(zusatz.length >= 2, 'Muss-Treffer: Zusatz-Einhaengungen der Probe');
   for (const z of zusatz) {
-    assert.match(z, /^--mount "type=bind,src=\$(ERSATZ|LESEPROBE),dst=\/opt\/a6\/[a-z-]+\.(mjs|md),readonly"$/, z);
+    assert.match(z, /^--mount "type=bind,src=\$(ERSATZ|LESEPROBE|K2ERSATZ),dst=\/opt\/a6\/[a-z0-9-]+\.(mjs|md),readonly"$/, z);
   }
 });
 
@@ -447,7 +468,7 @@ test('Claude-Aufruf: der vollstaendige wirksame Aufruf ist genau festgelegt, und
 // Sicht: Anlegen, Pruefen, Rueckkopie (reines Dateisystem, ohne Docker)
 // ---------------------------------------------------------------------------
 
-function sichtLauf(vorbereiten, befehl) {
+function sichtLauf(vorbereiten, befehl, nachher) {
   const dir = mkdtempSync(join(tmpdir(), 'a6-sicht-'));
 
   try {
@@ -466,7 +487,8 @@ function sichtLauf(vorbereiten, befehl) {
       ? anlegen
       : spawnSync('bash', ['-c', `source "$1"; ${befehl} "$2" "$3"`, 'probe', join(ROOT, ENTWURF, 'a6-funktionen.sh'), arbeit, sicht], { encoding: 'utf8', env });
     const liste = d => (existsSync(d) ? spawnSync('find', [d, '-mindepth', '1', '-printf', '%y %P\n'], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean).sort() : null);
-    return { anlegen, r, sicht: liste(sicht), arbeit: liste(arbeit), rechne: readFileSync(join(arbeit, 'src', 'rechne.js'), 'utf8'), test: readFileSync(join(arbeit, 'test', 'rechne.test.js'), 'utf8'), vorher };
+    const zusatz = nachher?.({ dir, arbeit, sicht });
+    return { zusatz, anlegen, r, sicht: liste(sicht), arbeit: liste(arbeit), rechne: readFileSync(join(arbeit, 'src', 'rechne.js'), 'utf8'), test: readFileSync(join(arbeit, 'test', 'rechne.test.js'), 'utf8'), vorher };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -501,6 +523,8 @@ const SICHT_FAELLE = Object.freeze({
   ordner_statt_datei: ({ sicht }) => { rmSync(join(sicht, 'src', 'rechne.js')); mkdirSync(join(sicht, 'src', 'rechne.js')); },
   zeilenumbruch_im_namen: ({ sicht }) => writeFileSync(join(sicht, 'src', 'a\nf 1 src'), 'x\n'),
   sicht_ist_symlink: ({ sicht, dir }) => { renameSync(sicht, join(dir, 'echt')); symlinkSync(join(dir, 'echt'), sicht); },
+  git_ablage_fsmonitor: ({ sicht }) => legeGitAblageAn(sicht),
+  git_config_allein: ({ sicht }) => { mkdirSync(join(sicht, '.git')); writeFileSync(join(sicht, '.git', 'config'), K2_KONFIG); },
 });
 const SICHT_CODES = Object.freeze({ zeilenumbruch_im_namen: 'A6-SICHT name\n', sicht_ist_symlink: 'A6-SICHT ordner\n' });
 
@@ -518,6 +542,264 @@ test('Sicht: jede Manipulation wird vor der Rueckkopie abgelehnt, der Arbeitsord
   assert.equal(ziel.r.status, 1);
   assert.equal(ziel.r.stderr, 'A6-SICHT ziel\n');
   assert.equal(ziel.rechne, 'alt rechne\n', 'Rueckkopie begann vor der vollstaendigen Pruefung');
+});
+
+// K2, Test A: Eine Git-Ablage mit core.fsmonitor in der Sicht. Die Gegenprobe in einer Kopie zeigt, dass Git
+// den Marker anlegen wuerde; die Pruefung lehnt die Sicht vor jeder Rueckkopie ab, und der Marker entsteht
+// weder in der Sicht noch im Arbeitsordner noch sonst unter dem Probeordner.
+function findeMarker(dir) {
+  return spawnSync('find', [dir, '-name', K2_MARKER, '-printf', '%P\n'], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean).sort();
+}
+
+test('Sicht K2: Git-Ablage mit core.fsmonitor wird vor der Rueckkopie abgelehnt, der Marker entsteht nie, Arbeitsordner unveraendert', () => {
+  const basis = sichtLauf();
+  const git = (cwd, ...args) => spawnSync('git', ['-c', 'safe.directory=*', '-C', cwd, ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: cwd, GIT_CONFIG_NOSYSTEM: '1' } });
+  const x = sichtLauf(({ sicht }) => {
+    writeFileSync(join(sicht, 'src', 'rechne.js'), 'neu\n');
+    legeGitAblageAn(sicht);
+  }, 'a6_sicht_uebernehmen', ({ dir, arbeit, sicht }) => {
+    const vorGegenprobe = findeMarker(dir);
+    // Gegenprobe nur in einer Kopie: die Ablage ist scharf, Git fuehrt core.fsmonitor dort aus.
+    const kopie = join(dir, 'gegenprobe');
+    cpSync(sicht, kopie, { recursive: true });
+    const status = git(kopie, 'status', '--porcelain');
+    const gegenprobe = existsSync(join(kopie, K2_MARKER));
+    rmSync(kopie, { recursive: true, force: true });
+    return {
+      vorGegenprobe,
+      gitLief: status.error === undefined,
+      gegenprobe,
+      nachGegenprobe: findeMarker(dir),
+      konfig: readFileSync(join(sicht, '.git', 'config'), 'utf8'),
+      arbeitGit: existsSync(join(arbeit, '.git')),
+    };
+  });
+
+  assert.equal(x.anlegen.status, 0, x.anlegen.stderr);
+  assert.deepEqual([x.r.status, x.r.stderr], [1, 'A6-SICHT inhalt\n'], 'nicht am vorgesehenen Mechanismus abgelehnt');
+  assert.equal(x.zusatz.konfig, K2_KONFIG, 'Muss-Treffer: die praeparierte Konfiguration lag in der Sicht');
+  assert.ok(x.zusatz.gitLief, 'git nicht verfuegbar');
+  assert.equal(x.zusatz.gegenprobe, true, 'Gegenprobe: Git haette den Marker anlegen muessen');
+  assert.deepEqual(x.zusatz.vorGegenprobe, [], 'Marker entstand vor der Gegenprobe');
+  assert.deepEqual(x.zusatz.nachGegenprobe, [], 'Marker ausserhalb der Gegenprobe-Kopie');
+  assert.equal(x.zusatz.arbeitGit, false, '.git im Arbeitsordner');
+  assert.deepEqual(x.arbeit, basis.arbeit, 'Arbeitsordner hat neue oder fehlende Eintraege');
+  assert.deepEqual([x.rechne, x.test], ['alt rechne\n', 'alt test\n'], 'Rueckkopie trotz Ablehnung');
+});
+
+test('Funktionen: a6_protokoll_auswerten startet den Auswerter nur nach dem Anker, ohne Netz, nur lesbar, Exitcode unveraendert', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'a6-diagnose-'));
+
+  try {
+    const ws = join(dir, 'ws');
+    mkdirSync(join(ws, '.github', 'agent'), { recursive: true });
+    writeFileSync(join(ws, '.github', 'agent', 'a6-protokoll.mjs'), lies(`${ENTWURF}/a6-protokoll.mjs`));
+    const protokoll = join(dir, 'protokoll.jsonl');
+    writeFileSync(protokoll, '{}\n');
+    const anker = /^ {2}A6_PROTOKOLL_SHA256: ([0-9a-f]{64})$/m.exec(WF)[1];
+    const lauf = ({ a = anker, code = 0, datei = protokoll } = {}) => {
+      const argv = join(dir, `argv-${Math.random().toString(16).slice(2)}`);
+      const r = spawnSync('bash', ['-c', `source "$1"; docker() { printf "%s\\0" "$@" > "${argv}"; return ${code}; }; a6_protokoll_auswerten "$2"`, 'probe', join(ROOT, ENTWURF, 'a6-funktionen.sh'), datei], {
+        encoding: 'utf8', env: { PATH: process.env.PATH, GITHUB_WORKSPACE: ws, A6_PROTOKOLL_SHA256: a, A6_NODE_IMAGE: 'a6-image', A6_DATEIEN: '["src/rechne.js"]' },
+      });
+      return { status: r.status, stdout: r.stdout, argv: existsSync(argv) ? readFileSync(argv, 'utf8').split('\0').slice(0, -1) : null };
+    };
+
+    const ok = lauf();
+    assert.equal(ok.status, 0);
+    const a = ok.argv;
+    assert.deepEqual(a.slice(0, 2), ['run', '--rm']);
+    assert.deepEqual(optionen(a, '--network'), ['none']);
+    assert.ok(a.includes('--read-only') && optionen(a, '--cap-drop')[0] === 'ALL' && optionen(a, '--security-opt')[0] === 'no-new-privileges');
+    assert.deepEqual(optionen(a, '--mount'), [
+      `type=bind,src=${ws}/.github/agent/a6-protokoll.mjs,dst=/opt/a6/a6-protokoll.mjs,readonly`,
+      `type=bind,src=${protokoll},dst=/opt/a6/protokoll.jsonl,readonly`,
+    ]);
+    assert.deepEqual(optionen(a, '--env'), ['A6_DATEIEN=["src/rechne.js"]', 'PATH=/usr/local/bin:/usr/bin:/bin']);
+    assert.deepEqual(a.slice(a.indexOf('a6-image')), ['a6-image', 'node', '/opt/a6/a6-protokoll.mjs', '/opt/a6/protokoll.jsonl']);
+    // Fehlendes Protokoll: keine Einhaengung, der Auswerter meldet "fehlt".
+    assert.equal(optionen(lauf({ datei: join(dir, 'nicht-da.jsonl') }).argv, '--mount').length, 1);
+    // Exitcode des Auswerters wird unveraendert weitergegeben, auch Alarm (1).
+    assert.equal(lauf({ code: 1 }).status, 1);
+    assert.equal(lauf({ code: 2 }).status, 2);
+    assert.equal(lauf({ code: 125 }).status, 125);
+    // Falscher Anker: kein Start, feste Zeile, nicht null.
+    const falsch = lauf({ a: 'f'.repeat(64) });
+    assert.deepEqual([falsch.status, falsch.stdout, falsch.argv], [2, 'A6-DIAGNOSE anker\n', null]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Der Live-Schritt mit Claude: Aufruf und Auswertung durch Mitschreiber ersetzt, Rest wortgleich aus dem Entwurf.
+const CLAUDE_SCHRITT = 'Claude im internen Netz hinter dem Vorschaltcontainer ausfuehren';
+
+function liveClaudeSkript(wf = WF) {
+  const s = schritte(jobs(wf).get('claude')).find(x => schrittName(x) === CLAUDE_SCHRITT);
+  assert.ok(s, 'Claude-Schritt fehlt');
+  assert.ok(!/^ {8}(continue-on-error|if):/m.test(s), 'Claude-Schritt mit continue-on-error oder if');
+  const zeilen = s.split('\n');
+  const start = zeilen.indexOf('        run: |');
+  assert.ok(start > 0);
+  return zeilen.slice(start + 1).filter(z => z.trim() !== '').map(z => z.slice(10)).join('\n') + '\n';
+}
+
+function liveClaude({ aufruf, protokoll, skript = liveClaudeSkript() }) {
+  const dir = mkdtempSync(join(tmpdir(), 'a6-live-claude-'));
+
+  try {
+    mkdirSync(join(dir, 'ws', '.github', 'agent'), { recursive: true });
+    mkdirSync(join(dir, 'rt'), { recursive: true });
+    const datei = join(dir, 'rt', 'a6-claude-protokoll.jsonl');
+    const spur = join(dir, 'spur');
+    // Die Funktionsdatei ist ein Stellvertreter: nur Aufruf und Auswertung zaehlen, die Auswertung ist echt.
+    writeFileSync(join(dir, 'ws', '.github', 'agent', 'a6-funktionen.sh'), [
+      `a6_image_laden() { :; }`,
+      `a6_grenzen() { A6_LAUFZEIT=15; A6_DATEIEN='["src/rechne.js","test/rechne.test.js"]'; export A6_DATEIEN; }`,
+      `a6_proxy_starten() { :; }`,
+      `a6_claude_aufruf() { cat > /dev/null; echo aufruf >> "${spur}"; ${protokoll === null ? ':' : `cat "${join(dir, 'quelle.jsonl')}" > "$1"`}; return ${aufruf}; }`,
+      `a6_protokoll_auswerten() { echo diagnose >> "${spur}"; node "${AUSWERTER_ENTWURF}" "$1"; }`,
+    ].join('\n'));
+
+    if (protokoll !== null) {
+      writeFileSync(join(dir, 'quelle.jsonl'), protokoll);
+    }
+
+    const vorspann = [
+      'sha256sum() { cat > /dev/null; return 0; }',
+      `jq() { echo jq >> "${spur}"; return 0; }`,
+    ].join('\n');
+    const r = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', `${vorspann}\n${skript}`], {
+      cwd: join(dir, 'ws'), encoding: 'utf8',
+      env: { PATH: process.env.PATH, RUNNER_TEMP: join(dir, 'rt'), A6_PROMPT: 'Auftrag', A6_FUNKTIONEN_SHA256: 'x', A6_PROXY_IMAGE: 'a6-proxy-image', GITHUB_WORKSPACE: join(dir, 'ws') },
+    });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, spur: existsSync(spur) ? readFileSync(spur, 'utf8').split('\n').filter(Boolean) : [] };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const AUSWERTER_ENTWURF = join(ROOT, ENTWURF, 'a6-protokoll.mjs');
+const fixture = name => readFileSync(join(ROOT, 'test', 'fixtures', 'a6-k1a', `${name}.jsonl`), 'utf8');
+
+test('Live-Claude-Schritt: Auswertung auch nach gescheitertem Aufruf, ein Fehlschlag bleibt immer ein Fehlschlag', () => {
+  // Erfolg: Aufruf 0, Protokoll vollstaendig ohne Alarm, danach die bisherigen jq-Pruefungen.
+  const ok = liveClaude({ aufruf: 0, protokoll: fixture('katalog') });
+  assert.equal(ok.status, 0, `${ok.stdout} ${ok.stderr} ${ok.spur}`);
+  assert.deepEqual(ok.spur, ['aufruf', 'diagnose', 'jq', 'jq']);
+  assert.ok(ok.stdout.includes('A6-DIAGNOSE ok'));
+
+  // Gescheiterter Aufruf mit auswertbarem Protokoll: Diagnose erreicht und ok, Schritt trotzdem rot.
+  for (const code of [1, 124, 137]) {
+    const r = liveClaude({ aufruf: code, protokoll: fixture('api-401') });
+    assert.notEqual(r.status, 0, `Aufruf ${code}: Schritt gruen`);
+    assert.deepEqual(r.spur, ['aufruf', 'diagnose'], `Aufruf ${code}: Reihenfolge`);
+    assert.ok(r.stdout.includes('A6-PROTOKOLL vollstaendig') && r.stdout.includes('A6-LAUF fehler-api') && r.stdout.includes('A6-DIAGNOSE ok'));
+    assert.ok(r.stdout.includes('A6-CLAUDE aufruf-fehlgeschlagen'));
+  }
+
+  // Gescheiterter Aufruf ohne oder mit abgeschnittenem Protokoll.
+  const ohne = liveClaude({ aufruf: 1, protokoll: null });
+  assert.notEqual(ohne.status, 0);
+  assert.ok(ohne.stdout.includes('A6-PROTOKOLL fehlt') && ohne.stdout.includes('A6-CLAUDE aufruf-fehlgeschlagen'));
+  const kurz = liveClaude({ aufruf: 124, protokoll: fixture('katalog').slice(0, -200) });
+  assert.notEqual(kurz.status, 0);
+  assert.ok(kurz.stdout.includes('A6-PROTOKOLL abgeschnitten'));
+
+  // Erfolgreicher Aufruf, aber Diagnose nicht ok (fehlt, abgeschnitten, Alarm): Schritt rot, jq nie erreicht.
+  // Alarm: die Ablehnung von K1A-N3 (/etc/hostname) konsistent in einen Erfolg verwandelt.
+  const ereignisse = fixture('katalog').split('\n').filter(Boolean).map(z => JSON.parse(z));
+  const nutzer = ereignisse.find(e => e.type === 'user' && e.message.content.some(b => b.tool_use_id === 'toolu_k1a_n3'));
+  delete nutzer.message.content[0].is_error;
+  nutzer.tool_result_meta[0].permission_decision.decision = 'accept';
+  ereignisse.at(-1).permission_denials = ereignisse.at(-1).permission_denials.filter(d => d.tool_use_id !== 'toolu_k1a_n3');
+  const alarm = `${ereignisse.map(e => JSON.stringify(e)).join('\n')}\n`;
+
+  for (const [name, protokoll, zeile] of [['fehlt', null, 'A6-PROTOKOLL fehlt'], ['abgeschnitten', fixture('katalog').slice(0, -1), 'A6-PROTOKOLL abgeschnitten'], ['alarm', alarm, 'A6-ALARM erfolg-ausserhalb-profil']]) {
+    const r = liveClaude({ aufruf: 0, protokoll });
+    assert.notEqual(r.status, 0, `${name}: Schritt gruen`);
+    assert.ok(r.stdout.includes(zeile), `${name}: ${r.stdout}`);
+    assert.ok(r.stdout.includes('A6-CLAUDE diagnose-fehlgeschlagen'), name);
+    assert.ok(!r.spur.includes('jq'), `${name}: jq trotz Diagnosefehler erreicht`);
+  }
+});
+
+test('Live-Claude-Schritt: Gegenproben, jede Abschwaechung der Fehlerbehandlung faellt auf', () => {
+  const skript = liveClaudeSkript();
+  const ersetze = (alt, neu) => {
+    assert.equal(skript.split(alt).length, 2, `Mutation nicht eindeutig: ${alt}`);
+    return skript.replace(alt, () => neu);
+  };
+  const mutationen = {
+    aufruf_verschluckt: ersetze('if [[ "$aufruf" != "0" ]]; then', 'if false; then'),
+    diagnose_verschluckt: ersetze('if [[ "$diagnose" != "0" ]]; then', 'if false; then'),
+    diagnose_ohne_status: ersetze('a6_protokoll_auswerten "$RUNNER_TEMP/a6-claude-protokoll.jsonl" || diagnose=$?', 'a6_protokoll_auswerten "$RUNNER_TEMP/a6-claude-protokoll.jsonl" || true'),
+    diagnose_nach_abbruch: ersetze('printf \'%s\' "$A6_PROMPT" | a6_claude_aufruf "$RUNNER_TEMP/a6-claude-protokoll.jsonl" || aufruf=$?', 'printf \'%s\' "$A6_PROMPT" | a6_claude_aufruf "$RUNNER_TEMP/a6-claude-protokoll.jsonl"'),
+  };
+  const faelle = [
+    { aufruf: 1, protokoll: fixture('api-401') },
+    { aufruf: 0, protokoll: null },
+  ];
+
+  // Muss-Treffer: das unveraenderte Skript erreicht in beiden Faellen die Diagnose und bleibt rot. Sonst
+  // waere jede Mutation nur deshalb "erkannt", weil der Lauf schon vorher scheitert.
+  for (const f of faelle) {
+    const r = liveClaude(f);
+    assert.notEqual(r.status, 0);
+    assert.deepEqual(r.spur, ['aufruf', 'diagnose'], `Muss-Treffer: ${r.stderr}`);
+    assert.ok(r.stdout.includes('A6-DIAGNOSE') && r.stdout.includes('A6-CLAUDE '), r.stdout);
+  }
+
+  for (const [name, mutiert] of Object.entries(mutationen)) {
+    const erkannt = faelle.some(f => {
+      const r = liveClaude({ ...f, skript: mutiert });
+      return r.status === 0 || !r.spur.includes('diagnose');
+    });
+    assert.ok(erkannt, `${name}: nicht erkannt`);
+  }
+});
+
+test('Generalprobe: K1a-Auswertung und K2-Negativfall sind in Job 1 der Probe verdrahtet', () => {
+  const s = schritte(J.get('probe_claude'));
+  const claude = s.find(x => schrittName(x) === 'Claude-Container hinter dem Vorschaltcontainer (Platzhalter, Ersatz, Isolation)');
+  const sicht = s.find(x => schrittName(x) === 'Sicht pruefen, Manipulationen ablehnen, Aenderung uebernehmen');
+  const nach = s.find(x => schrittName(x) === 'Job 1b auf frischem synthetischem Checkout');
+  const reihenfolge = (text, teile) => {
+    const stellen = teile.map(t => text.indexOf(t));
+    assert.ok(stellen.every(x => x > 0), JSON.stringify(stellen));
+    assert.deepEqual([...stellen].sort((a, b) => a - b), stellen);
+  };
+
+  reihenfolge(claude, [
+    'printf \'%s  %s\\n\' "$A6_ERSATZ_K2_SHA256" "$K2ERSATZ" | sha256sum -c --status',
+    'a6_claude_aufruf "$O/claude-platzhalter.jsonl"; then',
+    'a6_protokoll_auswerten "$O/claude-platzhalter.jsonl" > "$O/diagnose-platzhalter.txt"',
+    "grep -qx 'A6-DIAGNOSE ok' \"$O/diagnose-platzhalter.txt\"",
+    'if a6_protokoll_auswerten "$O/claude-abgeschnitten.jsonl"',
+    'a6_sicht_anlegen "$RUNNER_TEMP/a6-claude-arbeit" "$O/k2/a6-claude-sicht"',
+    'A6_EINHAENGEN=(--mount "type=bind,src=$K2ERSATZ,dst=/opt/a6/claude-ersatz-k2.mjs,readonly")',
+    '( export RUNNER_TEMP="$O/k2"; a6_claude_container node /opt/a6/claude-ersatz-k2.mjs git-ablage /arbeit )',
+  ]);
+  reihenfolge(sicht, [
+    'a6_claude_beendet',
+    "grep -qx $'\\tfsmonitor = touch a6-k2-marker' \"$K2S/.git/config\"",
+    'if a6_sicht_uebernehmen "$ARBEIT" "$K2S" 2> "$O/k2.err"; then',
+    'test "$(cat "$O/k2.err")" = "A6-SICHT inhalt"',
+    'test ! -e "$ARBEIT/.git"',
+    'test -e "$O/k2-gegenprobe/a6-k2-marker"',
+    'test -z "$(find "$WURZEL" "$GITHUB_WORKSPACE" -name a6-k2-marker -print -quit)"',
+    'a6_sicht_uebernehmen "$ARBEIT" "$SICHT"',
+  ]);
+  reihenfolge(nach, [
+    'agent-code-job-claude-nach.mjs',
+    'git -C "$O/checkout" rev-parse --git-dir > /dev/null',
+    'test -z "$(git -C "$O/checkout" config --get core.fsmonitor || true)"',
+    'test -z "$(find "$RUNNER_TEMP" "$GITHUB_WORKSPACE" -name a6-k2-marker -print -quit)"',
+  ]);
+  // Der K2-Ersatz faehrt nie Git und legt den Marker nie an; er ist an seinen SHA-256 gebunden.
+  const k2 = lies('generalprobe/claude-ersatz-k2.mjs');
+  assert.ok(!/child_process|spawn|exec/.test(k2));
+  assert.equal(K2_KONFIG, '[core]\n\trepositoryformatversion = 0\n\tfsmonitor = touch a6-k2-marker\n');
 });
 
 test('Sicht: Profilpfade werden streng gelesen, alles andere wird abgelehnt', () => {
@@ -709,7 +991,7 @@ test('K3: Gegenproben, jede Mutation des Messschritts scheitert am Waechter', ()
 });
 
 // Ausweichloesung (b): nur falls GitHub agent-auftrag.yml auf seinem eigenen PR nicht startet.
-const A6_AUSWEICH_SHA256 = '33a9eb3d567f3e510705bf81983eccc4fd5456c7169542c4a3d34308aaaedede';
+const A6_AUSWEICH_SHA256 = 'f4d273f3dce9d4a124661b52f7e65264f487603e0ef23b99c2b69ae8ba58523c';
 
 test('Ausweichloesung: ergaenzt den heutigen Trockenlauf nur und traegt Umgebung und Probejobs wortgleich', () => {
   const aus = lies(`${ENTWURF}/ausweich/code-pilot-trockenlauf.yml`);
