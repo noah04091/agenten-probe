@@ -1259,25 +1259,28 @@ test('Geheimnismuster: jedes Pflichtmuster wird erkannt, Erwaehnungen nicht', ()
   rejects(() => scanForSecrets(Object.create(Buffer.prototype)), 'geheimnis-eingabe');
 });
 
-// Zustandsloses Installationstoken ghs_APPID_JWT (GitHub, voreingestellt seit 02.10.2026). Synthetisch:
-// Kopf und Nutzlast sind base64url aus festen Testtexten, die Signatur ist erfunden.
+// Neue Installationstoken (seit 02.10.2026 ghs_APPID_JWT) ohne Annahme ueber die Binnenstruktur.
+// Synthetisch: Kopf und Nutzlast sind base64url aus festen Testtexten, die Signatur ist erfunden.
 const b64url = text => Buffer.from(text, 'utf8').toString('base64url');
 const JWT_KOPF = b64url('{"alg":"RS256","typ":"JWT","test":"ohne-wirkung"}');
 const JWT_NUTZLAST = b64url('{"nur":"test","ohne":"wirkung","n":123456789}');
 const JWT_SIGNATUR = 'NurTest-Signatur_ohne-Wirkung-0123456789';
 const jwtToken = appId => `ghs_${appId}_${JWT_KOPF}.${JWT_NUTZLAST}.${JWT_SIGNATUR}`;
 
-test('Geheimnismuster: zustandsloses ghs_APPID_JWT mit kurzer App-ID wird als github-token erkannt', () => {
-  const lang = `ghs_123456_${JWT_KOPF}.${JWT_NUTZLAST}.${'s'.repeat(400)}`;
+test('Geheimnismuster: neue ghs_-Token mit Unterstrich, Punkt und Bindestrich werden als github-token erkannt', () => {
   const werte = [
     jwtToken('1'),
     jwtToken('42'),
     jwtToken('123456'),
     jwtToken('9'.repeat(20)),
-    lang,
-    // Grenzlaenge: genau 20 Zeichen nach der App-ID.
-    `ghs_7_${'a'.repeat(12)}.${'b'.repeat(5)}.c`,
-    `ghs_7_${'-'.repeat(8)}.${'_'.repeat(8)}.${'-'.repeat(4)}`,
+    `ghs_123456_${JWT_KOPF}.${JWT_NUTZLAST}.${'s'.repeat(400)}`,
+    // unbekannte Binnenstruktur, keine App-ID, kein JWT
+    `ghs_${'ab.cd-ef_'.repeat(4)}`,
+    `ghs_${'-'.repeat(10)}${'_'.repeat(10)}`,
+    `ghs_${'.'.repeat(20)}`,
+    `ghs_x_${'a'.repeat(30)}`,
+    // Grenzlaenge: genau 20 Zeichen nach ghs_
+    `ghs_7_${'a'.repeat(10)}.${'b'.repeat(5)}.c`,
   ];
 
   for (const wert of werte) {
@@ -1310,10 +1313,9 @@ test('Geheimnismuster: zustandsloses ghs_APPID_JWT mit kurzer App-ID wird als gi
     'Das neue Format heisst ghs_APPID_JWT.',
     'ghs_123456_',
     'ghs_123456_kurz.x.y',
-    `ghs_x_${'a'.repeat(30)}`,
-    'ghs__eyJ.a.b',
-    // Grenzlaenge: 19 Zeichen nach der App-ID.
-    `ghs_7_${'a'.repeat(11)}.${'b'.repeat(5)}.c`,
+    // Grenzlaenge: 19 Zeichen nach ghs_
+    `ghs_7_${'a'.repeat(9)}.${'b'.repeat(5)}.c`,
+    `ghs_${'a'.repeat(19)} danach`,
   ]) {
     const result = scanForSecrets(Buffer.from(harmlos));
     assert.equal(result.fund, false, harmlos);

@@ -182,9 +182,10 @@ function deepFreeze(value) {
 const SECRET_PATTERNS = Object.freeze([
   ['anthropic-schluessel', /sk-ant-[A-Za-z0-9_-]{20,}/],
   ['github-token', /gh[psour]_[A-Za-z0-9]{20,}/],
-  // Zustandsloses Installationstoken ghs_APPID_JWT: die kurze App-ID mit Unterstrich davor wuerde das
-  // Muster oben unterbrechen. Punkte und Bindestriche gehoeren zum JWT.
-  ['github-token', /ghs_[0-9]{1,20}_[A-Za-z0-9_.-]{20,}/],
+  // Installationstoken ohne Annahme ueber die Binnenstruktur (etwa ghs_APPID_JWT mit kurzer App-ID):
+  // Unterstrich, Punkt und Bindestrich wuerden das Muster oben unterbrechen. Dieselben Zeichen wie im
+  // Transport.
+  ['github-token', /ghs_[A-Za-z0-9._-]{20,}/],
   ['github-pat', /github_pat_[A-Za-z0-9_]{20,}/],
   ['privater-schluessel', /-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z ]{0,6}-----/],
   ['aws-zugangsschluessel', /(?:AKIA|ASIA)[0-9A-Z]{16}/],
