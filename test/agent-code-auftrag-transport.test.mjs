@@ -245,14 +245,14 @@ test('Eingabe: Issue-Nummer nach Auftragsvertrag, Lauf-ID nach sicherem Format',
   }
 });
 
-test('Token: nur ghs_ mit [A-Za-z0-9_], begrenzte Laenge, geprueft vor jeder Anfrage', () => {
+test('Token: nur ghs_ mit [A-Za-z0-9._-], begrenzte Laenge, geprueft vor jeder Anfrage', () => {
   const aufrufe = attrappe(json(200, {}));
 
   for (const make of [createReadTransport, createPublishTransport]) {
     const schlecht = [
       undefined, null, 1, '', 'ghs_', 'ghp_abc123', 'github_pat_11ABC_def', 'gho_abc', 'ghu_abc', 'ghr_abc', 'GHS_abc',
       'Bearer ghs_abc', 'ghs_abc\n', 'ghs_abc\r\nX-Boese: 1', 'ghs_ab c', 'ghs_abc\t', 'ghs_abc\u0000', 'ghs_abc:def',
-      'ghs_abc-def', 'ghs_äbc', 'ghs_abc;', ` ${TOKEN}`, new String(TOKEN), `ghs_${'a'.repeat(1021)}`,
+      'ghs_äbc', 'ghs_abc;', ` ${TOKEN}`, new String(TOKEN), `ghs_${'a'.repeat(1021)}`,
     ];
 
     for (const token of schlecht) {
@@ -1101,6 +1101,139 @@ test('Token: in keinem Fehler, keiner Antwort und keinem Fehlerpfad sichtbar; nu
   // Antworttext ist Sache des Fachmoduls; Kopfzeilen mit Token fallen weg.
   attrappe(req => antworte(req, { kopf: ['X-Token', TOKEN, 'Authorization', TOKEN], teile: ['{}'] }));
   keinToken(await schreibe()({ method: 'GET', path: LIVE_GET[0] }));
+});
+
+// Neue Installationstoken (GitHub, seit 02.10.2026 ghs_APPID_JWT) gelten als undurchsichtig: nur Praefix
+// ghs_, Zeichen [A-Za-z0-9._-] und hoechstens 1024 Zeichen. Alle Werte sind synthetisch und ohne Wirkung.
+const b64url = text => Buffer.from(text, 'utf8').toString('base64url');
+const JWT_KOPF = b64url('{"alg":"RS256","typ":"JWT","test":"ohne-wirkung"}');
+const JWT_NUTZLAST = b64url('{"nur":"test","ohne":"wirkung","n":123456789}');
+const JWT_SIGNATUR = 'NurTest-Signatur_ohne-Wirkung-0123456789';
+const TOKEN_JWT = `ghs_123456_${JWT_KOPF}.${JWT_NUTZLAST}.${JWT_SIGNATUR}`;
+
+// Kein Teil des Tokens nach dem Praefix darf in Fehlern, Ergebnissen oder Funktionen auftauchen.
+function keinTokenTeil(value, token) {
+  const texte = [inspect(value, { depth: 10, showHidden: true }), String(value?.stack ?? ''), String(value?.message ?? '')];
+
+  try {
+    texte.push(String(JSON.stringify(value)));
+  } catch {
+    // nicht serialisierbar ist hier kein Befund
+  }
+
+  const teile = [token, token.slice(4), ...token.slice(4).split(/[._-]/).filter(teil => teil.length >= 8)];
+
+  for (const text of texte) {
+    for (const teil of teile) {
+      assert.ok(!text.includes(teil), 'Tokenteil offengelegt');
+    }
+  }
+}
+
+test('Token: neues Format undurchsichtig mit [A-Za-z0-9._-], ohne Strukturannahme, begrenzt, nur im Authorization-Kopf', async () => {
+  // Gegenprobe: das synthetische Token enthaelt Punkt, Bindestrich und Unterstrich, sonst prueft der Test sie nicht.
+  assert.ok(TOKEN_JWT.length > 100 && /\./.test(TOKEN_JWT) && /-/.test(TOKEN_JWT) && /_/.test(TOKEN_JWT.slice(4)));
+
+  const genau1024 = `ghs_${'a.b-c_'.repeat(170)}x`.slice(0, 1024);
+  assert.equal(genau1024.length, 1024);
+  const gut = [
+    TOKEN_JWT,
+    // kurze App-ID, unbekannte Binnenstruktur, fuehrende Null, keine oder viele Punkte
+    `ghs_1_${JWT_KOPF}.${JWT_NUTZLAST}.${JWT_SIGNATUR}`,
+    `ghs_0123_${JWT_KOPF}`,
+    'ghs_abc-def',
+    'ghs_.',
+    'ghs_-',
+    'ghs__',
+    'ghs_a.b',
+    'ghs_a.b.c.d.e',
+    'ghs_..--__',
+    'ghs_x',
+    `ghs_${'T'.repeat(36)}`,
+    genau1024,
+  ];
+
+  for (const make of [createReadTransport, createPublishTransport]) {
+    for (const token of gut) {
+      assert.equal(typeof make(input({ token })), 'function', `Laenge ${token.length}`);
+    }
+  }
+
+  const schlecht = [
+    `${genau1024}x`,
+    `ghs_${'a'.repeat(1021)}`,
+    `${TOKEN_JWT}${'s'.repeat(1024)}`,
+    'ghs_',
+    'ghs_a b',
+    ' ghs_a.b',
+    'ghs_a.b ',
+    'ghs_a.b\n',
+    'ghs_a.b\r\nX-Boese: 1',
+    'ghs_a.b\t',
+    'ghs_a\u0000.b',
+    'ghs_a\u007f.b',
+    'ghs_a.b ',
+    'ghs_a:b',
+    'ghs_a.b;',
+    'ghs_a=',
+    'ghs_a+b',
+    'ghs_a/b',
+    'ghs_a,b',
+    'ghs_äbc',
+    'ghs_a.b ',
+    'ghp_123456_a.b.c',
+    'gho_123456_a.b.c',
+    'ghu_123456_a.b.c',
+    'ghr_123456_a.b.c',
+    'GHS_123456_a.b.c',
+    'github_pat_123456_a.b.c',
+    'ghs-123456_a.b.c',
+    `Bearer ${TOKEN_JWT}`,
+    `${TOKEN_JWT}\n`,
+    `${TOKEN_JWT}:x`,
+    TOKEN_JWT.replace('ghs_', 'ghp_'),
+    new String(TOKEN_JWT),
+    undefined,
+    null,
+    '',
+  ];
+
+  const aufrufe = attrappe(json(200, {}));
+
+  for (const make of [createReadTransport, createPublishTransport]) {
+    for (const token of schlecht) {
+      assert.throws(() => make(input({ token })), error => {
+        assert.equal(error.name, 'OrderError', String(error));
+        assert.equal(error.code, 'transport-token');
+        keinToken(error);
+
+        if (typeof token === 'string' && token.trim().length > 12) {
+          keinTokenTeil(error, token.trim());
+        }
+
+        return true;
+      });
+    }
+  }
+
+  assert.equal(aufrufe.length, 0, 'eine Anfrage vor der Tokenpruefung');
+
+  // Im Lauf steht das neue Token nur im Authorization-Kopf, nie im Pfad, Ergebnis oder Fehler.
+  for (const make of [lese, schreibe]) {
+    const ok = attrappe(json(200, { ok: true }));
+    const transport = make({ token: TOKEN_JWT });
+    const ergebnis = await transport({ method: 'GET', path: LIVE_GET[0] });
+    assert.equal(ok.length, 1);
+    assert.equal(ok[0].options.headers.Authorization, `Bearer ${TOKEN_JWT}`);
+    assert.ok(!ok[0].options.path.includes(TOKEN_JWT.slice(4)));
+    keinTokenTeil(ergebnis, TOKEN_JWT);
+    keinTokenTeil(transport, TOKEN_JWT);
+
+    attrappe(netzfehler('ECONNREFUSED'));
+    const fehler = await make({ token: TOKEN_JWT })({ method: 'GET', path: LIVE_GET[0] }).then(() => null, error => error);
+    assert.equal(fehler?.code, 'transport-netz');
+    keinTokenTeil(fehler, TOKEN_JWT);
+  }
 });
 
 // ---------------------------------------------------------------------------

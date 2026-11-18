@@ -51,7 +51,8 @@ const FIXTURE = JSON.parse(FIXTURE_BYTES.toString('utf8'));
 const POLICY_ENTWURF = JSON.parse(readFileSync(join(ROOT, 'test', 'fixtures', 'agent-policy.entwurf.json'), 'utf8'));
 const SETTINGS_ENTWURF_BYTES = readFileSync(join(ROOT, 'test', 'fixtures', 'claude-settings.entwurf.json'));
 // A6.4-3a: SHA-256 der freigegebenen produktiven Policy (Pruefpunkt B des Eigentuemer-PR).
-const POLICY_SHA256 = '590626e65aa8c610e3e4230e667f35ca6a895046d1f609858b1d511b720c4539';
+// Stand nach dem Tokenformat-Fix: nur die Hashes von Transport- und Paketmodul sind neu.
+const POLICY_SHA256 = '48f06180f146e2ffe81889c92fa2fdf6f8f8fe9104c78cc1a28f7b7a7009ea2d';
 
 const IST_WINDOWS = process.platform === 'win32';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');

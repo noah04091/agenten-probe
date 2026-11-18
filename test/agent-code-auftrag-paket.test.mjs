@@ -15,6 +15,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inspect } from 'node:util';
 
 import { OrderError, orderSha256, resolveOrder } from '../scripts/agent-code-auftrag.mjs';
 import {
@@ -1256,6 +1257,84 @@ test('Geheimnismuster: jedes Pflichtmuster wird erkannt, Erwaehnungen nicht', ()
   rejects(() => scanForSecrets('text'), 'geheimnis-eingabe');
   // Ein Objekt mit dem Prototyp von Buffer, aber ohne Speicher: Ablehnung mit Code, kein TypeError.
   rejects(() => scanForSecrets(Object.create(Buffer.prototype)), 'geheimnis-eingabe');
+});
+
+// Neue Installationstoken (seit 02.10.2026 ghs_APPID_JWT) ohne Annahme ueber die Binnenstruktur.
+// Synthetisch: Kopf und Nutzlast sind base64url aus festen Testtexten, die Signatur ist erfunden.
+const b64url = text => Buffer.from(text, 'utf8').toString('base64url');
+const JWT_KOPF = b64url('{"alg":"RS256","typ":"JWT","test":"ohne-wirkung"}');
+const JWT_NUTZLAST = b64url('{"nur":"test","ohne":"wirkung","n":123456789}');
+const JWT_SIGNATUR = 'NurTest-Signatur_ohne-Wirkung-0123456789';
+const jwtToken = appId => `ghs_${appId}_${JWT_KOPF}.${JWT_NUTZLAST}.${JWT_SIGNATUR}`;
+
+test('Geheimnismuster: neue ghs_-Token mit Unterstrich, Punkt und Bindestrich werden als github-token erkannt', () => {
+  const werte = [
+    jwtToken('1'),
+    jwtToken('42'),
+    jwtToken('123456'),
+    jwtToken('9'.repeat(20)),
+    `ghs_123456_${JWT_KOPF}.${JWT_NUTZLAST}.${'s'.repeat(400)}`,
+    // unbekannte Binnenstruktur, keine App-ID, kein JWT
+    `ghs_${'ab.cd-ef_'.repeat(4)}`,
+    `ghs_${'-'.repeat(10)}${'_'.repeat(10)}`,
+    `ghs_${'.'.repeat(20)}`,
+    `ghs_x_${'a'.repeat(30)}`,
+    // Grenzlaenge: genau 20 Zeichen nach ghs_
+    `ghs_7_${'a'.repeat(10)}.${'b'.repeat(5)}.c`,
+  ];
+
+  for (const wert of werte) {
+    for (const text of [
+      wert,
+      `vorher ${wert} nachher\n`,
+      `const t = '${wert}';\n`,
+      `{"token":"${wert}"}`,
+      `Authorization: Bearer ${wert}\r\n`,
+      `https://x.example/?t=${wert}&x=1`,
+    ]) {
+      const result = scanForSecrets(Buffer.from(text));
+      assert.equal(result.fund, true, text.slice(0, 40));
+      assert.deepEqual([...result.arten], ['github-token']);
+      const ausgabe = inspect(result, { depth: 5, showHidden: true }) + JSON.stringify(result);
+
+      for (const teil of [wert, wert.slice(4), JWT_KOPF, JWT_NUTZLAST, JWT_SIGNATUR]) {
+        assert.ok(!ausgabe.includes(teil), 'Tokenteil im Ergebnis');
+      }
+    }
+  }
+
+  // Alte Formate bleiben erkannt, das neue Muster ersetzt nichts.
+  assert.deepEqual([...scanForSecrets(Buffer.from(`ghs_${'T'.repeat(36)}`)).arten], ['github-token']);
+  assert.deepEqual([...scanForSecrets(Buffer.from(`ghp_${'a1'.repeat(18)}`)).arten], ['github-token']);
+  assert.deepEqual([...scanForSecrets(Buffer.from(`github_pat_${'P'.repeat(30)}`)).arten], ['github-pat']);
+
+  // Erwaehnungen und zu kurze Reste bleiben ohne Fund.
+  for (const harmlos of [
+    'Das neue Format heisst ghs_APPID_JWT.',
+    'ghs_123456_',
+    'ghs_123456_kurz.x.y',
+    // Grenzlaenge: 19 Zeichen nach ghs_
+    `ghs_7_${'a'.repeat(9)}.${'b'.repeat(5)}.c`,
+    `ghs_${'a'.repeat(19)} danach`,
+  ]) {
+    const result = scanForSecrets(Buffer.from(harmlos));
+    assert.equal(result.fund, false, harmlos);
+  }
+});
+
+test('Vergleich: Datei mit zustandslosem Installationstoken wird als paket-geheimnis abgelehnt, ohne Tokenteil im Fehler', () => {
+  const wert = jwtToken('123456');
+  const ctx = edited({ ...GOOD, 'src/rechne.js': `export const t = '${wert}';\n` });
+  assert.throws(() => compareWorkspace(ctx.trusted, ctx.order, ctx.hash, ctx.work), error => {
+    assertCode(error, 'paket-geheimnis');
+    const text = inspect(error, { depth: 5, showHidden: true }) + String(error.stack ?? '');
+
+    for (const teil of [wert, wert.slice(4), JWT_KOPF, JWT_NUTZLAST, JWT_SIGNATUR]) {
+      assert.ok(!text.includes(teil), 'Tokenteil im Fehler');
+    }
+
+    return true;
+  });
 });
 
 // Kuenstlicher Wert, dessen Base64 die Zeichen + und / enthaelt, damit sich Base64url unterscheidet.
