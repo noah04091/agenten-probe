@@ -752,6 +752,67 @@ etwas anderes nahelegen, gilt dieser Nachtrag.
 5. Vor Live 1 müssen die offenen K1-Nachweise und die K4-Entscheidung geklärt und die übrigen
    Pflichtvoraussetzungen nachgewiesen sein.
 
+**A6 P-4: Sicherheitsvorbereitung (Stand 18.11.2026, Bot-Anteil, ohne Wirkung):**
+
+- **Umfang:** Geschützte Ziele nur als Entwurf unter `entwurf/a6-p1/`. Neu ist
+  `entwurf/a6-p1/a6-protokoll.mjs` mit dem Ziel `.github/agent/a6-protokoll.mjs`. Geändert sind der
+  Workflow-Entwurf, die Funktionsdatei und die Ausweichlösung. Dazu kommen der K2-Ersatz
+  `generalprobe/claude-ersatz-k2.mjs`, Tests, Mitschnitte unter `test/fixtures/a6-k1a/` und der Entwurf
+  `docs/a6-k1a-issue-80-entwurf.md`. Unverändert bleiben Policy, `scripts/`, Profile, Abnahmen,
+  Einstellungen, Secrets, Environments und Rulesets.
+- **K1a, Protokollauswertung:**
+  - Grundlage ist das echte Format von Claude Code 2.1.326. Die Mitschnitte entstanden offline mit den
+    produktiven Schaltern und Einstellungen, gegen eine lokale Modell-Attrappe in einem internen
+    Docker-Netz, ohne Schlüssel und ohne Anthropic.
+  - Gewertet werden nur Felder, die Claude Code selbst schreibt: `tool_use`, `tool_result`,
+    `tool_result_meta` (accept/reject, rule/mode), `permission_denials` und `system/permission_denied`.
+  - Ergebnisse: erfolgreich, verweigert-regel, verweigert-modus, nicht-verfuegbar, fehler,
+    ohne-ergebnis.
+  - Ausgabe nur feste Kennungen. Jeder gelungene Zugriff ausserhalb des Profils ergibt `A6-ALARM`.
+  - Der Live-Schritt wertet auch nach einem gescheiterten Aufruf aus. Massgeblich bleibt der Status des
+    Aufrufs; die Auswertung kann nur zusätzlich scheitern lassen.
+- **K1a, bereits messbar:**
+  - Offline gegen die echte Version: alle neun Katalogfälle wie erwartet, dazu die Abbrüche durch
+    Runden, Budget und API-Fehler.
+  - In der lokalen Emulation der Probejobs: der echte 401-Lauf mit Platzhalter ergibt
+    `A6-LAUF fehler-api` und `A6-DIAGNOSE ok`.
+- **K1a, weiterhin offen:**
+  - das Verhalten eines echten Modells. Das misst erst die Kanarienprobe über Issue #80, nach gesonderter
+    Freigabe;
+  - die Gegenprobe mit echter Version und abweichender Einstellung (Konzept im Entwurf, nicht
+    ausgeführt).
+- **K2:**
+  - **Test A:** `.git/config` mit `core.fsmonitor` in der Sicht wird mit `A6-SICHT inhalt` abgelehnt.
+    Keine Rückkopie, der Arbeitsordner bleibt unverändert, der Marker entsteht nicht. Die Gegenprobe in
+    einer Kopie zeigt, dass Git den Marker sonst anlegt.
+  - **Test B:** in der Generalprobe verdrahtet, ein zweiter Ersatz im gehärteten Container. In der
+    lokalen Emulation vollständig grün: Ablehnung, keine Rückkopie, Gegenprobe scharf, kein Marker unter
+    `RUNNER_TEMP` und dem Checkout, Job 1b ohne fremde Git-Konfiguration.
+  - **Nicht erbracht:** der Lauf in echten Actions (erst auf dem Eigentümer-PR) und die Durchsicht der
+    Post-Schritte der gepinnten Actions (`actions/checkout`, `upload-artifact`, `download-artifact`,
+    `create-github-app-token`). Der Post-Schritt von `actions/checkout` läuft nach der letzten eigenen
+    Prüfung. K2 ist deshalb nicht abgeschlossen.
+- **Live-Schalter:** Im Entwurf sind die `false &&`-Sperren von Job 1 bis 3 entfernt. Jede Bedingung ist
+  vollständig festgelegt: nur `issues` auf `main` in diesem Repository und nur nach erfolgreichen
+  Vorgängern. Job 0 mit K3, Environment `claude-bot`, unabhängige Abnahme, Sammeljob, Kosten- und
+  Zeitgrenzen bleiben unverändert.
+- **Eigentümer-PR, nur Noah:** byte-gleich `entwurf/a6-p1/agent-auftrag.yml` nach
+  `.github/workflows/agent-auftrag.yml`, `entwurf/a6-p1/a6-funktionen.sh` nach
+  `.github/agent/a6-funktionen.sh` und `entwurf/a6-p1/a6-protokoll.mjs` nach
+  `.github/agent/a6-protokoll.mjs`. Bis dahin sind genau fünf Wächter bewusst rot: drei
+  Eigentümerstand-Tests und die Workflow-Hashwächter in `agent-code-job` und
+  `agent-code-job-veroeffentlichen`.
+- **Vor dem P-4-Merge:**
+  - erneute unabhängige Abnahme des Eigentümer-PR;
+  - Generalprobe mit K2 Test B in echten Actions grün;
+  - Durchsicht der Post-Schritte;
+  - `agent-auftrag-sammel` als Pflichtcheck in `main-pruefungen`;
+  - K4-Zwischenentscheidung.
+- **Vor dem ersten echten Claude-Aufruf:**
+  - Entscheidung zur Gegenprobe;
+  - Freigabe der Kanarienprobe über Issue #80 (Text, Labels);
+  - Ausgabenlimit auf dem Schlüssel (offene Entscheidung 9).
+
 **Verschoben:** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach
 Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele
 Läufe, Neustart-Grenzen, Kostenauswertung, neue Dateien in Profilen, Claude Code ohne Action im
@@ -828,6 +889,8 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 10. Falls K1 zeigt, dass sich Lesen nicht verlässlich begrenzen lässt: A6.6 erst nach Umbau auf Claude Code im Container? Empfehlung: ja, vorab festlegen.
 11. K4: Workload Identity Federation einführen, und neue Live-Läufe erst nach der Schlüsselerneuerung am 02.12.2026? Empfehlung: Entscheidung zusammen mit W1.
 12. ~~P-1, Befund 2: Claude-Arbeitsordner physisch verengen~~ entschieden 17.11.2026: eigene Sicht nur mit den Profildateien, ohne Änderung an `scripts/` oder der Policy, siehe Abschnitt 10 und Abschnitt A6 P-1.
+13. Vor K1a: Gegenprobe mit der echten Claude-Code-Version, der Modell-Attrappe und einer zusätzlichen `allow`-Regel offline ausführen (Konzept in `docs/a6-k1a-issue-80-entwurf.md`)? Empfehlung: ja, einmalig lokal im gepinnten Image.
+14. Vor dem P-4-Merge: Wer sieht die Post-Schritte der gepinnten Actions für K2 durch, und genügt die Durchsicht ohne eigene Probe? Empfehlung: Durchsicht durch Terminal 1 mit Quellenangabe je SHA.
 
 ## 12. Einstieg für eine neue Claude-Code-Sitzung
 

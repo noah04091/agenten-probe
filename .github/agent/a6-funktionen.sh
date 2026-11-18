@@ -6,7 +6,7 @@
 #
 # Erwartete Umgebung (vom Workflow gesetzt): A6_NODE_IMAGE, A6_NODE_VERSION, A6_PROXY_IMAGE,
 # A6_INTEGRITAET_SHA256, A6_ATTRAPPE_SHA256, A6_PROBE_SHA256, A6_ERSATZ_SHA256, A6_CC_VERSION, A6_EINSTELLUNGEN_SHA256,
-# GITHUB_WORKSPACE, RUNNER_TEMP, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT.
+# A6_PROTOKOLL_SHA256 (P-4), GITHUB_WORKSPACE, RUNNER_TEMP, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT.
 
 # Laedt ein Image mit festem Digest und prueft, dass genau dieser Digest vorliegt.
 a6_image_laden() {
@@ -404,6 +404,26 @@ a6_claude_aufruf() {
     --no-session-persistence \
     --output-format stream-json \
     --verbose > "$protokoll"
+}
+
+# K1a: wertet das Claude-Protokoll aus (P-4). Der Auswerter .github/agent/a6-protokoll.mjs laeuft nur nach dem
+# Vergleich mit dem inline genehmigten A6_PROTOKOLL_SHA256, im festen Image, ohne Netz, ohne Rechte, mit dem
+# Protokoll nur lesbar. Er gibt nur feste Kennungen aus. Exitcode 0 nur bei vollstaendigem Protokoll ohne
+# Alarm; jeder andere Wert ist ein Fehlschlag. Die Funktion entscheidet nie ueber den Claude-Aufruf selbst.
+#   a6_protokoll_auswerten PROTOKOLL
+a6_protokoll_auswerten() {
+  local protokoll="$1" auswerter="$GITHUB_WORKSPACE/.github/agent/a6-protokoll.mjs" status=0
+  local einhaengen=(--mount "type=bind,src=$auswerter,dst=/opt/a6/a6-protokoll.mjs,readonly")
+  printf '%s  %s\n' "$A6_PROTOKOLL_SHA256" "$auswerter" | sha256sum -c --status \
+    || { echo "A6-DIAGNOSE anker"; return 2; }
+  if [[ -f "$protokoll" && ! -L "$protokoll" ]]; then
+    einhaengen+=(--mount "type=bind,src=$protokoll,dst=/opt/a6/protokoll.jsonl,readonly")
+  fi
+  docker run --rm --pull=never --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --pids-limit 64 --memory 512m --cpus 1 --user "$(id -u):$(id -g)" \
+    "${einhaengen[@]}" --env "A6_DATEIEN=${A6_DATEIEN:-}" --env PATH=/usr/local/bin:/usr/bin:/bin \
+    "$A6_NODE_IMAGE" node /opt/a6/a6-protokoll.mjs /opt/a6/protokoll.jsonl || status=$?
+  return "$status"
 }
 
 # Raeumt Claude-Container, Vorschaltcontainer und beide Netze ab. Darf immer laufen.
