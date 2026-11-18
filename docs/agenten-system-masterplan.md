@@ -323,13 +323,13 @@ nur die fachliche Aufgabe und gilt als nicht vertrauenswürdige Eingabe. Die Gre
 - F7: Nach Claude laufen interne Schritte der Action und die Post-Phase von `actions/checkout`, die
   Git-Befehle im Arbeitsverzeichnis ausführt.
 
-**Sicherheitskriterien, Pflicht vor A6.4 beziehungsweise vor den ersten neuen Live-Läufen (alle offen):**
+**Sicherheitskriterien, Pflicht vor A6.4 beziehungsweise vor den ersten neuen Live-Läufen (alle offen; Nachtrag 18.11.2026: der offene K3-Pflichtnachweis ist bestanden, alles Übrige unverändert):**
 
 | # | Anforderung | Nachweis |
 |---|---|---|
 | K1 | Lesen und Schreiben von Claude nur im Auftrag: Pfad-Erlaubnisse, Verbote, zusätzlich die Einstellungen `blockReadsOutsideWorkingDirectories` und `blockWritesOutsideWorkingDirectories` (ob die eingesetzte Claude-Code-Version sie kennt, ist ungeprüft) | Kanarienprobe im echten Action-Kontext mit ausschließlich künstlichen Testwerten; belegt werden müssen tatsächliche Werkzeugverweigerungen, nicht nur fehlende Ausgaben; Gegenprobe mit der heutigen Einstellung muss einen Zugriff zeigen. **Offene Anforderung, nicht ausführen:** Die Probe braucht einen separat begrenzten Zugang, kontrollierte Logausgabe und eine eigene Sicherheitsfreigabe von Noah |
 | K2 | Keine von Claude veränderte Git-Konfiguration und kein von Claude geschriebener Code wirkt in späteren Schritten oder Post- und Cleanup-Schritten (Action, `actions/checkout`) | Claude arbeitet in einer Kopie ohne `.git`, Checkout außerhalb seines Schreibbereichs; Durchsicht aller Post-Schritte auf dem jeweiligen SHA; Probe mit präparierter `.git/config` (`core.fsmonitor`), deren Marker nie entstehen darf. Eine Hash-Prüfung nach Claude allein genügt nicht |
-| K3 | Eindeutige Auftragskennung `issue-<n>/<profil-id>/<profil-hash>/<text-hash>/<abnahme-hash>`; Start nur durch frisch gesetztes Label von Noah; der vollständige Issue-Ereignisverlauf wird ausgewertet, unvollständige oder mehrdeutige Ereignisdaten führen zur Ablehnung; gültig sind nur von `noah04091` persönlich gesetzte Startlabels (`labeled`, `bot-auftrag`), jedes fremde Setzen des Startlabels führt zur Ablehnung des gesamten Laufs, statt lediglich ignoriert zu werden; ein nach der maßgeblichen Freigabe entferntes Startlabel entzieht diese unabhängig vom Akteur; die Profil-Label-Herkunft und die eindeutige Zuordnung der Startfreigabe zum Workflow-Lauf bleiben verpflichtend; `GITHUB_RUN_ATTEMPT` muss genau 1 sein; kein bereits vorhandener PR mit zugehörigem Branch-Präfix `wp/<n>-*`, unabhängig vom PR-Status (offen, geschlossen oder gemergt) und auch bei inzwischen gelöschtem Branch; bestehende Branches `wp/<n>-*` führen weiterhin zur Ablehnung; Issue offen; höchstens drei Startfreigaben je Issue, unabhängig von Änderungen an Profil, Issue-Text oder Auftragskennung; ein wartender Lauf wird unmittelbar vor den sicherheitsrelevanten Schritten erneut vollständig geprüft; Freigabefrist weiterhin exakt 60 Minuten ab Startlabel, insbesondere geprüft vor Claude und unmittelbar vor der Veröffentlichung | Unit-Tests je Regel mit grünem und rotem Fall, Generalprobe in A6.4. **Offener Pflichtnachweis:** Messung im ersten kontrollierten Trockenlauf von A6.4, ob die `issues.labeled`-Nutzlast den Issue-Zustand zum Zeitpunkt des Labels enthält (`updated_at` sekundengleich sowie Titel und Text als unveränderlicher Schnappschuss). Insbesondere prüfen, ob bei verzögerten Workflow-Läufen und unmittelbar folgenden Issue-Änderungen der ursprüngliche Zustand erhalten bleibt. Synthetische Unit-Tests allein reichen dafür nicht aus; K3 ist nicht abgeschlossen, und vor diesem Nachweis und seiner Freigabe gibt es keinen echten Agentenlauf |
+| K3 | Eindeutige Auftragskennung `issue-<n>/<profil-id>/<profil-hash>/<text-hash>/<abnahme-hash>`; Start nur durch frisch gesetztes Label von Noah; der vollständige Issue-Ereignisverlauf wird ausgewertet, unvollständige oder mehrdeutige Ereignisdaten führen zur Ablehnung; gültig sind nur von `noah04091` persönlich gesetzte Startlabels (`labeled`, `bot-auftrag`), jedes fremde Setzen des Startlabels führt zur Ablehnung des gesamten Laufs, statt lediglich ignoriert zu werden; ein nach der maßgeblichen Freigabe entferntes Startlabel entzieht diese unabhängig vom Akteur; die Profil-Label-Herkunft und die eindeutige Zuordnung der Startfreigabe zum Workflow-Lauf bleiben verpflichtend; `GITHUB_RUN_ATTEMPT` muss genau 1 sein; kein bereits vorhandener PR mit zugehörigem Branch-Präfix `wp/<n>-*`, unabhängig vom PR-Status (offen, geschlossen oder gemergt) und auch bei inzwischen gelöschtem Branch; bestehende Branches `wp/<n>-*` führen weiterhin zur Ablehnung; Issue offen; höchstens drei Startfreigaben je Issue, unabhängig von Änderungen an Profil, Issue-Text oder Auftragskennung; ein wartender Lauf wird unmittelbar vor den sicherheitsrelevanten Schritten erneut vollständig geprüft; Freigabefrist weiterhin exakt 60 Minuten ab Startlabel, insbesondere geprüft vor Claude und unmittelbar vor der Veröffentlichung | Unit-Tests je Regel mit grünem und rotem Fall, Generalprobe in A6.4. **Offener Pflichtnachweis:** Messung im ersten kontrollierten Trockenlauf von A6.4, ob die `issues.labeled`-Nutzlast den Issue-Zustand zum Zeitpunkt des Labels enthält (`updated_at` sekundengleich sowie Titel und Text als unveränderlicher Schnappschuss). Insbesondere prüfen, ob bei verzögerten Workflow-Läufen und unmittelbar folgenden Issue-Änderungen der ursprüngliche Zustand erhalten bleibt. Synthetische Unit-Tests allein reichen dafür nicht aus; K3 ist nicht abgeschlossen, und vor diesem Nachweis und seiner Freigabe gibt es keinen echten Agentenlauf. **Nachtrag 18.11.2026: Dieser offene Pflichtnachweis ist bestanden** (K3 Versuch 2, Läufe `44270231335` und `44271380015`, Einzelheiten im Nachtrag 18.11.2026 in Phase 3). Das hebt die übrigen Voraussetzungen für einen echten Agentenlauf, insbesondere K1 und K4, nicht auf |
 | K4 | Workload Identity Federation statt langlebigem `ANTHROPIC_API_KEY` prüfen. Die gepinnte Action hat die Eingänge `anthropic_federation_rule_id`, `anthropic_organization_id`, `anthropic_service_account_id`, `anthropic_workspace_id`, `anthropic_oidc_audience` und braucht `id-token: write`; ob das Anthropic-Konto Föderation anbietet, ist ungeprüft | schriftlicher Plan mit Kontoseite, engen Regelbedingungen und Rückweg; **keine Änderung an Zugangsdaten ohne Noahs Freigabe** |
 
 **Weitere Pflichtpunkte vor A6.4 (1 bis 6 aus den A6.2-Prüfungen, 7 bis 9 aus der Architekturprüfung zu A6.4; alle offen außer Punkt 9):**
@@ -368,6 +368,8 @@ nur die fachliche Aufgabe und gilt als nicht vertrauenswürdige Eingabe. Die Gre
 9. **Alten Claude-Agenten sperren (abgeschlossen mit A6.4-S, PR #63, Merge `17b33909d362a8213b7353444d6e9dfe275af640`):** Die frühere Risikostelle `.github/workflows/claude-agent.yml`, Ausführungsjob `agentenlauf`, ist über `false &&` als erste Zeile der Job-Bedingung dauerhaft gesperrt. Wächtertest `test/claude-agent-sperre.test.mjs` mit vollständigem Workflow-Fingerabdruck; geprüfter Workflow-Git-Blob `7b3c48aa0bb7b2e4ccd46969b432c62564767fe3`. Keine weitere Aktivierung oder Sperrung erforderlich. Die spätere vollständige Entfernung des alten Workflows und des Wächters ist ein gesonderter Bereinigungsschritt, erst nach Sicherheitsabnahme erlaubt.
 
 K1 bis K4 sowie die Pflichtpunkte 1 bis 8 bleiben offen. Pflichtpunkt 9 ist mit A6.4-S abgeschlossen.
+Nachtrag 18.11.2026: Der offene K3-Pflichtnachweis zum Webhook-Schnappschuss ist bestanden (siehe
+Nachtrag 18.11.2026 in Phase 3). K1 und K4 sowie die übrigen Punkte sind davon unberührt.
 
 Ebenfalls offen und bisher nicht dauerhaft festgehalten:
 - Bind-Mount-Schutz mit echter Negativprobe.
@@ -375,7 +377,7 @@ Ebenfalls offen und bisher nicht dauerhaft festgehalten:
 - Überwachung unerwartet übersprungener Tests im Pflicht-CI-Job.
 - Produktiver Transport mit Weiterleitungssperre, Zeitlimit und Antwortgrößenlimit.
 - Kurzlebiges GitHub-App-Schreib-Token ausschließlich im Veröffentlichungsjob.
-- Messung des echten GitHub-Webhook-Schnappschusses bei verzögerten Workflow-Läufen.
+- Messung des echten GitHub-Webhook-Schnappschusses bei verzögerten Workflow-Läufen. (Bestanden am 18.11.2026, siehe Nachtrag 18.11.2026 in Phase 3.)
 - Einmalverwendung einer Startfreigabe.
 - Ablösung aller verbliebenen A5-Aufrufe bei der produktiven A6.4-Integration, insbesondere `.github/workflows/code-pilot-claude-stufe.yml` (bisher Zeile 454), `scripts/agent-code-activation-check.mjs` (bisher Zeile 298) und `scripts/agent-code-dryrun.mjs` (bisher Zeile 17).
 
@@ -390,8 +392,8 @@ Trennregel für `agent-acceptance/`, Geheimniswertprüfung und Concurrency stehe
 | A6.3 Trockenlauf je Profil | Trockenlauf für beide Profile; Gerüst `src/text.js`, `test/text.test.js` als eigener PR | Beide Profile offline erfolgreich geprüft; gleicher Paket-SHA-256 über zwei getrennte Node-Prozesse. Die echte GitHub-Actions-Übergabe von Paket v2 wird in A6.4 nachgewiesen. |
 | A6.4 Workflow-Patch | Patch für beide Workflows, `policy.json`, `claude-settings.json`, `schutz.yml` (Trennregel), `package.json` (Build über `src/`); Aktivierungsprüfung bleibt und wird erweitert | K2 und K3 nachgewiesen, Generalprobe rot bei Manipulation; ChatGPT und ein unabhängiger Prüfer stimmen zu |
 | A6.5 Patch anwenden | Noahs Konto, Admin-Ausnahme | Integrationstest und Trockenlauf grün, Claude-Jobs übersprungen; ein Bot-Test-PR mit verändertem Prüfskript wird nachweislich rot; Schalter vorher und nachher 404 |
-| A6.6 Erster neuer Auftrag | nur nach K1 und K4-Entscheidung und Noahs Go: Abnahme-PR, Issue, Lauf mit `js-rechner` | Draft-PR, der nur im Profil erlaubte Code- und Testdateien ändert, CI grün, zwei Freigaben, Kosten unter dem Deckel |
-| A6.7 Zweiter neuer Auftrag | nach Noahs Go, Profil `js-text` | wie A6.6, ohne Änderung an Workflow, Policy oder Skripten dazwischen; damit ist A6 abgenommen |
+| A6.6 Erster neuer Auftrag | nur nach K1 und K4-Entscheidung und Noahs Go: Abnahme-PR, Issue, Lauf mit `js-rechner` (bereits aktiv; P-3 ist keine Voraussetzung, siehe Nachtrag 18.11.2026 in Phase 3) | Draft-PR, der nur im Profil erlaubte Code- und Testdateien ändert, CI grün, zwei Freigaben, Kosten unter dem Deckel |
+| A6.7 Zweiter neuer Auftrag | nach Noahs Go, Profil `js-text`, erst nach P-3 (Aktivierung `js-text`, siehe Nachtrag 18.11.2026 in Phase 3) | wie A6.6, ohne Änderung an Workflow, Policy oder Skripten dazwischen; damit ist A6 abgenommen |
 
 **A6.4-Roadmap (verbindliche Präzisierung vom 13.11.2026):** Sie ersetzt die Zeilen A6.4 und A6.5
 oben nicht rückwirkend, gilt aber vorrangig. Wo diese Zeilen etwas anderes nahelegen (Patch für beide
@@ -419,7 +421,7 @@ werden während der Migration nicht abgeschwächt. Keine neue Aktivierungsvariab
 | A6.4-3 | Noah | Policy, Claude-Einstellungen und Schutzregeln | A6.4-3-0 abgeschlossen (PR #71, 19bd43b); A6.4-3a abgeschlossen (Eigentümer-PR #73, 1b2b8bf); A6.4-3c abgeschlossen (Eigentümer-PR #75, c1243f9) |
 | A6.4-4 | Noah; Bot nur Patchvorbereitung | Neuer gesperrter A6-Workflow, Wächter und Sammeljob | Entwurf in P-1 (Bot-Draft-PR, nicht mergefähig), Eigentümer-PR offen |
 | A6.4-5 | Noah | Geheimnisfreie echte Actions-Generalprobe mit Paket v2 | Probejobs in P-1 entworfen und lokal emuliert; echter Lauf erst auf dem Eigentümer-PR von P-1 |
-| A6.4-6 | Noah, gesonderte Freigaben | K1/K2/K3/K4-Restnachweise | Offen |
+| A6.4-6 | Noah, gesonderte Freigaben | K1/K2/K3/K4-Restnachweise | K3-Pflichtnachweis (Webhook-Schnappschuss) bestanden am 18.11.2026, siehe Nachtrag 18.11.2026 in Phase 3; die übrigen Restnachweise sind offen |
 | Bereinigung | Noah | A5-Reste erst nach gesicherter Ablösung entfernen | Später |
 
 A6.4-S lag bewusst vor A6.4-0 und ist bereits umgesetzt; das ist kein Planungsfehler. Abgeschlossene
@@ -704,11 +706,51 @@ Pakete werden nicht erneut geöffnet. A6.4 insgesamt ist offen.
   (sonst Ausweichlösung b), die Probejobs in echten Actions-Läufen mit echten Artefakten, das Verhalten
   des flachen Checkouts in Job 3 (Prüf-Checkout aus dem Checkout), Docker-Netze auf dem Runner.
 - **Erst nach dem Merge oder mit gesonderter Freigabe:** K3-Messung (echtes `issues.labeled`), K1a
-  (echter Claude-Lauf, Kosten), K4, P-2 bis P-5, Live 1, Live 2, NF1 bis NF3.
+  (echter Claude-Lauf, Kosten), K4, P-2 bis P-5, Live 1, Live 2, NF1 bis NF3. (Nachtrag 18.11.2026:
+  die K3-Messung ist erledigt und bestanden, siehe unten.)
 - **Status:** P-1 in Vorbereitung. Bot-Draft-PR bewusst rot bis zum Eigentümer-Commit, nicht mergefähig,
   wird nie separat gemergt. Keine Aktivierung, kein Claude-Lauf, keine Secrets, keine Änderung an
   Rulesets oder Environments. Eine Ausnahme für den Eigentümer-PR von P-1 ist weder genehmigt noch
   ausgeführt.
+
+**Nachtrag 18.11.2026: K3-Pflichtnachweis abgeschlossen und Reihenfolge bis Live 2**
+
+Die Abschnitte oben bleiben als historischer Stand erhalten. Wo sie zu K3 oder zur Reihenfolge
+etwas anderes nahelegen, gilt dieser Nachtrag.
+
+- **K3 Versuch 1 (17.11.2026, gescheitert):** Lauf `44182706381` auf `548e883`. Job 0 scheiterte
+  mit `A6-FEHLER transport-token`. Ursache: Die Tokenprüfung in
+  `scripts/agent-code-auftrag-transport.mjs` war mit dem neuen Format der GitHub-Installationstoken
+  nicht vereinbar. Behoben über Bot-PR #87 und Eigentümer-PR #88, Merge-Commit
+  `1efdf41aa0354c3cd21fdfecc085eea478edf879`.
+- **K3 Versuch 2, Lauf A (18.11.2026):** Lauf `44270231335` auf `1efdf41`. Job 0 erfolgreich, das
+  echte Installationstoken wurde erfolgreich verwendet. Die SHA-256-Werte von `title`, `body` und
+  `updated_at` stimmen mit der Webhook-Zustellung und dem Actions-Artefakt `a6-auftrag-44270231335-1`
+  überein. Job 1 bis 3 übersprungen (gesperrt); `agent-auftrag-sammel` lehnt diese Überspringungen ab,
+  der Lauf endet deshalb insgesamt rot.
+- **K3 Versuch 2, Lauf B (18.11.2026):** Lauf `44271380015` auf `1efdf41`. Startlabel 08:56:52 UTC,
+  Änderung des Issues 08:56:54 UTC, Workflow-Lauf erstellt 08:56:55 UTC. Job 0 lehnt den Auftrag mit
+  genau `A6-FEHLER auftrag-issue-geaendert` ab. Die drei Nutzlast-Hashes entsprechen dem Issue-Stand
+  vor der Änderung; Webhook-Zustellung und `userContentEdits` bestätigen die Reihenfolge unabhängig.
+  Job 1 bis 3 übersprungen, kein Agenten-PR und kein zugehöriger Branch.
+- **Ergebnis:** Der offene K3-Pflichtnachweis des unveränderlichen Issue-Schnappschusses bei
+  verzögertem Workflow-Start ist **bestanden**. Belege liegen lokal in `k3/versuch1/` und
+  `k3/versuch2/`. Der Mess-Webhook `713286068` ist gelöscht; danach hat Terminal 1 bestätigt, dass
+  kein Repository-Webhook mehr besteht.
+- **Nicht erledigt durch diesen Nachweis:** K1 (K1a, echte Werkzeugverbote von Claude) und die
+  K4-Entscheidung bleiben offen. Ein echter Agentenlauf ist dadurch nicht freigegeben.
+
+**Reihenfolge bis Live 2 (Entscheidung vom 18.11.2026):**
+
+1. P-3 (Aktivierung von `js-text`) ist **keine** Voraussetzung für A6.6 / Live 1. Der erste echte
+   Auftrag verwendet das bereits aktive Profil `js-rechner`.
+2. P-3 erfolgt erst vor A6.7 / Live 2.
+3. Wegen der Trennregel in `schutz.yml` bleiben Profiländerungen in eigenen PRs, getrennt von Test-
+   und Dokumentationsänderungen.
+4. Vor P-4 nimmt der Eigentümer `agent-auftrag-sammel` als Pflichtcheck in das Ruleset
+   `main-pruefungen` auf, nach gesonderter Prüfung und Freigabe (Pflichtpunkt 8).
+5. Vor Live 1 müssen die offenen K1-Nachweise und die K4-Entscheidung geklärt und die übrigen
+   Pflichtvoraussetzungen nachgewiesen sein.
 
 **Verschoben:** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach
 Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele
@@ -770,6 +812,7 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 
 | 17.11.2026 | **E1 mit Vorbehalt (A6-Abschlussplan F2, Abschnitt 0):** Claude läuft als gepinntes Claude Code direkt im Container statt über die Action, nur am internen Docker-Netz hinter einem Vorschaltcontainer, der allein den Schlüssel setzt; Werkzeugrechte in drei Schichten (`--tools "Read,Edit"`, geschützte `--settings` mit `--setting-sources ""`, `--strict-mcp-config`, `--permission-mode dontAsk`, `allow` nur mit Pfad). Vorbehalt: Scheitert K1a oder der Nachweis über den Vorschaltcontainer, wird angehalten und neu entschieden, nicht abgeschwächt. | Die Action arbeitet im Checkout, legt Zugangsdaten in die Umgebung und führt Post-Schritte aus (F1, F2, F7). Die Schalter sind für die gepinnte Version 2.1.326 per `--help` im Container belegt; `--max-turns` fehlt in der Hilfe, wird aber angenommen. |
 | 17.11.2026 | **Physisch getrennte Sicht für Claude (Nachbesserung P-1):** Claude bekommt als einzigen beschreibbaren Mount `RUNNER_TEMP/a6-claude-sicht` mit genau den Profildateien; `a6-claude-arbeit` mit dem vollständigen Ausgangsbaum bleibt außerhalb des Containers und unverändert Grundlage von Job 1b. Rückkopie nur nach beendetem Container und vollständiger strenger Prüfung, nur in vorhandene Profilpfade. | Werkzeugrechte allein sind keine physische Grenze; `prepareWorkspace` legt den ganzen Baum an. Die Lösung kommt ohne Änderung an `scripts/` und an den Policy-Hashes aus. |
+| 18.11.2026 | **K3-Pflichtnachweis bestanden; Reihenfolge bis Live 2:** P-3 (`js-text` aktivieren) ist keine Voraussetzung für A6.6 / Live 1, der erste echte Auftrag nutzt das aktive Profil `js-rechner`; P-3 erst vor A6.7 / Live 2; Profiländerungen getrennt von Test- und Dokumentationsänderungen; vor P-4 nimmt der Eigentümer `agent-auftrag-sammel` nach gesonderter Prüfung und Freigabe als Pflichtcheck in `main-pruefungen` auf; vor Live 1 K1-Nachweise, K4-Entscheidung und übrige Pflichtvoraussetzungen. Einzelheiten im Nachtrag 18.11.2026 in Phase 3. | K3 Versuch 2 (Läufe `44270231335` und `44271380015`) belegt den unveränderlichen Issue-Schnappschuss bei verzögertem Start. Die Trennregel in `schutz.yml` erzwingt getrennte Profil-PRs. K1 und K4 sind weiterhin offen. |
 
 ## 11. Offene Entscheidungen für Noah
 
