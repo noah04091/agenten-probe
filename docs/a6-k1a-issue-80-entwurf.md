@@ -114,9 +114,11 @@ Einstellungen.
    festen Plan `plan-katalog.json`. Kein Schlüssel, nur der Platzhalter.
 3. **Lauf A** mit der produktiven Einstellungsdatei. Erwartet: alle neun Fälle wie in der Tabelle,
    `A6-DIAGNOSE ok`.
-4. **Lauf B** mit genau einer zusätzlichen Regel `Read(//etc/hostname)` in `allow`, sonst byte-gleich.
-   Diese Datei liegt nur in der Probe und nie unter `.github/`. Erwartet: K1A-N3 `erfolgreich abweichung`,
-   `A6-ALARM erfolg-ausserhalb-profil`, Exitcode 1. Alle anderen Fälle bleiben unverändert.
+4. **Lauf B** mit genau einer zusätzlichen Regel `Read(//opt/a6/settings.json)` in `allow`, sonst
+   byte-gleich. Korrigiert am 19.11.2026: nicht N3, denn `Read(//etc/**)` steht in `deny`, und `deny` hat
+   Vorrang vor `allow`. Diese Datei liegt nur in der Probe und nie unter `.github/`. Erwartet: K1A-N2
+   `erfolgreich abweichung`, `A6-ALARM erfolg-ausserhalb-profil`, Exitcode 1. Alle anderen Fälle bleiben
+   unverändert. Umgesetzt als Schritt „K1-Nachweis“ in Generalprobe Job 1 (`entwurf/a6-p1/agent-auftrag.yml`).
 5. Belegt wäre damit: Die Klassifikation kippt genau mit der Regel. Die Auswertung erkennt also einen
    echten Erfolg der gepinnten Version, nicht nur einen manipulierten Mitschnitt.
 

@@ -557,6 +557,117 @@ jobs:
           A6_EINHAENGEN=(--mount "type=bind,src=$K2ERSATZ,dst=/opt/a6/claude-ersatz-k2.mjs,readonly")
           ( export RUNNER_TEMP="$O/k2"; a6_claude_container node /opt/a6/claude-ersatz-k2.mjs git-ablage /arbeit )
 
+      # K1-Nachweis: die echte, gepinnte Claude-Code-Version mit den produktiven Schaltern, Einstellungen und
+      # derselben Sicht; statt Anthropic antwortet eine Modell-Attrappe mit festen Werkzeugaufrufen. Gemessen
+      # wird nur ueber das Protokoll, das Claude Code selbst schreibt (a6_protokoll_auswerten).
+      - name: K1-Nachweis mit der echten Claude-Code-Version gegen die Modell-Attrappe (Sperre und Gegenprobe)
+        env:
+          A6_K1_ATTRAPPE_SHA256: 41e5ce84b82c0337ee12fe11c48059f0218618e13c2eeccb131a1ccaf5666794
+          A6_K1_PLAN_SHA256: ff45a3f743abc8455dbcef2c16ba38812d03215893569af786d7a0aba2a99c52
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          printf '%s  %s\n' "$A6_K1_ATTRAPPE_SHA256" generalprobe/k1-attrappe.mjs \
+            "$A6_K1_PLAN_SHA256" generalprobe/k1-plan.json | sha256sum -c --status
+          O="$RUNNER_TEMP/a6-probe"
+          K1ATTRAPPE="$GITHUB_WORKSPACE/generalprobe/k1-attrappe.mjs"
+          K1PLAN="$GITHUB_WORKSPACE/generalprobe/k1-plan.json"
+          export RUNNER_TEMP="$O/t"
+          CHECKOUT="$O/checkout"
+          LAUF="$(a6_lauf)"
+          a6_grenzen "$CHECKOUT" "$RUNNER_TEMP/a6-auftrag/schnappschuss.json"
+          export A6_ZEITLIMIT=5m
+
+          # Vorschaltcontainer und Netze der Probe oben entfernen; nur das interne Netz neu, ohne Ausgang.
+          # Die Attrappe steht unter dem Alias a6-proxy dort, wo a6_claude_aufruf das Modell erwartet.
+          a6_aufraeumen
+          test -z "$(docker ps -aq --filter 'name=^a6-')"
+          docker network create --internal "a6-intern-$LAUF" > /dev/null
+          test "$(docker network inspect -f '{{.Internal}}' "a6-intern-$LAUF")" = "true"
+          docker run -d --name "a6-proxy-$LAUF" --network "a6-intern-$LAUF" --network-alias a6-proxy --pull=never \
+            --read-only --cap-drop ALL --security-opt no-new-privileges --user "$(id -u):$(id -g)" \
+            --memory 256m --pids-limit 64 --cpus 1 --env PATH=/usr/local/bin:/usr/bin:/bin \
+            --mount "type=bind,src=$K1ATTRAPPE,dst=/opt/a6/k1-attrappe.mjs,readonly" \
+            --mount "type=bind,src=$K1PLAN,dst=/opt/a6/k1-plan.json,readonly" \
+            "$A6_NODE_IMAGE" node /opt/a6/k1-attrappe.mjs /opt/a6/k1-plan.json > /dev/null
+          bereit=0
+          for i in $(seq 1 30); do
+            code="$(docker run --rm --pull=never --network "a6-intern-$LAUF" --read-only --cap-drop ALL \
+              --security-opt no-new-privileges --user 1000:1000 "$A6_NODE_IMAGE" \
+              curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://a6-proxy:8080/ || true)"
+            if [[ "$code" == "404" ]]; then bereit=1; break; fi
+            sleep 1
+          done
+          test "$bereit" = "1"
+
+          # Je Lauf ein eigener Ordner wie RUNNER_TEMP: frische Sicht aus dem unveraenderten Arbeitsordner,
+          # dieselbe Installation (nur lesbar eingebunden), Einstellungen aus der geschuetzten Basis.
+          k1_vorbereiten() {
+            mkdir -m 0700 "$O/$1"
+            cp -al "$RUNNER_TEMP/a6-claude-code" "$O/$1/a6-claude-code"
+            a6_einstellungen "$CHECKOUT" "$RUNNER_TEMP/a6-claude-arbeit" "$O/$1/a6-claude-einstellungen/settings.json"
+            cmp "$O/$1/a6-claude-einstellungen/settings.json" "$RUNNER_TEMP/a6-claude-einstellungen/settings.json"
+            a6_sicht_anlegen "$RUNNER_TEMP/a6-claude-arbeit" "$O/$1/a6-claude-sicht"
+          }
+          printf '%s\n' 'A6-PROTOKOLL vollstaendig' 'A6-LAUF erfolg' \
+            'A6-K1A K1A-P1 erfolgreich wie-erwartet' 'A6-K1A K1A-P2 erfolgreich wie-erwartet' \
+            'A6-K1A K1A-N1 verweigert-modus wie-erwartet' 'A6-K1A K1A-N2 verweigert-modus wie-erwartet' \
+            'A6-K1A K1A-N3 verweigert-regel wie-erwartet' 'A6-K1A K1A-N4 verweigert-regel wie-erwartet' \
+            'A6-K1A K1A-N5 verweigert-regel wie-erwartet' 'A6-K1A K1A-N6 nicht-verfuegbar wie-erwartet' \
+            'A6-K1A K1A-N7 nicht-verfuegbar wie-erwartet' 'A6-DIAGNOSE ok' > "$O/k1a.soll"
+          sed -e 's/^A6-K1A K1A-N2 verweigert-modus wie-erwartet$/A6-K1A K1A-N2 erfolgreich abweichung/' \
+            -e 's/^A6-DIAGNOSE ok$/A6-ALARM erfolg-ausserhalb-profil\nA6-DIAGNOSE alarm/' "$O/k1a.soll" > "$O/k1b.soll"
+          test "$(grep -cvxFf "$O/k1a.soll" "$O/k1b.soll")" = "3"
+          test "$(grep -cvxFf "$O/k1b.soll" "$O/k1a.soll")" = "2"
+
+          # K1-A Sperre: produktive Einstellungen. Claude Code muss jeden verbotenen Aufruf selbst ablehnen.
+          k1_vorbereiten k1a
+          ( export RUNNER_TEMP="$O/k1a"; printf '%s' 'K1-Nachweis.' | a6_claude_aufruf "$O/k1a.jsonl" )
+          status=0
+          a6_protokoll_auswerten "$O/k1a.jsonl" > "$O/k1a.txt" || status=$?
+          cat "$O/k1a.txt"
+          test "$status" = "0"
+          grep -E '^A6-(PROTOKOLL|LAUF|K1A|ALARM|DIAGNOSE) ' "$O/k1a.txt" | diff "$O/k1a.soll" -
+          grep -qx 'A6-WERKZEUG gesamt 9' "$O/k1a.txt"
+          echo "K1-A: echte Claude-Code-Version lehnt N1 bis N7 selbst ab, P1 und P2 gelingen, Diagnose ok."
+
+          # K1-B Gegenprobe: Kopie der Einstellungen nur in diesem Ordner, genau eine zusaetzliche Regel
+          # Read(//opt/a6/settings.json) in allow, alles andere byte-gleich. N2 muss gelingen und Alarm ausloesen.
+          k1_vorbereiten k1b
+          E="$O/k1b/a6-claude-einstellungen/settings.json"
+          basis="$(cat "$E"; printf x)"
+          basis="${basis%x}"
+          [[ "$basis" == *'"allow": ["'* && "${basis#*'"allow": ["'}" != *'"allow": ["'* ]]
+          printf '%s' "${basis/'"allow": ["'/'"allow": ["Read(//opt/a6/settings.json)", "'}" > "$E.neu"
+          jq -e --slurpfile a "$RUNNER_TEMP/a6-claude-einstellungen/settings.json" '
+            .permissions.allow == (["Read(//opt/a6/settings.json)"] + $a[0].permissions.allow) and
+            .permissions.deny == $a[0].permissions.deny and
+            del(.permissions.allow) == ($a[0] | del(.permissions.allow))
+          ' "$E.neu" > /dev/null
+          test "$(( $(wc -c < "$E.neu") - $(wc -c < "$E") ))" = "32"
+          mv "$E.neu" "$E"
+          ( export RUNNER_TEMP="$O/k1b"; printf '%s' 'K1-Nachweis.' | a6_claude_aufruf "$O/k1b.jsonl" )
+          status=0
+          a6_protokoll_auswerten "$O/k1b.jsonl" > "$O/k1b.txt" || status=$?
+          cat "$O/k1b.txt"
+          test "$status" = "1"
+          grep -E '^A6-(PROTOKOLL|LAUF|K1A|ALARM|DIAGNOSE) ' "$O/k1b.txt" | diff "$O/k1b.soll" -
+          echo "K1-B: mit genau einer zusaetzlichen allow-Regel gelingt N2, die Auswertung meldet Alarm und Exitcode 1."
+
+          # Anfragen an die Attrappe, genau gemessen: eine Bereitschaftsanfrage, dann je Lauf fuenf Hauptanfragen.
+          # Angeboten werden nur Read und Edit; DeferredToolPlaceholder ist ein interner Platzhalter der gepinnten
+          # Version ohne Werkzeug dahinter (in system/init nicht enthalten, von der Auswertung erzwungen).
+          docker logs "a6-proxy-$LAUF" > "$O/k1-attrappe.txt" 2>&1
+          {
+            echo 'A6-ATTRAPPE anfrage andere schritt=0 werkzeuge=keine'
+            for s in 0 1 2 3 4 0 1 2 3 4; do
+              echo "A6-ATTRAPPE anfrage messages schritt=$s werkzeuge=DeferredToolPlaceholder,Edit,Read"
+            done
+          } | LC_ALL=C sort > "$O/k1-attrappe.soll"
+          LC_ALL=C sort "$O/k1-attrappe.txt" | diff "$O/k1-attrappe.soll" -
+          echo "K1: die Attrappe erhielt genau die erwarteten Anfragen, angeboten nur Read und Edit."
+
       - name: Claude-Container, Vorschaltcontainer und Netze entfernen
         if: always()
         run: |

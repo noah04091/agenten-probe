@@ -21,6 +21,7 @@ Echte stream-json-Ausgabe von Claude Code 2.1.326 (Sperrdatei `entwurf/a6-p1/cla
 | `max-runden.jsonl` | `plan-gemischt.json` | `--max-turns 2`, Abbruch mit `error_max_turns` |
 | `max-budget.jsonl` | `plan-gemischt.json` | Attrappe meldet hohen Verbrauch, Abbruch mit `error_max_budget_usd`, ein Aufruf ohne Ergebnis |
 | `api-401.jsonl` | keiner | Attrappe antwortet 401, `api_retry`-Ereignisse, `terminal_reason` `api_error` |
+| `gegenprobe-n2.jsonl` | `generalprobe/k1-plan.json` | K1-B vom 19.11.2026: wortgleicher Schritt „K1-Nachweis“ der Generalprobe in der lokalen Emulation, Einstellungen mit genau einer zusätzlichen Regel `Read(//opt/a6/settings.json)` in `allow`; N2 gelingt |
 
 Was die Mitschnitte nicht zeigen: wie sich ein echtes Modell verhält. Es könnte Pfade abwandeln oder
 Aufrufe unterlassen. Und ob eine andere Claude-Code-Version dasselbe Format schreibt.

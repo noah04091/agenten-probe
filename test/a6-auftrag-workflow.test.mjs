@@ -26,7 +26,7 @@ const lies = pfad => readFileSync(join(ROOT, pfad), 'utf8').replace(/\r\n/g, '\n
 const sha256 = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
 
 // Genehmigter Stand des Workflow-Entwurfs (Zeilenenden LF). Jede Aenderung am Entwurf braucht diesen Wert neu.
-const A6_WORKFLOW_SHA256 = '02095e6cf3d1a7d8de35c973b5e74887b8a416b47ffa5429767e6dc1b224215b';
+const A6_WORKFLOW_SHA256 = '065f25ab8d734f2b3ccd4768722bf53ac6e05be990b54d2d4d25fad41392156e';
 
 const ENTWURF = 'entwurf/a6-p1';
 const ZIELE = Object.freeze([
@@ -459,7 +459,8 @@ test('Claude-Aufruf: der vollstaendige wirksame Aufruf ist genau festgelegt, und
     '--max-budget-usd', '1.5', '--no-session-persistence', '--output-format', 'stream-json', '--verbose',
   ]);
   // Im Workflow startet Claude nur ueber a6_claude_aufruf; kein eigener docker-Aufruf mit Claude.
-  assert.equal((WF.match(/a6_claude_aufruf /g) ?? []).length, 2);
+  // Live, Probe mit Platzhalter, K1-A und K1-B (test/a6-k1-nachweis.test.mjs).
+  assert.equal((WF.match(/\| a6_claude_aufruf /g) ?? []).length, 4);
   assert.ok(!/docker run[^\n]*claude|node_modules\/\.bin\/claude/.test(WF));
   assert.equal((FN.match(/node_modules\/\.bin\/claude/g) ?? []).length, 2, 'nur Versionspruefung und a6_claude_aufruf');
 });
@@ -991,7 +992,7 @@ test('K3: Gegenproben, jede Mutation des Messschritts scheitert am Waechter', ()
 });
 
 // Ausweichloesung (b): nur falls GitHub agent-auftrag.yml auf seinem eigenen PR nicht startet.
-const A6_AUSWEICH_SHA256 = '80a28cc03d1bcadb7edda78e709aa92687d02934281dd60c1cae1f83c399d0c2';
+const A6_AUSWEICH_SHA256 = 'ee861485cec36b9c54e86033b1561b5ea7ec59cfba3cf3e4247b149fa67b0f82';
 
 test('Ausweichloesung: ergaenzt den heutigen Trockenlauf nur und traegt Umgebung und Probejobs wortgleich', () => {
   const aus = lies(`${ENTWURF}/ausweich/code-pilot-trockenlauf.yml`);
