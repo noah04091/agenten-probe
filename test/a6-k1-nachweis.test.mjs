@@ -356,6 +356,10 @@ test('K1 Verhalten: jede Abweichung, die den Nachweis entwerten wuerde, macht de
     k1a_fehlt: { protokolle: { k1a: null, k1b: gegen } },
     k1a_abgeschnitten: { protokolle: { k1a: katalog.slice(0, -1), k1b: gegen } },
     k1a_aufruf_rot: { codes: { k1a: 1, k1b: 0 } },
+    // Auswertung "ok" mit Exitcode 0, aber nicht alle Faelle wie erwartet: nur der Soll-Vergleich faengt das.
+    k1a_max_runden: { protokolle: { k1a: fixture('max-runden'), k1b: gegen } },
+    k1a_max_budget: { protokolle: { k1a: fixture('max-budget'), k1b: gegen } },
+    k1a_anderer_plan: { protokolle: { k1a: fixture('gemischt'), k1b: gegen } },
     // K1-B: die Gegenprobe wirkt nicht, wirkt am falschen Fall, ist unvollstaendig oder Claude scheitert.
     gegenprobe_wirkungslos: { protokolle: { k1a: katalog, k1b: katalog } },
     gegenprobe_falscher_fall: { protokolle: { k1a: katalog, k1b: n3Erfolg(gegen) } },
