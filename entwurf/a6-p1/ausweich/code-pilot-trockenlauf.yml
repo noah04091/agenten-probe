@@ -677,6 +677,29 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Pruefklon gegen den echten Checkout wie in Job 2, flache Gegenprobe
+        run: |
+          set -euo pipefail
+          # Live 1 (Lauf 44509846928): Job 2 lud flach, der Pruefklon trug .git/shallow, die Abnahme lehnte
+          # mit abnahme-git-struktur ab. Hier derselbe Checkout wie in Job 2 und derselbe Klon wie im Modul.
+          test "$(git rev-parse --is-shallow-repository)" = "false"
+          test ! -e .git/shallow
+          K="$RUNNER_TEMP/a6-probe-pruefklon"
+          mkdir -p "$K/vorlage"
+          git clone --no-local --no-hardlinks --no-checkout --quiet "--template=$K/vorlage" -- "$GITHUB_WORKSPACE" "$K/voll"
+          test ! -e "$K/voll/.git/shallow"
+          echo "Pruefklon: vollstaendiger Checkout, kein .git/shallow."
+
+          # Gegenprobe: derselbe Abruf wie actions/checkout mit fetch-depth 1, danach derselbe Klon.
+          git init -q "$K/flach-quelle"
+          git -C "$K/flach-quelle" -c protocol.version=2 fetch -q --no-tags --prune --no-recurse-submodules --depth=1 "file://$GITHUB_WORKSPACE" "$(git rev-parse HEAD)"
+          git -C "$K/flach-quelle" checkout -q --force FETCH_HEAD
+          test "$(git -C "$K/flach-quelle" rev-parse --is-shallow-repository)" = "true"
+          git clone --no-local --no-hardlinks --no-checkout --quiet "--template=$K/vorlage" -- "$K/flach-quelle" "$K/flach"
+          test -e "$K/flach/.git/shallow"
+          echo "Gegenprobe: flacher Checkout, der Pruefklon traegt .git/shallow."
 
       - name: Probeartefakt Job 0 laden
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
