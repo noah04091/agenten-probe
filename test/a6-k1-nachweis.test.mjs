@@ -248,7 +248,7 @@ const EINSTELLUNGEN = () => {
 
 // Fuehrt den K1-Schritt wortgleich aus. protokolle: { k1a, k1b } (Text oder null), codes: Exitcodes von
 // a6_claude_aufruf, log: Zeilen der Attrappe, einstellungen: erzeugte Einstellungsdatei, k1: Dateiersatz.
-function k1Lauf({ protokolle = { k1a: fixture('katalog'), k1b: fixture('gegenprobe-n2') }, codes = { k1a: 0, k1b: 0 }, log = ATTRAPPE_LOG, einstellungen = EINSTELLUNGEN(), dateien = {}, skript = k1Skript(), anker = k1Anker() } = {}) {
+function k1Lauf({ protokolle = { k1a: fixture('katalog'), k1b: fixture('gegenprobe-n2') }, codes = { k1a: 0, k1b: 0 }, log = ATTRAPPE_LOG, einstellungen = EINSTELLUNGEN(), dateien = {}, skript = k1Skript(), anker = k1Anker(), bereit = '404', intern = 'true' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'a6-k1-'));
 
   try {
@@ -293,8 +293,8 @@ function k1Lauf({ protokolle = { k1a: fixture('katalog'), k1b: fixture('gegenpro
       'docker() {',
       '  case "$1" in',
       '    ps) return 0 ;;',
-      `    network) [[ "$2" == inspect ]] && echo true; [[ "$2" == create ]] && echo "netz $3 $4" >> "${spur}"; return 0 ;;`,
-      `    run) if [[ "$2" == -d ]]; then echo attrappe >> "${spur}"; else echo 404; fi ;;`,
+      `    network) [[ "$2" == inspect ]] && echo ${intern}; [[ "$2" == create ]] && echo "netz $3 $4" >> "${spur}"; return 0 ;;`,
+      `    run) if [[ "$2" == -d ]]; then echo attrappe >> "${spur}"; else echo ${bereit}; fi ;;`,
       `    logs) cat "${join(dir, 'attrappe.log')}" ;;`,
       '    *) return 9 ;;',
       '  esac',
@@ -372,6 +372,9 @@ test('K1 Verhalten: jede Abweichung, die den Nachweis entwerten wuerde, macht de
     attrappe_anfrage_fehlt: { log: ATTRAPPE_LOG.slice(0, -1) },
     attrappe_anfrage_zusaetzlich: { log: [...ATTRAPPE_LOG, 'A6-ATTRAPPE anfrage messages schritt=5 werkzeuge=DeferredToolPlaceholder,Edit,Read'] },
     attrappe_leer: { log: [] },
+    attrappe_nicht_bereit: { bereit: '000' },
+    netz_nicht_intern: { intern: 'false' },
+    einstellungen_abweichend: { einstellungen: EINSTELLUNGEN().replace('"allow": ["', '"allow": ["Read(./src/text.js)", "') },
   };
 
   // Muss-Treffer: ohne Abweichung gruen; sonst waere jede Ablehnung unten wertlos.
@@ -380,6 +383,11 @@ test('K1 Verhalten: jede Abweichung, die den Nachweis entwerten wuerde, macht de
   for (const [name, fall] of Object.entries(faelle)) {
     const r = k1Lauf(fall);
     assert.notEqual(r.status, 0, `${name}: Schritt gruen\n${r.stdout}`);
+  }
+
+  // Abweichende Einstellungen, Netz oder Attrappe halten schon vor dem ersten Claude-Lauf an.
+  for (const name of ['einstellungen_ohne_profil', 'einstellungen_vorbelastet', 'einstellungen_abweichend', 'attrappe_nicht_bereit', 'netz_nicht_intern', 'attrappe_fremd', 'plan_fremd']) {
+    assert.ok(!k1Lauf(faelle[name]).spur.includes('aufruf k1a'), `${name}: K1-A trotzdem gestartet`);
   }
 
   // Ein gescheiterter K1-A-Lauf erreicht K1-B nie.
