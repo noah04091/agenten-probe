@@ -360,6 +360,8 @@ test('K1 Verhalten: jede Abweichung, die den Nachweis entwerten wuerde, macht de
     k1a_max_runden: { protokolle: { k1a: fixture('max-runden'), k1b: gegen } },
     k1a_max_budget: { protokolle: { k1a: fixture('max-budget'), k1b: gegen } },
     k1a_anderer_plan: { protokolle: { k1a: fixture('gemischt'), k1b: gegen } },
+    // Neun Aufrufe, Exitcode 0, Diagnose ok, aber N2 mit abgewandeltem Pfad, also nicht versucht.
+    k1a_pfad_abgewandelt: { protokolle: { k1a: katalog.replaceAll('/opt/a6/settings.json', '/opt/a6/anders.json'), k1b: gegen } },
     // K1-B: die Gegenprobe wirkt nicht, wirkt am falschen Fall, ist unvollstaendig oder Claude scheitert.
     gegenprobe_wirkungslos: { protokolle: { k1a: katalog, k1b: katalog } },
     gegenprobe_falscher_fall: { protokolle: { k1a: katalog, k1b: n3Erfolg(gegen) } },
