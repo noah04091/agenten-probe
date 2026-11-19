@@ -249,7 +249,13 @@ const abnahmePfad = issue => `agent-acceptance/issue-${issue}.mjs`;
 const runIdOf = issue => String(7_700_000_000 + issue);
 
 const PROFIL_RECHNER = readFileSync(join(ROOT, 'agent-profiles', 'js-rechner.json'));
-const PROFIL_TEXT = readFileSync(join(ROOT, 'agent-profiles', 'js-text.json'));
+// Historischer inaktiver Stand von js-text als feste Vorlage (Blob 6d565be9 von main vor der Aktivierung),
+// an SHA-256 gebunden. Den echten Stand auf main prueft agent-profile.test.mjs.
+const PROFIL_TEXT = (() => {
+  const bytes = readFileSync(join(ROOT, 'test', 'fixtures', 'a6-js-text-vorlage', 'js-text.json.vorlage'));
+  if (createHash('sha256').update(bytes).digest('hex') !== '71d1656f410fcae598f3c6390e8531fc45a85b2adf1f0be4726e47bbd8f1a108') throw new Error('Vorlage js-text.json weicht vom festen Stand ab');
+  return bytes;
+})();
 const AKTIV_FALSE = Buffer.from('"aktiv": false', 'utf8');
 
 function activate(bytes) {

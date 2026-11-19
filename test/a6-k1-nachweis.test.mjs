@@ -248,6 +248,21 @@ test('K1 Attrappe: antwortet Schritt fuer Schritt mit dem Plan und gibt je Anfra
     const zaehl = await anfrage('POST', '/v1/messages/count_tokens', { tools: [{ name: 'Bash' }, { name: 'a b' }] });
     assert.equal(zaehl.text, '{"input_tokens":10}');
     assert.equal((await anfrage('PUT', '/v1/messages', {})).status, 404);
+    // Die Attrappe schreibt ihre Zeile vor der Antwort, aber stdout und die HTTP-Verbindung sind getrennte
+    // Kanaele: unter Last kommt die Antwort hier vor der letzten Zeile an. Deshalb gezielt auf die sechste
+    // Zeile warten (hoechstens 5 s), dann exakt vergleichen. Fehlt sie, bleibt der Vergleich rot.
+    await new Promise(resolve => {
+      const fertig = () => {
+        if ((aus.match(/\n/g) ?? []).length >= 6) {
+          clearTimeout(frist);
+          kind.stdout.off('data', fertig);
+          resolve();
+        }
+      };
+      const frist = setTimeout(() => { kind.stdout.off('data', fertig); resolve(); }, 5000);
+      kind.stdout.on('data', fertig);
+      fertig();
+    });
     assert.deepEqual(aus.trimEnd().split('\n'), [
       'A6-ATTRAPPE anfrage andere schritt=0 werkzeuge=keine',
       'A6-ATTRAPPE anfrage messages schritt=0 werkzeuge=DeferredToolPlaceholder,Edit,Read',

@@ -136,6 +136,26 @@ function mainBytes(pfad) {
   return bytes;
 }
 
+// Historischer Ausgangsstand von js-text (Profil inaktiv, Textmodul nur mit zeichenzahl) als feste
+// Vorlage unter test/fixtures, gebunden an dieselbe Blob-ID. So bleibt das Szenario gleich, wenn
+// main das Profil aktiviert oder das Textmodul erweitert. Fehlt oder weicht die Vorlage ab, scheitert
+// das Laden der Testdatei.
+const JS_TEXT_VORLAGE = Object.freeze({
+  'agent-profiles/js-text.json': 'js-text.json.vorlage',
+  'src/text.js': 'text.js.vorlage',
+  'test/text.test.js': 'text.test.js.vorlage',
+});
+
+function vorlageBytes(pfad) {
+  const bytes = readFileSync(join(ROOT, 'test', 'fixtures', 'a6-js-text-vorlage', JS_TEXT_VORLAGE[pfad]));
+
+  if (gitBlobId(bytes) !== MAIN_BLOBS[pfad]) {
+    throw new Error(`Vorlage fuer ${pfad} weicht vom festen Stand ab`);
+  }
+
+  return bytes;
+}
+
 function fixedBytes(pfad, text) {
   const bytes = Buffer.from(text, 'utf8');
 
@@ -148,11 +168,11 @@ function fixedBytes(pfad, text) {
 
 const ORIGINAL = Object.freeze({
   'agent-profiles/js-rechner.json': mainBytes('agent-profiles/js-rechner.json'),
-  'agent-profiles/js-text.json': mainBytes('agent-profiles/js-text.json'),
+  'agent-profiles/js-text.json': vorlageBytes('agent-profiles/js-text.json'),
   'src/rechne.js': fixedBytes('src/rechne.js', RECHNE_JS),
   'test/rechne.test.js': fixedBytes('test/rechne.test.js', RECHNE_TEST),
-  'src/text.js': mainBytes('src/text.js'),
-  'test/text.test.js': mainBytes('test/text.test.js'),
+  'src/text.js': vorlageBytes('src/text.js'),
+  'test/text.test.js': vorlageBytes('test/text.test.js'),
 });
 
 // Synthetische Aktivierung: genau die Bytefolge "aktiv": false durch "aktiv": true ersetzen.
@@ -1486,9 +1506,9 @@ async function registerTests() {
   // -------------------------------------------------------------------------
 
   test('Grundlagen: Originalbytes von main, byte-genaue Aktivierung, gemeinsamer Ausgangscommit B mit Parent P', () => {
-    // Die Datei auf main ist unveraendert inaktiv.
+    // Die Vorlage ist der feste inaktive Stand (den echten Stand von main prueft agent-profile.test.mjs).
     assert.equal(JSON.parse(ORIGINAL['agent-profiles/js-text.json']).aktiv, false);
-    assert.equal(gitBlobId(readFileSync(join(ROOT, 'agent-profiles', 'js-text.json'))), MAIN_BLOBS['agent-profiles/js-text.json']);
+    assert.equal(gitBlobId(ORIGINAL['agent-profiles/js-text.json']), MAIN_BLOBS['agent-profiles/js-text.json']);
 
     // Aktivierung: genau eine Stelle, sonst kein Byte veraendert.
     const original = ORIGINAL['agent-profiles/js-text.json'];

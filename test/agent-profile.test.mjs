@@ -7,6 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -162,7 +163,15 @@ function withTree(entries, check) {
 // Echte Dateien: die zwei Profile, die Entwuerfe, die Wirkungslosigkeit
 // ---------------------------------------------------------------------------
 
-test('Echte Profile: genau js-rechner und js-text, beide gueltig, js-text inaktiv', () => {
+// Der echte Stand von agent-profiles/js-text.json auf main darf genau zwei Formen haben: den inaktiven
+// Ausgangsstand oder genau dessen Aktivierung (P-3: nur "aktiv": false wird "aktiv": true). Jeder dritte
+// Stand ist rot. Die Werte sind die SHA-256 der Bytes, der Wert dahinter das erwartete aktiv.
+const JS_TEXT_STAENDE = Object.freeze({
+  '71d1656f410fcae598f3c6390e8531fc45a85b2adf1f0be4726e47bbd8f1a108': false,
+  '214807047e5c6b99ed6f7253e16d3a10e8a78057d22d1643e1e0be054dfbe0ae': true,
+});
+
+test('Echte Profile: genau js-rechner und js-text, beide gueltig, js-text genau inaktiv oder genau aktiviert', () => {
   const names = readdirSync(join(ROOT, 'agent-profiles')).sort();
   assert.deepEqual(names, ['js-rechner.json', 'js-text.json']);
 
@@ -175,7 +184,10 @@ test('Echte Profile: genau js-rechner und js-text, beide gueltig, js-text inakti
 
   assert.equal(loaded['js-rechner'].aktiv, true);
   assert.deepEqual([...loaded['js-rechner'].dateien], ['src/rechne.js', 'test/rechne.test.js']);
-  assert.equal(loaded['js-text'].aktiv, false);
+  const textBytes = readFileSync(join(ROOT, 'agent-profiles', 'js-text.json'));
+  const textSha = createHash('sha256').update(textBytes).digest('hex');
+  assert.ok(Object.hasOwn(JS_TEXT_STAENDE, textSha), `js-text.json ist weder der inaktive noch der aktivierte Stand: ${textSha}`);
+  assert.equal(loaded['js-text'].aktiv, JS_TEXT_STAENDE[textSha]);
   assert.deepEqual([...loaded['js-text'].dateien], ['src/text.js', 'test/text.test.js']);
   assert.ok(!Object.hasOwn(loaded['js-rechner'], 'werkzeuge'));
 });
