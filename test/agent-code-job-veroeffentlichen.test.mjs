@@ -745,8 +745,12 @@ test('Regression: Policy vorhanden, ausser dem genehmigten agent-auftrag.yml ruf
   assert.ok(andere.every(name => !/agent-code-job|agent-code-integritaet|A6_APP_TOKEN|A6_VERGLEICH/.test(text(name))));
   assert.ok(files.some(name => readFileSync(join(workflows, name), 'utf8').includes('agent-code-package')), 'Muss-Treffer der Suche');
   assert.equal(existsSync(join(ROOT, '.github', 'agent', 'policy.json')), true);
-  // Das Profil js-text ist auf main weiterhin inaktiv; die Tests aktivieren es nur in temporaeren Repositories.
-  assert.ok(readFileSync(join(ROOT, 'agent-profiles', 'js-text.json'), 'utf8').includes('"aktiv": false'));
+  // Das Profil js-text auf main ist genau der inaktive Ausgangsstand oder genau dessen Aktivierung (P-3).
+  // Die Tests aktivieren es sonst nur in temporaeren Repositories; jeder dritte Stand ist rot.
+  assert.ok([
+    '71d1656f410fcae598f3c6390e8531fc45a85b2adf1f0be4726e47bbd8f1a108',
+    '214807047e5c6b99ed6f7253e16d3a10e8a78057d22d1643e1e0be054dfbe0ae',
+  ].includes(sha256(readFileSync(join(ROOT, 'agent-profiles', 'js-text.json')))));
 });
 
 test('Wache: in dieser Testdatei wurde kein Socket verbunden', () => {

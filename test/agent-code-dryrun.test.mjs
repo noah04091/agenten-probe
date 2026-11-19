@@ -424,6 +424,36 @@ test('Feste Testaenderung: ohne exportiertes multipliziere, doppelt oder mit zwe
   }
 });
 
+// D4: Die Bezeichnerpruefung in exportNames verlangt, dass jeder Eintrag des einzigen Exports ein
+// nackter Bezeichner ist. Jeder Fall unten enthaelt multipliziere als Kurzschreibweise und genau
+// eine Definition, scheitert also nur an dieser Pruefung. Ohne sie gaebe es "kommentar".
+test('Feste Testaenderung: Export mit einem Eintrag ausser Kurzschreibweise abgelehnt, Datei unveraendert (D4)', () => {
+  const alt = '{ addiere, subtrahiere, multipliziere, quadrat }';
+  const faelle = {
+    'zusaetzliche Umbenennung': '{ addiere, subtrahiere, multipliziere, quadrat, mal: multipliziere }',
+    'Spread': '{ addiere, subtrahiere, multipliziere, ...quadrat }',
+    'Zeichenkette statt Bezeichner': "{ addiere, subtrahiere, multipliziere, 'quadrat' }",
+    'Kommentar im Export': '{ addiere, subtrahiere, multipliziere, quadrat /* x */ }',
+    'Ausdruck im Export': '{ addiere, subtrahiere, multipliziere, quadrat: a => a * a }',
+  };
+
+  for (const [name, neu] of Object.entries(faelle)) {
+    const src = PR96_RECHNE.replace(alt, neu);
+    assert.notEqual(src, PR96_RECHNE, `${name}: Ersetzung wirkungslos`);
+    assert.equal(src.split('function multipliziere(').length, 2, `${name}: Vorbedingung Definition`);
+    assert.equal((src.match(/^module\.exports\b/gm) ?? []).length, 1, `${name}: Vorbedingung eine Exportzeile`);
+    assert.ok(/[{,]\s*multipliziere\s*,/.test(neu), `${name}: Vorbedingung multipliziere in Kurzschreibweise`);
+    const root = prepIn(src);
+    try {
+      assert.throws(() => prepareFixedChange(root), /^Error: Trockenlauf abgebrochen: unerwarteter Ausgangsstand von src\/rechne\.js$/, name);
+      assert.equal(readFileSync(join(root, 'src/rechne.js'), 'utf8'), src, `${name}: Datei veraendert`);
+      assert.equal(readFileSync(join(root, 'test/rechne.test.js'), 'utf8'), '// Basis\n', `${name}: Test veraendert`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('Wachen: ausgehebelte Schritte und Rechte innerhalb eines Jobs werden erkannt', () => {
   const { pilot, dry } = workflows();
   const job3 = dry.indexOf('\n  veroeffentlichung_trocken:\n');

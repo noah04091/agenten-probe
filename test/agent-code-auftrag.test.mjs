@@ -9,6 +9,7 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,7 +34,13 @@ import { ProfileError, sha256 } from '../scripts/agent-profile.mjs';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MODULE_PATH = join(ROOT, 'scripts/agent-code-auftrag.mjs');
 const RECHNER_BYTES = readFileSync(join(ROOT, 'agent-profiles/js-rechner.json'));
-const TEXT_BYTES = readFileSync(join(ROOT, 'agent-profiles/js-text.json'));
+// Historischer inaktiver Stand von js-text als feste Vorlage (Blob 6d565be9 von main vor der Aktivierung),
+// an SHA-256 gebunden. Den echten Stand auf main prueft agent-profile.test.mjs.
+const TEXT_BYTES = (() => {
+  const bytes = readFileSync(join(ROOT, 'test', 'fixtures', 'a6-js-text-vorlage', 'js-text.json.vorlage'));
+  if (createHash('sha256').update(bytes).digest('hex') !== '71d1656f410fcae598f3c6390e8531fc45a85b2adf1f0be4726e47bbd8f1a108') throw new Error('Vorlage js-text.json weicht vom festen Stand ab');
+  return bytes;
+})();
 const DRAFT_POLICY_BYTES = readFileSync(join(ROOT, 'test/fixtures/agent-policy.entwurf.json'));
 
 const canon = value => Buffer.from(JSON.stringify(value, null, 2) + '\n', 'utf8');
