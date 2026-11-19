@@ -14,8 +14,8 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { after, before, test } from 'node:test';
+import { join, resolve } from 'node:path';
+import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { schreibeTestpaket } from '../generalprobe/claude-ersatz.mjs';
@@ -40,7 +40,13 @@ const PR96_BLOB = Object.freeze({
   'test/rechne.test.js': '3986614217f5844259e7dce5be3aca040ec74750',
 });
 
-const GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'Probe', GIT_AUTHOR_EMAIL: 'probe@example.invalid', GIT_COMMITTER_NAME: 'Probe', GIT_COMMITTER_EMAIL: 'probe@example.invalid' };
+// Nur lesend auf den vertrauenswuerdigen Checkout, wie NUR_LESEN in probe.mjs: im Container des Trockenlaufs
+// gehoert /work einem anderen Benutzer. Ausnahme genau fuer ROOT, nicht pauschal. Als eigene globale Datei,
+// weil git beim lokalen Klonen "-c"-Werte nicht an upload-pack weitergibt (GIT_CONFIG_PARAMETERS wird entfernt).
+const GLOBAL = join(BASIS_DIR, 'gitconfig');
+const wurzel = resolve(ROOT).replaceAll('\\', '/');
+writeFileSync(GLOBAL, `[safe]\n\tdirectory = ${wurzel}\n\tdirectory = ${wurzel}/.git\n`);
+const GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: GLOBAL, GIT_AUTHOR_NAME: 'Probe', GIT_AUTHOR_EMAIL: 'probe@example.invalid', GIT_COMMITTER_NAME: 'Probe', GIT_COMMITTER_EMAIL: 'probe@example.invalid' };
 const git = (cwd, args) => execFileSync('git', ['-c', 'core.autocrlf=false', ...args], { cwd, env: GIT_ENV, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const gitBytes = (cwd, args) => execFileSync('git', args, { cwd, env: GIT_ENV, stdio: ['ignore', 'pipe', 'pipe'] });
 
@@ -85,7 +91,7 @@ function pr96Dateien() {
 // Quelle mit eigenem Commit ueber HEAD: jede Datei aus aenderungen geschrieben, dann committet.
 function quelleMit(name, aenderungen, { nachCommit } = {}) {
   const dir = join(BASIS_DIR, name);
-  git(ROOT, ['clone', '-q', '--no-local', '--no-hardlinks', ROOT, dir]);
+  git(ROOT, ['clone', '-q', '--no-local', '--no-hardlinks', resolve(ROOT), dir]);
   git(dir, ['checkout', '-q', '--detach', git(ROOT, ['rev-parse', 'HEAD']).trim()]);
 
   for (const [pfad, inhalt] of Object.entries(aenderungen)) {
@@ -102,13 +108,15 @@ function quelleMit(name, aenderungen, { nachCommit } = {}) {
   return dir;
 }
 
-let PR96;
+let PR96_DIR;
 
 // main nach der Eigentuemer-Uebernahme: Policy aus dem Entwurf (neuer Hash fuer agent-code-dryrun.mjs),
 // dazu der Rechner aus PR #96. Nach der Uebernahme sind Entwurf und .github/agent/policy.json gleich.
-before(() => {
-  PR96 = quelleMit('pr96', { ...pr96Dateien(), '.github/agent/policy.json': readFileSync(join(ROOT, 'entwurf', 'a6-p1', 'policy.json')) });
-});
+// Erst bei Bedarf gebaut, damit ein Fehler hier nur die Tests trifft, die diese Quelle brauchen.
+function pr96Quelle() {
+  PR96_DIR ??= quelleMit('pr96', { ...pr96Dateien(), '.github/agent/policy.json': readFileSync(join(ROOT, 'entwurf', 'a6-p1', 'policy.json')) });
+  return PR96_DIR;
+}
 
 test('Vorlage: im Commit, fester SHA-256 und dieselben Bytes wie der Rechner vor dem ersten Live-Auftrag', () => {
   const profil = JSON.parse(readFileSync(join(ROOT, 'agent-profiles', 'js-rechner.json'), 'utf8'));
@@ -148,10 +156,10 @@ test('Vorlage: kein Agentenprofil, kein Live-Skript, keine Abnahme und kein Work
 test('PR #96 auf main: altes Testpaket scheitert wie in CI, mit Vorlage laeuft die Kette, NF2 bleibt rot', () => {
   // Muss-Treffer: ohne Vorlage genau die bisherige Fehlermeldung aus der CI von PR #96.
   const direkt = join(BASIS_DIR, 'direkt');
-  git(PR96, ['worktree', 'add', '-q', '--detach', direkt]);
+  git(pr96Quelle(), ['worktree', 'add', '-q', '--detach', direkt]);
   assert.throws(() => schreibeTestpaket(direkt), /^Error: Generalprobe: Exportzeile in src\/rechne\.js nicht gefunden$/);
 
-  const e = kette(join(BASIS_DIR, 'kette-pr96'), { quelle: PR96, anker: ANKER });
+  const e = kette(join(BASIS_DIR, 'kette-pr96'), { quelle: pr96Quelle(), anker: ANKER });
   assert.deepEqual(pruefeAnfragen(e), []);
   assert.match(e.paket, /^[0-9a-f]{64}$/);
 
@@ -168,10 +176,10 @@ test('PR #96 auf main: altes Testpaket scheitert wie in CI, mit Vorlage laeuft d
   assert.equal(blobId(Buffer.from(rechne.base64, 'base64')), PR96_BLOB['src/rechne.js']);
 
   // Die Quelle selbst bleibt der Stand aus PR #96.
-  assert.equal(blobId(gitBytes(PR96, ['show', 'HEAD:src/rechne.js'])), PR96_BLOB['src/rechne.js']);
+  assert.equal(blobId(gitBytes(pr96Quelle(), ['show', 'HEAD:src/rechne.js'])), PR96_BLOB['src/rechne.js']);
 
   // NF2: fachlich falscher Code wird auch auf diesem Stand von der Abnahme abgelehnt.
-  const n = nf2(join(BASIS_DIR, 'nf2-pr96'), { quelle: PR96, anker: ANKER });
+  const n = nf2(join(BASIS_DIR, 'nf2-pr96'), { quelle: pr96Quelle(), anker: ANKER });
   assert.equal(n.r.status, 1);
   assert.equal(n.code, 'abnahme-exitcode');
 });
@@ -202,7 +210,7 @@ test('Vorlage manipuliert, fehlend, mit falschem Modus oder nur im Arbeitsordner
   assert.equal(blobId(gitBytes(ziel, ['show', 'HEAD:src/rechne.js'])), VORLAGE_BLOB['src/rechne.js']);
 
   // Gegenprobe: unveraenderte Quelle baut ohne Fehler.
-  baueRepo(PR96, join(BASIS_DIR, 'repo-ok'));
+  baueRepo(pr96Quelle(), join(BASIS_DIR, 'repo-ok'));
 });
 
 test('Eigentuemer-Entwurf Policy: gegenueber .github/agent/policy.json nur der Hash von agent-code-dryrun.mjs', () => {
