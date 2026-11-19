@@ -1,7 +1,8 @@
 // A6 P-1: Harness der Generalprobe. Nur fuer die Probe, nie im Live-Pfad.
 //
 // Baut aus dem vertrauenswuerdigen Checkout ein synthetisches Repository mit festem Ausgangscommit
-// (gleicher Baum wie HEAD, dazu zwei synthetische v2-Abnahmen), legt fuer jeden Job einen eigenen
+// (gleicher Baum wie HEAD, der Rechner aus der festen Vorlage generalprobe/vorlage/, dazu zwei
+// synthetische v2-Abnahmen), legt fuer jeden Job einen eigenen
 // RUNNER_TEMP mit Ereignisdatei, Ausgabedatei und nachgebautem GitHub an und startet die
 // UNVERAENDERTEN Job-Einstiege aus scripts/. Jeder Einstieg bekommt ausschliesslich seinen
 // Umgebungsvertrag; nichts wird aus der Umgebung des Harness geerbt.
@@ -161,8 +162,18 @@ function blobsVon(quelle, shas) {
   return inhalte;
 }
 
-// Synthetisches Repository: Baum von HEAD aus quelle, ueberschrieben bzw. ergaenzt um ABNAHMEN, als
-// einziger Commit ohne Eltern mit festen Daten. Gleicher Ausgangsbaum ergibt immer denselben Commit.
+// Feste Rechner-Vorlage: Ausgangsstand von src/rechne.js und test/rechne.test.js im synthetischen
+// Repository. Damit haengt das feste Testpaket nicht vom Rechner auf main ab, den echte Agentenauftraege
+// weiterentwickeln. Gelesen aus dem Commit HEAD von quelle, nie aus dem Arbeitsordner, und nur mit
+// genau diesem SHA-256 angenommen. Nur fuer die Generalprobe, nie im Live-Pfad.
+export const VORLAGE = Object.freeze({
+  'src/rechne.js': Object.freeze({ quelle: 'generalprobe/vorlage/rechne.js.vorlage', sha256: '0429f96116843b95fedfbe17babf60b87fbf2df8262688e5e120eaeaf121de3e' }),
+  'test/rechne.test.js': Object.freeze({ quelle: 'generalprobe/vorlage/rechne.test.js.vorlage', sha256: '392167a28763bb5ccb31bb2a2503e798b8b866642bf198749095e75d9f76cc10' }),
+});
+
+// Synthetisches Repository: Baum von HEAD aus quelle, der Rechner ersetzt durch die VORLAGE,
+// ueberschrieben bzw. ergaenzt um ABNAHMEN, als einziger Commit ohne Eltern mit festen Daten.
+// Gleicher Ausgangsbaum ergibt immer denselben Commit.
 export function baueRepo(quelle, ziel, extra = ABNAHMEN) {
   const zeilen = gitIn(quelle, [...NUR_LESEN(quelle), 'ls-tree', '-r', '-z', '--full-tree', 'HEAD']).split('\0').filter(Boolean);
   const eintraege = new Map();
@@ -179,6 +190,28 @@ export function baueRepo(quelle, ziel, extra = ABNAHMEN) {
 
   const inhalte = blobsVon(quelle, [...new Set([...eintraege.values()].map(e => e.sha))]);
   const dateien = new Map([...eintraege].map(([pfad, e]) => [pfad, { modus: e.modus, bytes: inhalte.get(e.sha) }]));
+
+  for (const [pfad, { quelle: vorlage, sha256: erwartet }] of Object.entries(VORLAGE)) {
+    const datei = dateien.get(vorlage);
+
+    if (datei === undefined) {
+      throw new Error(`Generalprobe: Vorlage ${vorlage} fehlt im Commit`);
+    }
+
+    if (datei.modus !== '100644') {
+      throw new Error(`Generalprobe: Vorlage ${vorlage} hat nicht den Modus 100644`);
+    }
+
+    if (sha256(datei.bytes) !== erwartet) {
+      throw new Error(`Generalprobe: Vorlage ${vorlage} weicht vom festen SHA-256 ab`);
+    }
+
+    if (!dateien.has(pfad)) {
+      throw new Error(`Generalprobe: ${pfad} fehlt im Commit`);
+    }
+
+    dateien.set(pfad, { modus: '100644', bytes: datei.bytes });
+  }
 
   for (const [pfad, text] of Object.entries(extra)) {
     dateien.set(pfad, { modus: '100644', bytes: Buffer.from(text, 'utf8') });
