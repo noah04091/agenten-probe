@@ -17,13 +17,13 @@ import assert from 'node:assert/strict';
 import cp from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
+  chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { after, before, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { orderSha256, resolveOrder } from '../scripts/agent-code-auftrag.mjs';
 import { createPackageV2, prepareWorkspace } from '../scripts/agent-code-auftrag-paket.mjs';
@@ -966,6 +966,42 @@ test('Git-Struktur: .git als Datei, Linked Worktree, Worktrees, commondir, Alter
     ohneAbnahme(r, 'abnahme-git-struktur');
     assert.ok(!r.protokoll.git.some(call => NACH_CHECKOUT(call.args)), `${name}: ausgecheckt trotz Befund`);
   }
+});
+
+// Ziel A, Live-1-Fix: Lauf 44509846928 scheiterte in Job 2 mit abnahme-git-struktur, weil actions/checkout
+// flach lud (fetch-depth 1) und der Pruefklon .git/shallow erbte. Nachbau von actions/checkout mit den Befehlen
+// aus dem Log dieses Laufs (init, remote, Abruf, checkout), danach das echte Modul mit seinem echten Klon.
+function actionsCheckout(dir, tiefe) {
+  EXEC('git', ['init', '-q', dir], { cwd: BASE_DIR, env: ENV, stdio: 'ignore' });
+  git(dir, ['remote', 'add', 'origin', pathToFileURL(REPO).href]);
+  git(dir, ['config', '--local', 'gc.auto', '0']);
+  git(dir, tiefe === 1
+    ? ['-c', 'protocol.version=2', 'fetch', '-q', '--no-tags', '--prune', '--no-recurse-submodules', '--depth=1', 'origin', BASIS]
+    : ['-c', 'protocol.version=2', 'fetch', '-q', '--prune', '--no-recurse-submodules', 'origin', '+refs/heads/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*']);
+  git(dir, ['checkout', '-q', '--force', BASIS]);
+  return dir;
+}
+
+test('Checkout-Tiefe (Live 1): flacher Actions-Checkout scheitert am Pruefklon mit .git/shallow, vollstaendiger besteht', () => {
+  const p = paket('rechner');
+
+  // Flach wie bisher in Job 2: die Quelle ist flach, der Klon des Moduls traegt .git/shallow, Ablehnung vor dem Auschecken.
+  const flach = actionsCheckout(join(newDir('flach'), 'c'), 1);
+  assert.equal(git(flach, ['rev-parse', '--is-shallow-repository']), 'true', 'Gegenprobe: Quelle nicht flach');
+  const rf = lauf(eingabe(p, { trustedRoot: flach }));
+  ohneAbnahme(rf, 'abnahme-git-struktur');
+  assert.ok(existsSync(join(rf.protokoll.checkout, '.git', 'shallow')), 'Pruefklon ohne .git/shallow: anderer Grund der Ablehnung');
+  assert.ok(!rf.protokoll.git.some(call => NACH_CHECKOUT(call.args)), 'ausgecheckt trotz Befund');
+
+  // Vollstaendig wie mit fetch-depth 0: derselbe Klon ohne .git/shallow, Abnahme bestanden.
+  const voll = actionsCheckout(join(newDir('voll'), 'c'), 0);
+  assert.equal(git(voll, ['rev-parse', '--is-shallow-repository']), 'false');
+  const rv = lauf(eingabe(p, { trustedRoot: voll }));
+  assert.equal(rv.fehler, undefined, rv.fehler?.message);
+  assert.equal(rv.ergebnis.ergebnis, 'bestanden');
+  assert.equal(rv.ergebnis.base_sha, BASIS);
+  assert.ok(!existsSync(join(rv.protokoll.checkout, '.git', 'shallow')));
+  assert.equal(rv.protokoll.abnahmen.length, 1);
 });
 
 test('Git-Konfiguration: Positivliste konkreter Schluessel und Werte, keine Wildcards, keine fremden Quellen', () => {

@@ -49,13 +49,27 @@ function liveTeile(text) {
   return { vorn: text.slice(0, g), sammel: text.slice(s) };
 }
 
-test('K1 Trennung: Kopf, Umgebung, Job 0 bis 3 und Sammeljob sind byte-gleich mit main', () => {
+// Ziel A, Live-1-Fix (19.11.2026): einzige freigegebene Abweichung im Live-Teil ist fetch-depth 0 im Checkout von
+// Job 2 (genau diese Zeile, direkt nach ref, nur im Job abnahme). Abgesichert in a6-abnahme-checkout-tiefe.test.mjs.
+const TIEFE_JOB2 = '          ref: ${{ github.sha }}\n          fetch-depth: 0\n';
+
+function ohneTiefeJob2(vorn) {
+  const job2 = vorn.indexOf('\n  abnahme:\n');
+  const job3 = vorn.indexOf('\n  veroeffentlichen:\n');
+  const at = vorn.indexOf(TIEFE_JOB2);
+  assert.ok(job2 > 0 && job3 > job2 && vorn.indexOf(TIEFE_JOB2, at + 1) < 0, 'Tiefe mehrfach');
+  assert.ok(at < 0 || (at > job2 && at < job3), 'Tiefe ausserhalb von Job 2');
+  return at < 0 ? vorn : vorn.slice(0, at) + vorn.slice(at).replace('          fetch-depth: 0\n', '');
+}
+
+test('K1 Trennung: Kopf, Umgebung, Job 0 bis 3 und Sammeljob sind byte-gleich mit main (bis auf fetch-depth 0 in Job 2)', () => {
   const ent = liveTeile(WF);
-  assert.equal(sha256(ent.vorn), LIVE_VORN_SHA256, 'Live-Pfad oder globale Umgebung veraendert');
+  assert.ok(ent.vorn.includes(TIEFE_JOB2), 'Muss-Treffer: Tiefe in Job 2 des Entwurfs');
+  assert.equal(sha256(ohneTiefeJob2(ent.vorn)), LIVE_VORN_SHA256, 'Live-Pfad oder globale Umgebung veraendert');
   assert.equal(sha256(ent.sammel), LIVE_SAMMEL_SHA256, 'Sammeljob veraendert');
   // Dieselben Teile der geschuetzten Datei (Bot-Stand: main; Eigentuemerstand: die Kopie des Entwurfs).
   const ist = liveTeile(lies('.github/workflows/agent-auftrag.yml'));
-  assert.equal(sha256(ist.vorn), LIVE_VORN_SHA256);
+  assert.equal(sha256(ohneTiefeJob2(ist.vorn)), LIVE_VORN_SHA256);
   assert.equal(sha256(ist.sammel), LIVE_SAMMEL_SHA256);
   // Der K1-Nachweis steht nur im Probejob.
   assert.ok(!ent.vorn.includes('K1-Nachweis') && !ent.vorn.includes('k1-attrappe') && !ent.sammel.includes('k1-'));
