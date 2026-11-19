@@ -1,6 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { addiere, subtrahiere, multipliziere } = require('../src/rechne');
+const { addiere, subtrahiere, multipliziere, quadrat } = require('../src/rechne');
+
+test('quadrat entspricht a * a', () => {
+  assert.strictEqual(quadrat(3), 9);
+  assert.strictEqual(quadrat(-4), 16);
+  assert.strictEqual(quadrat(0), 0);
+  assert.strictEqual(quadrat(-0), -0 * -0);
+  assert.strictEqual(quadrat(0.5), 0.25);
+  assert.strictEqual(quadrat(Infinity), Infinity);
+  assert.strictEqual(quadrat(-Infinity), Infinity);
+  assert.strictEqual(quadrat(NaN), NaN);
+  assert.strictEqual(quadrat(1e200), 1e200 * 1e200);
+});
 
 test('addiere zählt zwei Zahlen zusammen', () => {
   assert.strictEqual(addiere(2, 3), 5);

@@ -16,7 +16,11 @@ function multipliziere(a, b) {
   return a * b;
 }
 
-module.exports = { addiere, subtrahiere, multipliziere };
+function quadrat(a) {
+  return a * a;
+}
+
+module.exports = { addiere, subtrahiere, multipliziere, quadrat };
 
 // T14
 // T16 a
