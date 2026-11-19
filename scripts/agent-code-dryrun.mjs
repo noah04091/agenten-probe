@@ -41,17 +41,37 @@ function blobOfText(text) {
     .digest('hex');
 }
 
+// Namen im einzigen Export "module.exports = { a, b };" (auch ueber mehrere Zeilen), nur
+// Kurzschreibweise. Jede andere Form oder ein zweiter Export ergibt null.
+function exportNames(text) {
+  if ((text.match(/^module\.exports\b/gm) ?? []).length !== 1) {
+    return null;
+  }
+
+  const match = /^module\.exports\s*=\s*\{([^{}]*)\}\s*;?[ \t]*$/m.exec(text);
+
+  if (match === null) {
+    return null;
+  }
+
+  const names = match[1].split(',').map(name => name.trim()).filter(name => name !== '');
+  return names.every(name => /^[A-Za-z_$][\w$]*$/.test(name)) ? names : null;
+}
+
 // Feste Testaenderung. Vor A5: die Multiplikation wie in der Abnahme-Transferprobe.
 // Hat main sie schon (nach A5), nur je eine Kommentarzeile wie in der Transferprobe,
-// damit der Trockenlauf nicht vom Stand von main abhaengt.
+// damit der Trockenlauf nicht vom Stand von main abhaengt. Spaetere Funktionen, die ein
+// Auftrag fachlich ergaenzt (etwa quadrat), aendern daran nichts: verlangt wird nur,
+// dass multipliziere genau einmal definiert und exportiert ist.
 export function prepareFixedChange(root) {
   const file = join(root, 'src/rechne.js');
   const original = readFileSync(file, 'utf8');
   const marker = 'module.exports = { addiere, subtrahiere };';
-  const done = 'module.exports = { addiere, subtrahiere, multipliziere };';
+  const names = exportNames(original);
 
   if (
-    original.split(done).length === 2 &&
+    names !== null &&
+    names.includes('multipliziere') &&
     original.split('function multipliziere(').length === 2
   ) {
     for (const path of FILES) {

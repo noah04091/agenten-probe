@@ -26,7 +26,7 @@ const lies = pfad => readFileSync(join(ROOT, pfad), 'utf8').replace(/\r\n/g, '\n
 const sha256 = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
 
 // Genehmigter Stand des Workflow-Entwurfs (Zeilenenden LF). Jede Aenderung am Entwurf braucht diesen Wert neu.
-const A6_WORKFLOW_SHA256 = '86db0fa059ecb09188c0c8f070766637c9534ce11ae230119a43d3741ec27c95';
+const A6_WORKFLOW_SHA256 = '5e22e562cbbdb18821195b05af79ae8376f98cbc76061a3375559161fb43ef06';
 
 const ENTWURF = 'entwurf/a6-p1';
 const ZIELE = Object.freeze([
@@ -992,7 +992,7 @@ test('K3: Gegenproben, jede Mutation des Messschritts scheitert am Waechter', ()
 });
 
 // Ausweichloesung (b): nur falls GitHub agent-auftrag.yml auf seinem eigenen PR nicht startet.
-const A6_AUSWEICH_SHA256 = '92ce3832a95aab22c704f3bc2ef845f3706a1d6c3217d148ed70fccd90336617';
+const A6_AUSWEICH_SHA256 = '02812459f1a890bffb5b1f1e6e48096e523380d874b147134175a3aa8844f5c3';
 
 test('Ausweichloesung: ergaenzt den heutigen Trockenlauf nur und traegt Umgebung und Probejobs wortgleich', () => {
   const aus = lies(`${ENTWURF}/ausweich/code-pilot-trockenlauf.yml`);

@@ -348,6 +348,82 @@ test('Feste Testaenderung: hat main die Multiplikation schon, nur Kommentarzeile
   }
 });
 
+// Live 1, Versuch 2 (PR #96): Der echte Auftrag hat quadrat ergaenzt. Der Trockenlauf scheiterte daran mit
+// "unerwarteter Ausgangsstand", weil er die alte Exportzeile wortgleich verlangte.
+const PR96_RECHNE = [
+  '// Spielcode für den Ablauftest. Kein Bezug zu Contract AI.',
+  '//',
+  '// Vorgabe fuer Issue #38: multipliziere(a, b) gibt exakt das Ergebnis',
+  '// von a * b zurueck, einschliesslich -0 (0 * -9 ergibt -0, nicht 0).',
+  '// Keine zusaetzliche Normalisierung. Auch eigene Tests unterscheiden',
+  '// 0 und -0: assert.strictEqual(multipliziere(0, -9), -0).',
+  'function addiere(a, b) {', '  return a + b;', '}', '',
+  'function subtrahiere(a, b) {', '  return a - b;', '}', '',
+  'function multipliziere(a, b) {', '  return a * b;', '}', '',
+  'function quadrat(a) {', '  return a * a;', '}', '',
+  'module.exports = { addiere, subtrahiere, multipliziere, quadrat };', '',
+  '// T14', '// T16 a', '// T16 b', '// T13: Test nachtraeglicher Aenderungen', '',
+].join('\n');
+
+function prepIn(src) {
+  const root = mkdtempSync(join(tmpdir(), 'code-pilot-prep-'));
+  mkdirSync(join(root, 'src'));
+  mkdirSync(join(root, 'test'));
+  writeFileSync(join(root, 'src/rechne.js'), src);
+  writeFileSync(join(root, 'test/rechne.test.js'), '// Basis\n');
+  return root;
+}
+
+test('Feste Testaenderung: Stand aus PR #96 mit quadrat, nur Kommentarzeilen', () => {
+  const bytes = Buffer.from(PR96_RECHNE, 'utf8');
+  assert.equal(createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex'), 'f85e427b998b70ff9768e14205f165656ad3b856');
+  const root = prepIn(PR96_RECHNE);
+  try {
+    assert.equal(prepareFixedChange(root), 'kommentar');
+    assert.equal(readFileSync(join(root, 'src/rechne.js'), 'utf8'), PR96_RECHNE + '\n// Code-Pilot Trockenlauf\n');
+    assert.equal(readFileSync(join(root, 'test/rechne.test.js'), 'utf8'), '// Basis\n\n// Code-Pilot Trockenlauf\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Feste Testaenderung: Export anders formatiert oder mehrzeilig, weiter nur Kommentarzeilen', () => {
+  const alt = 'module.exports = { addiere, subtrahiere, multipliziere, quadrat };';
+  for (const neu of ['module.exports = {addiere, subtrahiere, multipliziere, quadrat}', 'module.exports = {\n  addiere,\n  subtrahiere,\n  multipliziere,\n  quadrat,\n};']) {
+    const src = PR96_RECHNE.replace(alt, neu);
+    assert.notEqual(src, PR96_RECHNE);
+    const root = prepIn(src);
+    try {
+      assert.equal(prepareFixedChange(root), 'kommentar');
+      assert.equal(readFileSync(join(root, 'src/rechne.js'), 'utf8'), src + '\n// Code-Pilot Trockenlauf\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('Feste Testaenderung: ohne exportiertes multipliziere, doppelt oder mit zweiter Exportzeile abgelehnt, Datei unveraendert', () => {
+  const faelle = {
+    'multipliziere nicht exportiert': PR96_RECHNE.replace('{ addiere, subtrahiere, multipliziere, quadrat }', '{ addiere, subtrahiere, quadrat }'),
+    'multipliziere doppelt definiert': PR96_RECHNE.replace('function quadrat(a)', 'function multipliziere(a, b) {\n  return a * b;\n}\n\nfunction quadrat(a)'),
+    'zweite Exportzeile': PR96_RECHNE + 'module.exports.quadrat = quadrat;\n',
+    'multipliziere nur als Umbenennung exportiert': PR96_RECHNE.replace('{ addiere, subtrahiere, multipliziere, quadrat }', '{ addiere, subtrahiere, multipliziere: quadrat, quadrat }'),
+    'ohne multipliziere-Definition': PR96_RECHNE.replace('function multipliziere(a, b)', 'function malnehmen(a, b)'),
+  };
+
+  for (const [name, src] of Object.entries(faelle)) {
+    assert.notEqual(src, PR96_RECHNE, `${name}: Ersetzung wirkungslos`);
+    const root = prepIn(src);
+    try {
+      assert.throws(() => prepareFixedChange(root), /^Error: Trockenlauf abgebrochen: unerwarteter Ausgangsstand von src\/rechne\.js$/, name);
+      assert.equal(readFileSync(join(root, 'src/rechne.js'), 'utf8'), src, `${name}: Datei veraendert`);
+      assert.equal(readFileSync(join(root, 'test/rechne.test.js'), 'utf8'), '// Basis\n', `${name}: Test veraendert`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('Wachen: ausgehebelte Schritte und Rechte innerhalb eines Jobs werden erkannt', () => {
   const { pilot, dry } = workflows();
   const job3 = dry.indexOf('\n  veroeffentlichung_trocken:\n');

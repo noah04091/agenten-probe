@@ -38,6 +38,20 @@ const CHECKOUT_JOB2 = [
 const TIEFE = '          fetch-depth: 0\n';
 const PRUEF_NAME = 'Pruefklon gegen den echten Checkout wie in Job 2, flache Gegenprobe';
 
+// Fixture-Fix nach Live 1, Versuch 2: A6_PROBE_SHA256 in der globalen Umgebung folgt generalprobe/probe.mjs. Kein
+// Live-Job liest ihn (nur a6_probe in den Probejobs). Fuer den Vergleich mit main darf nur genau diese eine
+// Definition in der globalen Umgebung abweichen; die Bindung an probe.mjs prueft a6-auftrag-workflow.test.mjs.
+const PROBE_ANKER_MAIN = '  A6_PROBE_SHA256: 2cad8a9e00512e41b8fddd222df60562e2978544dd97e1600e2cb3ee45f31ca7\n';
+
+function mitProbeAnkerVonMain(vorn) {
+  const treffer = [...vorn.matchAll(/^ {2}A6_PROBE_SHA256: [0-9a-f]{64}\n/gm)];
+  const env = vorn.indexOf('\nenv:\n');
+  const jobs = vorn.indexOf('\njobs:\n');
+  assert.ok(treffer.length === 1 && vorn.split('A6_PROBE_SHA256').length === 2, 'Probeanker nicht genau einmal');
+  assert.ok(env > 0 && treffer[0].index > env && treffer[0].index < jobs, 'Probeanker nicht in der globalen Umgebung');
+  return vorn.slice(0, treffer[0].index) + PROBE_ANKER_MAIN + vorn.slice(treffer[0].index + treffer[0][0].length);
+}
+
 function liveTeile(text) {
   const g = text.indexOf(`${TRENNER}  # Generalprobe:`);
   const s = text.indexOf(`${TRENNER}  # Sammeljob`);
@@ -77,7 +91,7 @@ function pruefSkript(text = WF) {
 // Teil 1: Struktur
 // ---------------------------------------------------------------------------
 
-test('Live-1-Fix Struktur: Job 2 laedt mit fetch-depth 0, sonst ist der Live-Teil byte-gleich mit main 27c7989', () => {
+test('Live-1-Fix Struktur: Job 2 laedt mit fetch-depth 0, sonst ist der Live-Teil byte-gleich mit main 27c7989 (bis auf den Probeanker)', () => {
   const { vorn, sammel } = liveTeile(WF);
   const abnahme = job(WF, 'abnahme');
   assert.equal(schritte(abnahme)[0], CHECKOUT_JOB2, 'Checkout von Job 2 nicht genau wie freigegeben');
@@ -91,7 +105,7 @@ test('Live-1-Fix Struktur: Job 2 laedt mit fetch-depth 0, sonst ist der Live-Tei
   // Ohne genau diese Zeile ist der Live-Teil der von main; Sammeljob unveraendert.
   const at = vorn.indexOf(`          ref: \${{ github.sha }}\n${TIEFE}`, vorn.indexOf('\n  abnahme:\n'));
   assert.ok(at > 0 && at < vorn.indexOf('\n  veroeffentlichen:\n'), 'Zeile nicht in Job 2');
-  const ohne = vorn.slice(0, at) + vorn.slice(at).replace(TIEFE, '');
+  const ohne = mitProbeAnkerVonMain(vorn.slice(0, at) + vorn.slice(at).replace(TIEFE, ''));
   assert.equal(sha256(ohne), LIVE_VORN_MAIN_SHA256, 'Live-Teil weicht ausser in der Tiefe von main ab');
   assert.equal(sha256(sammel), LIVE_SAMMEL_SHA256);
 });

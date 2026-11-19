@@ -53,6 +53,20 @@ function liveTeile(text) {
 // Job 2 (genau diese Zeile, direkt nach ref, nur im Job abnahme). Abgesichert in a6-abnahme-checkout-tiefe.test.mjs.
 const TIEFE_JOB2 = '          ref: ${{ github.sha }}\n          fetch-depth: 0\n';
 
+// Fixture-Fix nach Live 1, Versuch 2: A6_PROBE_SHA256 in der globalen Umgebung folgt generalprobe/probe.mjs. Kein
+// Live-Job liest ihn (nur a6_probe in den Probejobs). Fuer den Vergleich mit main darf nur genau diese eine
+// Definition in der globalen Umgebung abweichen; die Bindung an probe.mjs prueft a6-auftrag-workflow.test.mjs.
+const PROBE_ANKER_MAIN = '  A6_PROBE_SHA256: 2cad8a9e00512e41b8fddd222df60562e2978544dd97e1600e2cb3ee45f31ca7\n';
+
+function mitProbeAnkerVonMain(vorn) {
+  const treffer = [...vorn.matchAll(/^ {2}A6_PROBE_SHA256: [0-9a-f]{64}\n/gm)];
+  const env = vorn.indexOf('\nenv:\n');
+  const jobs = vorn.indexOf('\njobs:\n');
+  assert.ok(treffer.length === 1 && vorn.split('A6_PROBE_SHA256').length === 2, 'Probeanker nicht genau einmal');
+  assert.ok(env > 0 && treffer[0].index > env && treffer[0].index < jobs, 'Probeanker nicht in der globalen Umgebung');
+  return vorn.slice(0, treffer[0].index) + PROBE_ANKER_MAIN + vorn.slice(treffer[0].index + treffer[0][0].length);
+}
+
 function ohneTiefeJob2(vorn) {
   const job2 = vorn.indexOf('\n  abnahme:\n');
   const job3 = vorn.indexOf('\n  veroeffentlichen:\n');
@@ -62,14 +76,14 @@ function ohneTiefeJob2(vorn) {
   return at < 0 ? vorn : vorn.slice(0, at) + vorn.slice(at).replace('          fetch-depth: 0\n', '');
 }
 
-test('K1 Trennung: Kopf, Umgebung, Job 0 bis 3 und Sammeljob sind byte-gleich mit main (bis auf fetch-depth 0 in Job 2)', () => {
+test('K1 Trennung: Kopf, Umgebung, Job 0 bis 3 und Sammeljob sind byte-gleich mit main (bis auf fetch-depth 0 in Job 2 und den Probeanker)', () => {
   const ent = liveTeile(WF);
   assert.ok(ent.vorn.includes(TIEFE_JOB2), 'Muss-Treffer: Tiefe in Job 2 des Entwurfs');
-  assert.equal(sha256(ohneTiefeJob2(ent.vorn)), LIVE_VORN_SHA256, 'Live-Pfad oder globale Umgebung veraendert');
+  assert.equal(sha256(ohneTiefeJob2(mitProbeAnkerVonMain(ent.vorn))), LIVE_VORN_SHA256, 'Live-Pfad oder globale Umgebung veraendert');
   assert.equal(sha256(ent.sammel), LIVE_SAMMEL_SHA256, 'Sammeljob veraendert');
   // Dieselben Teile der geschuetzten Datei (Bot-Stand: main; Eigentuemerstand: die Kopie des Entwurfs).
   const ist = liveTeile(lies('.github/workflows/agent-auftrag.yml'));
-  assert.equal(sha256(ohneTiefeJob2(ist.vorn)), LIVE_VORN_SHA256);
+  assert.equal(sha256(ohneTiefeJob2(mitProbeAnkerVonMain(ist.vorn))), LIVE_VORN_SHA256);
   assert.equal(sha256(ist.sammel), LIVE_SAMMEL_SHA256);
   // Der K1-Nachweis steht nur im Probejob.
   assert.ok(!ent.vorn.includes('K1-Nachweis') && !ent.vorn.includes('k1-attrappe') && !ent.sammel.includes('k1-'));
