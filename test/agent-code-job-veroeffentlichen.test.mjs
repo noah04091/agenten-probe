@@ -725,9 +725,9 @@ test('Vertrag: Job 3 liest nur die festen Namen, kennt keine Ausgabedatei und ke
 // ist dieser Test bewusst rot; er wird nicht uebersprungen.
 // A6 P-1: Einzige Ausnahme ist agent-auftrag.yml mit genau dem genehmigten SHA-256 (Zeilenenden LF). Jede
 // andere Fassung und jeder andere Workflow mit diesen Namen bleibt rot.
-const A6_WORKFLOW_SHA256 = '02095e6cf3d1a7d8de35c973b5e74887b8a416b47ffa5429767e6dc1b224215b';
+const A6_WORKFLOW_SHA256 = '065f25ab8d734f2b3ccd4768722bf53ac6e05be990b54d2d4d25fad41392156e';
 // Ausweichfassung (b) von code-pilot-trockenlauf.yml mit denselben Probejobs; nur genau diese Fassung.
-const A6_AUSWEICH_SHA256 = '80a28cc03d1bcadb7edda78e709aa92687d02934281dd60c1cae1f83c399d0c2';
+const A6_AUSWEICH_SHA256 = 'ee861485cec36b9c54e86033b1561b5ea7ec59cfba3cf3e4247b149fa67b0f82';
 
 test('Regression: Policy vorhanden, ausser dem genehmigten agent-auftrag.yml ruft kein Workflow Job-Einstieg oder Integritaetspruefer auf', () => {
   const workflows = join(ROOT, '.github', 'workflows');

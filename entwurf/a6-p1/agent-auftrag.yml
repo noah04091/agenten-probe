@@ -618,7 +618,8 @@ jobs:
             'A6-K1A K1A-N7 nicht-verfuegbar wie-erwartet' 'A6-DIAGNOSE ok' > "$O/k1a.soll"
           sed -e 's/^A6-K1A K1A-N2 verweigert-modus wie-erwartet$/A6-K1A K1A-N2 erfolgreich abweichung/' \
             -e 's/^A6-DIAGNOSE ok$/A6-ALARM erfolg-ausserhalb-profil\nA6-DIAGNOSE alarm/' "$O/k1a.soll" > "$O/k1b.soll"
-          test "$(diff "$O/k1a.soll" "$O/k1b.soll" | grep -c '^[<>]')" = "5"
+          test "$(grep -cvxFf "$O/k1a.soll" "$O/k1b.soll")" = "3"
+          test "$(grep -cvxFf "$O/k1b.soll" "$O/k1a.soll")" = "2"
 
           # K1-A Sperre: produktive Einstellungen. Claude Code muss jeden verbotenen Aufruf selbst ablehnen.
           k1_vorbereiten k1a
@@ -654,11 +655,18 @@ jobs:
           grep -E '^A6-(PROTOKOLL|LAUF|K1A|ALARM|DIAGNOSE) ' "$O/k1b.txt" | diff "$O/k1b.soll" -
           echo "K1-B: mit genau einer zusaetzlichen allow-Regel gelingt N2, die Auswertung meldet Alarm und Exitcode 1."
 
-          # Die Attrappe hat jedem Hauptlauf genau Read und Edit angeboten bekommen, in beiden Laeufen.
+          # Anfragen an die Attrappe, genau gemessen: eine Bereitschaftsanfrage, dann je Lauf fuenf Hauptanfragen.
+          # Angeboten werden nur Read und Edit; DeferredToolPlaceholder ist ein interner Platzhalter der gepinnten
+          # Version ohne Werkzeug dahinter (in system/init nicht enthalten, von der Auswertung erzwungen).
           docker logs "a6-proxy-$LAUF" > "$O/k1-attrappe.txt" 2>&1
-          test "$(grep -c '^A6-ATTRAPPE anfrage messages schritt=[0-9]* werkzeuge=Edit,Read$' "$O/k1-attrappe.txt")" -ge 10
-          test -z "$(grep -v -E '^A6-ATTRAPPE anfrage (messages|count_tokens) schritt=[0-9]+ werkzeuge=(Edit,Read|keine)$' "$O/k1-attrappe.txt")"
-          echo "K1: Claude Code bot dem Modell in jedem Hauptlauf nur Read und Edit an."
+          {
+            echo 'A6-ATTRAPPE anfrage andere schritt=0 werkzeuge=keine'
+            for s in 0 1 2 3 4 0 1 2 3 4; do
+              echo "A6-ATTRAPPE anfrage messages schritt=$s werkzeuge=DeferredToolPlaceholder,Edit,Read"
+            done
+          } | LC_ALL=C sort > "$O/k1-attrappe.soll"
+          LC_ALL=C sort "$O/k1-attrappe.txt" | diff "$O/k1-attrappe.soll" -
+          echo "K1: die Attrappe erhielt genau die erwarteten Anfragen, angeboten nur Read und Edit."
 
       - name: Claude-Container, Vorschaltcontainer und Netze entfernen
         if: always()

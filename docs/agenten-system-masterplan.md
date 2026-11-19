@@ -889,7 +889,7 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 10. Falls K1 zeigt, dass sich Lesen nicht verlässlich begrenzen lässt: A6.6 erst nach Umbau auf Claude Code im Container? Empfehlung: ja, vorab festlegen.
 11. K4: Workload Identity Federation einführen, und neue Live-Läufe erst nach der Schlüsselerneuerung am 02.12.2026? Empfehlung: Entscheidung zusammen mit W1.
 12. ~~P-1, Befund 2: Claude-Arbeitsordner physisch verengen~~ entschieden 17.11.2026: eigene Sicht nur mit den Profildateien, ohne Änderung an `scripts/` oder der Policy, siehe Abschnitt 10 und Abschnitt A6 P-1.
-13. Vor K1a: Gegenprobe mit der echten Claude-Code-Version, der Modell-Attrappe und einer zusätzlichen `allow`-Regel offline ausführen (Konzept in `docs/a6-k1a-issue-80-entwurf.md`)? Empfehlung: ja, einmalig lokal im gepinnten Image.
+13. Vor K1a: Gegenprobe mit der echten Claude-Code-Version, der Modell-Attrappe und einer zusätzlichen `allow`-Regel offline ausführen (Konzept in `docs/a6-k1a-issue-80-entwurf.md`)? Empfehlung: ja, einmalig lokal im gepinnten Image. **Stand 19.11.2026:** Freigabe von ChatGPT mit Korrektur: Gegenprobe über N2 (`Read(//opt/a6/settings.json)` zusätzlich in `allow`), nicht über N3, weil `Read(//etc/**)` in `deny` steht und Vorrang hat. Umgesetzt als K1-Nachweis in Generalprobe Job 1 (K1-A Sperre, K1-B Gegenprobe), lokal emuliert grün; der Beleg in echten Actions folgt erst auf dem Eigentümer-PR.
 14. Vor dem P-4-Merge: Wer sieht die Post-Schritte der gepinnten Actions für K2 durch, und genügt die Durchsicht ohne eigene Probe? Empfehlung: Durchsicht durch Terminal 1 mit Quellenangabe je SHA.
 
 ## 12. Einstieg für eine neue Claude-Code-Sitzung
