@@ -1,7 +1,7 @@
 {
   "schema": "agent-profile-v1",
   "id": "js-text",
-  "aktiv": false,
+  "aktiv": true,
   "dateien": [
     "src/text.js",
     "test/text.test.js"
