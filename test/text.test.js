@@ -11,8 +11,12 @@ const { zeichenzahl } = textModul;
 
 // Alle erwarteten Werte sind feste Zahlen, keine zweite Zaehllogik als Referenz.
 
-test('Export: genau zeichenzahl als Funktion mit einem Parameter', () => {
-  assert.deepEqual(Object.keys(textModul), ['zeichenzahl']);
+const { umkehren } = textModul;
+
+test('Export: zeichenzahl und umkehren als Funktionen mit einem Parameter', () => {
+  assert.deepEqual(Object.keys(textModul), ['zeichenzahl', 'umkehren']);
+  assert.strictEqual(typeof umkehren, 'function');
+  assert.strictEqual(umkehren.length, 1);
   assert.equal(typeof zeichenzahl, 'function');
   assert.equal(zeichenzahl.length, 1);
 });
@@ -107,6 +111,37 @@ test('ungueltige Typen loesen einen echten TypeError aus, ohne Typumwandlung', (
   }
 
   assert.throws(() => zeichenzahl(), error => error.constructor === TypeError && error.message === MELDUNG);
+});
+
+test('umkehren: leer, einfache Texte und Umlaute', () => {
+  assert.strictEqual(umkehren(''), '');
+  assert.strictEqual(umkehren('a'), 'a');
+  assert.strictEqual(umkehren('Hallo'), 'ollaH');
+  assert.strictEqual(umkehren('Straße'), 'eßartS');
+  assert.strictEqual(umkehren('äöü'), 'üöä');
+});
+
+test('umkehren: Zeichen ausserhalb der Basisebene bleibt ganz', () => {
+  assert.strictEqual(umkehren('a\u{1F600}b'), 'b\u{1F600}a');
+  assert.strictEqual(umkehren('\u{1F600}\u{1D11E}'), '\u{1D11E}\u{1F600}');
+});
+
+test('umkehren: kombinierendes Zeichen wandert als eigener Codepoint mit', () => {
+  assert.strictEqual(umkehren('éx'), 'x́e');
+  assert.strictEqual(umkehren('ä'), '̈a');
+});
+
+test('umkehren: sehr lange Eingabe', () => {
+  const lang = 'a'.repeat(100_000) + '\u{1F600}' + 'b'.repeat(100_000);
+  const erwartet = 'b'.repeat(100_000) + '\u{1F600}' + 'a'.repeat(100_000);
+  assert.strictEqual(umkehren(lang), erwartet);
+});
+
+test('umkehren: ungueltige Typen loesen TypeError aus', () => {
+  for (const wert of [null, undefined, 42, true, {}, [], new String('x')]) {
+    assert.throws(() => umkehren(wert), error => error.constructor === TypeError);
+  }
+  assert.throws(() => umkehren(), TypeError);
 });
 
 test('die uebergebene Zeichenkette und der globale Zustand bleiben unveraendert', () => {

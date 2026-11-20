@@ -18,4 +18,14 @@ function zeichenzahl(text) {
   return anzahl;
 }
 
-module.exports = { zeichenzahl };
+// Kehrt die Reihenfolge der Unicode-Codepoints um. Keine Normalisierung, keine Typumwandlung.
+function umkehren(text) {
+  if (typeof text !== 'string') {
+    throw new TypeError('umkehren erwartet eine primitive Zeichenkette');
+  }
+
+  // Array.from iteriert per String-Iterator (Codepoints) und ist auch bei langen Eingaben sicher.
+  return Array.from(text).reverse().join('');
+}
+
+module.exports = { zeichenzahl, umkehren };
