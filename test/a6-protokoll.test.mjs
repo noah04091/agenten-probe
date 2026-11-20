@@ -396,3 +396,159 @@ test('Issue-Entwurf #80: genau die Katalogfaelle mit denselben Werten und Erwart
   // Der Entwurf veraendert nichts: kein Label, kein Start, keine Anweisung an ein Werkzeug ausserhalb des Katalogs.
   assert.ok(!/bot-auftrag/.test(block));
 });
+
+// ---------------------------------------------------------------------------
+// Protokollkorrektur 2b nach Live 2 (Lauf 44620884909): echte Mitschnitte mit js-text (fixtures/a6-k1a/live2)
+// ---------------------------------------------------------------------------
+
+const LIVE2 = join(FIX, 'live2');
+const TEXT_PROFIL = '["src/text.js","test/text.test.js"]';
+const roh2 = name => readFileSync(join(LIVE2, `${name}.jsonl`), 'utf8');
+const ereignisse2 = name => roh2(name).split('\n').filter(Boolean).map(z => JSON.parse(z));
+
+function laufText(text) {
+  const datei = join(DIR, `t${(zaehler += 1)}.jsonl`);
+  writeFileSync(datei, text);
+  return auswerten(datei, TEXT_PROFIL);
+}
+
+// Alles ausser den Katalogzeilen (die gelten fuer js-rechner, siehe Nebenbefund K1A-N1).
+const kern = r => r.zeilen.filter(z => !z.startsWith('A6-K1A '));
+const aufrufe2 = e => e.flatMap(x => (x.type === 'assistant' ? x.message.content.filter(b => b.type === 'tool_use') : []));
+const nutzer2 = (e, id) => e.find(x => x.type === 'user' && Array.isArray(x.message?.content) && x.message.content.some(b => b.tool_use_id === id));
+const block2 = (e, id) => nutzer2(e, id).message.content.find(b => b.tool_use_id === id);
+const fehlEdits = e => aufrufe2(e).filter(a => a.name === 'Edit' && block2(e, a.id)?.is_error === true && !(nutzer2(e, a.id).tool_result_meta ?? []).some(m => m.id === a.id));
+const okAufruf = (e, name) => aufrufe2(e).filter(a => a.name === name && block2(e, a.id)?.is_error !== true).at(-1);
+const PROFILDATEIEN = new Set(['/arbeit/src/text.js', '/arbeit/test/text.test.js']);
+
+function ohneErgebnis(e, id) {
+  const u = nutzer2(e, id);
+  u.message.content = u.message.content.filter(b => b.tool_use_id !== id);
+  u.tool_result_meta = (u.tool_result_meta ?? []).filter(m => m.id !== id);
+  return u.message.content.length === 0 ? e.filter(x => x !== u) : e;
+}
+
+function ohneMeta(e, id) {
+  const u = nutzer2(e, id);
+  const vorher = JSON.stringify(u);
+  u.tool_result_meta = (u.tool_result_meta ?? []).filter(m => m.id !== id);
+
+  if (u.tool_result_meta.length === 0) {
+    delete u.tool_result_meta;
+  }
+
+  assert.notEqual(JSON.stringify(u), vorher, 'meta-Entfernung wirkungslos');
+  return e;
+}
+
+test('Live 2 (2b): die echten Mitschnitte zeigen den Edit-Eingabefehler ohne meta, ohne Ablehnung und ohne Systemereignis', () => {
+  for (const name of ['a-edit-fehler', 'b-max-runden', 'c-edit-fehler-max-runden', 'd-kontrolle', 'g-gegenproben', 'm-modus']) {
+    const e = ereignisse2(name);
+    const init = e.find(x => x.type === 'system' && x.subtype === 'init');
+    assert.equal(init.claude_code_version, '2.1.326', name);
+    assert.deepEqual([...init.tools].sort(), ['Edit', 'Read'], name);
+    assert.equal(init.permissionMode, 'dontAsk', name);
+    assert.equal(e.at(-1).type, 'result', name);
+  }
+
+  // Muss-Treffer: genau die erwarteten Eingabefehler ohne meta, keiner davon abgelehnt.
+  const zaehle = name => {
+    const e = ereignisse2(name);
+    const abgelehnt = new Set(e.at(-1).permission_denials.map(d => d.tool_use_id));
+    const system = new Set(e.filter(x => x.subtype === 'permission_denied').map(x => x.tool_use_id));
+    const f = fehlEdits(e);
+    assert.ok(f.every(x => !abgelehnt.has(x.id) && !system.has(x.id)), name);
+    return f.map(x => (PROFILDATEIEN.has(x.input.file_path) ? 'profil' : 'ausserhalb'));
+  };
+  assert.deepEqual(zaehle('a-edit-fehler'), ['profil']);
+  assert.deepEqual(zaehle('c-edit-fehler-max-runden'), ['profil', 'profil']);
+  assert.deepEqual(zaehle('b-max-runden'), []);
+  assert.deepEqual(zaehle('d-kontrolle'), []);
+  assert.deepEqual(zaehle('g-gegenproben'), ['profil', 'profil', 'profil', 'ausserhalb', 'ausserhalb', 'ausserhalb']);
+  assert.deepEqual(zaehle('m-modus'), ['profil', 'profil']);
+
+  // Echte Ablehnungen sind dagegen vollstaendig protokolliert.
+  const meta = name => ereignisse2(name).filter(x => x.type === 'user').flatMap(x => x.tool_result_meta ?? []).map(m => `${m.permission_decision.decision}/${m.permission_decision.reason_type}`);
+  assert.equal(meta('g-gegenproben').filter(m => m === 'reject/rule').length, 3);
+  assert.equal(meta('m-modus').filter(m => m === 'reject/mode').length, 3);
+  assert.equal(ereignisse2('m-modus').filter(x => x.subtype === 'permission_denied').length, 3);
+  assert.equal(ereignisse2('g-gegenproben').at(-1).permission_denials.length, 3);
+  assert.equal(ereignisse2('m-modus').at(-1).permission_denials.length, 3);
+});
+
+test('Live 2 (2b): Eingabefehler im Profil sind ein Werkzeugfehler, ausserhalb des Profils bleibt meta-fehlt', () => {
+  const erwartet = {
+    'd-kontrolle': ['A6-PROTOKOLL vollstaendig', 'A6-LAUF erfolg', 'A6-WERKZEUG Read profil erfolgreich 2', 'A6-WERKZEUG Edit profil erfolgreich 2', 'A6-WERKZEUG gesamt 4', 'A6-DIAGNOSE ok'],
+    'a-edit-fehler': ['A6-PROTOKOLL vollstaendig', 'A6-LAUF erfolg', 'A6-WERKZEUG Read profil erfolgreich 2', 'A6-WERKZEUG Edit profil erfolgreich 1', 'A6-WERKZEUG Edit profil fehler 1', 'A6-WERKZEUG gesamt 4', 'A6-DIAGNOSE ok'],
+    'b-max-runden': ['A6-PROTOKOLL vollstaendig', 'A6-LAUF max-runden', 'A6-WERKZEUG Read profil erfolgreich 2', 'A6-WERKZEUG Edit profil erfolgreich 6', 'A6-WERKZEUG gesamt 8', 'A6-DIAGNOSE ok'],
+    // Der Fall aus Live 2: Rundenabbruch mit zwei Eingabefehlern im Profil.
+    'c-edit-fehler-max-runden': ['A6-PROTOKOLL vollstaendig', 'A6-LAUF max-runden', 'A6-WERKZEUG Read profil erfolgreich 2', 'A6-WERKZEUG Edit profil erfolgreich 4', 'A6-WERKZEUG Edit profil fehler 2', 'A6-WERKZEUG gesamt 8', 'A6-DIAGNOSE ok'],
+    'm-modus': ['A6-PROTOKOLL vollstaendig', 'A6-LAUF erfolg', 'A6-WERKZEUG Read profil erfolgreich 1', 'A6-WERKZEUG Read ausserhalb verweigert-modus 1', 'A6-WERKZEUG Read ausserhalb fehler 1', 'A6-WERKZEUG Edit profil fehler 2', 'A6-WERKZEUG Edit ausserhalb verweigert-modus 2', 'A6-WERKZEUG anderes ohne-pfad nicht-verfuegbar 1', 'A6-WERKZEUG gesamt 8', 'A6-DIAGNOSE ok'],
+    // Dieselben Eingabefehler auf Dateien ausserhalb des Profils: weiter widerspruechlich, Regelablehnungen bleiben.
+    'g-gegenproben': ['A6-PROTOKOLL widerspruechlich', 'A6-PROTOKOLL-GRUND meta-fehlt', 'A6-LAUF erfolg', 'A6-WERKZEUG Read profil erfolgreich 1', 'A6-WERKZEUG Read ausserhalb verweigert-regel 1', 'A6-WERKZEUG Edit profil erfolgreich 2', 'A6-WERKZEUG Edit profil fehler 3', 'A6-WERKZEUG Edit ausserhalb verweigert-regel 2', 'A6-WERKZEUG Edit ausserhalb fehler 3', 'A6-WERKZEUG gesamt 12', 'A6-DIAGNOSE nicht-auswertbar'],
+  };
+
+  for (const [name, zeilen] of Object.entries(erwartet)) {
+    const r = laufText(roh2(name));
+    pruefeAusgabe(r, roh2(name), name);
+    assert.deepEqual(kern(r), zeilen, name);
+  }
+});
+
+test('Live 2 (2b): Manipulationen bleiben rot, nur der Rundenabbruch ohne Ergebnis bleibt wie bisher', () => {
+  const a = () => ereignisse2('a-edit-fehler');
+  const fehl = e => fehlEdits(e)[0];
+  const faelle = {
+    // X1 bis X6 wie in der unabhaengigen Pruefung von Terminal 1 (X7 unten).
+    'X1 Eingabefehler zusaetzlich in permission_denials': [() => { const e = a(); e.at(-1).permission_denials.push({ tool_name: 'Edit', tool_use_id: fehl(e).id, tool_input: {} }); return e; }, ['meta-fehlt']],
+    'X2 Eingabefehler mit system/permission_denied': [() => {
+      const e = a();
+      const f = fehl(e);
+      const i = e.indexOf(nutzer2(e, f.id));
+      e.splice(i, 0, { type: 'system', subtype: 'permission_denied', tool_use_id: f.id, decision_reason_type: 'mode', session_id: e[i].session_id });
+      return e;
+    }, ['ablehnung-nicht-gelistet', 'meta-fehlt']],
+    'X3 erfolgreicher Edit ohne meta': [() => { const e = ereignisse2('d-kontrolle'); return ohneMeta(e, okAufruf(e, 'Edit').id); }, ['meta-fehlt']],
+    'X4 Read-Fehler ohne meta': [() => { const e = ereignisse2('d-kontrolle'); const r = okAufruf(e, 'Read'); block2(e, r.id).is_error = true; return ohneMeta(e, r.id); }, ['meta-fehlt']],
+    'X5 erfolgreicher Lauf, ein Aufruf ohne Ergebnis': [() => { const e = ereignisse2('d-kontrolle'); return ohneErgebnis(e, okAufruf(e, 'Edit').id); }, ['werkzeug-ohne-ergebnis']],
+    'X6 Eingabefehler auf eine Datei ausserhalb des Profils': [() => { const e = a(); fehl(e).input.file_path = '/arbeit/src/rechne.js'; return e; }, ['meta-fehlt']],
+    // Weitere: Pfad nicht exakt, kein Pfad, Edit nicht in der Sitzung, Ablehnungen ohne meta, Erfolg ohne meta im Live-Fall.
+    'Pfad abgewandelt (/arbeit/src/./text.js)': [() => { const e = a(); fehl(e).input.file_path = '/arbeit/src/./text.js'; return e; }, ['meta-fehlt']],
+    'Pfad relativ (src/text.js)': [() => { const e = a(); fehl(e).input.file_path = 'src/text.js'; return e; }, ['meta-fehlt']],
+    'kein Pfad': [() => { const e = a(); delete fehl(e).input.file_path; return e; }, ['meta-fehlt']],
+    'Pfad kein Text': [() => { const e = a(); fehl(e).input.file_path = ['/arbeit/src/text.js']; return e; }, ['meta-fehlt']],
+    'Edit nicht in der Sitzung': [() => { const e = a(); e.find(x => x.subtype === 'init').tools = ['Read']; return e; }, ['init-abweichend']],
+    'Regelablehnung ohne meta': [() => { const e = ereignisse2('g-gegenproben'); return ohneMeta(e, aufrufe2(e).find(x => x.input.file_path === '/arbeit/.git/config').id); }, ['meta-fehlt']],
+    'Modusablehnung ohne meta': [() => { const e = ereignisse2('m-modus'); return ohneMeta(e, aufrufe2(e).find(x => x.input.file_path === '/arbeit/src/rechne.js').id); }, ['meta-fehlt']],
+    'Live-Fall: erfolgreicher Edit ohne meta': [() => { const e = ereignisse2('c-edit-fehler-max-runden'); return ohneMeta(e, okAufruf(e, 'Edit').id); }, ['meta-fehlt']],
+    'Eingabefehler als Erfolg ohne meta': [() => { const e = a(); delete block2(e, fehl(e).id).is_error; return e; }, ['meta-fehlt']],
+  };
+
+  for (const [name, [bau, gruende]] of Object.entries(faelle)) {
+    const text = alsText(bau());
+    assert.ok(![...['a-edit-fehler', 'd-kontrolle', 'g-gegenproben', 'm-modus', 'c-edit-fehler-max-runden'].map(roh2)].includes(text), `${name}: Mutation wirkungslos`);
+    const r = laufText(text);
+    pruefeAusgabe(r, text, name);
+    assert.equal(r.zeilen[0], 'A6-PROTOKOLL widerspruechlich', `${name}: ${r.zeilen.join(' | ')}`);
+
+    for (const g of gruende) {
+      assert.ok(r.zeilen.includes(`A6-PROTOKOLL-GRUND ${g}`), `${name}: Grund ${g} fehlt in ${r.zeilen.join(' | ')}`);
+    }
+
+    assert.notEqual(r.exitcode, 0, `${name}: als ok bewertet`);
+  }
+
+  // Ein gelungener Edit ausserhalb des Profils ohne meta: weiter Widerspruch und Alarm.
+  const g = ereignisse2('g-gegenproben');
+  const neu = aufrufe2(g).find(x => x.input.file_path === '/arbeit/src/neu.js');
+  delete block2(g, neu.id).is_error;
+  block2(g, neu.id).content = 'aktualisiert';
+  const rg = laufText(alsText(g));
+  assert.ok(rg.zeilen.includes('A6-PROTOKOLL-GRUND meta-fehlt') && rg.zeilen.includes('A6-ALARM erfolg-ausserhalb-profil') && rg.exitcode === 1, rg.zeilen.join(' | '));
+
+  // X7: Rundenabbruch mit einem Aufruf ohne Ergebnis bleibt wie bisher (kein erfolgreicher Lauf).
+  const b = ereignisse2('b-max-runden');
+  const x7 = alsText(ohneErgebnis(b, okAufruf(b, 'Edit').id));
+  assert.notEqual(x7, roh2('b-max-runden'));
+  assert.deepEqual(kern(laufText(x7)), ['A6-PROTOKOLL vollstaendig', 'A6-LAUF max-runden', 'A6-WERKZEUG Read profil erfolgreich 2', 'A6-WERKZEUG Edit profil erfolgreich 5', 'A6-WERKZEUG Edit profil ohne-ergebnis 1', 'A6-WERKZEUG gesamt 8', 'A6-DIAGNOSE ok']);
+});

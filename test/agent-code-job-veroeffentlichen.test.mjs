@@ -725,9 +725,9 @@ test('Vertrag: Job 3 liest nur die festen Namen, kennt keine Ausgabedatei und ke
 // ist dieser Test bewusst rot; er wird nicht uebersprungen.
 // A6 P-1: Einzige Ausnahme ist agent-auftrag.yml mit genau dem genehmigten SHA-256 (Zeilenenden LF). Jede
 // andere Fassung und jeder andere Workflow mit diesen Namen bleibt rot.
-const A6_WORKFLOW_SHA256 = '5e22e562cbbdb18821195b05af79ae8376f98cbc76061a3375559161fb43ef06';
+const A6_WORKFLOW_SHA256 = 'd5bb6eaa3d16e2bd964c2466b8c2befa343c751703d0c8961d0b7026700eb20f';
 // Ausweichfassung (b) von code-pilot-trockenlauf.yml mit denselben Probejobs; nur genau diese Fassung.
-const A6_AUSWEICH_SHA256 = '02812459f1a890bffb5b1f1e6e48096e523380d874b147134175a3aa8844f5c3';
+const A6_AUSWEICH_SHA256 = '02b04a82b4eeab1a8e438e2a4c48a62334a8debbab49750908b3957f4f25a0b0';
 
 test('Regression: Policy vorhanden, ausser dem genehmigten agent-auftrag.yml ruft kein Workflow Job-Einstieg oder Integritaetspruefer auf', () => {
   const workflows = join(ROOT, '.github', 'workflows');
@@ -745,11 +745,13 @@ test('Regression: Policy vorhanden, ausser dem genehmigten agent-auftrag.yml ruf
   assert.ok(andere.every(name => !/agent-code-job|agent-code-integritaet|A6_APP_TOKEN|A6_VERGLEICH/.test(text(name))));
   assert.ok(files.some(name => readFileSync(join(workflows, name), 'utf8').includes('agent-code-package')), 'Muss-Treffer der Suche');
   assert.equal(existsSync(join(ROOT, '.github', 'agent', 'policy.json')), true);
-  // Das Profil js-text auf main ist genau der inaktive Ausgangsstand oder genau dessen Aktivierung (P-3).
-  // Die Tests aktivieren es sonst nur in temporaeren Repositories; jeder dritte Stand ist rot.
+  // Das Profil js-text auf main ist genau der inaktive Ausgangsstand, genau dessen Aktivierung (P-3) oder genau
+  // diese Aktivierung mit 12 statt 8 Runden (Protokollkorrektur 2b). Die Tests aktivieren es sonst nur in
+  // temporaeren Repositories; jeder weitere Stand ist rot.
   assert.ok([
     '71d1656f410fcae598f3c6390e8531fc45a85b2adf1f0be4726e47bbd8f1a108',
     '214807047e5c6b99ed6f7253e16d3a10e8a78057d22d1643e1e0be054dfbe0ae',
+    '2930994b54d0d7c19c9248cb989eb699bf3f7e55909fc3677fda1514b7b33a6d',
   ].includes(sha256(readFileSync(join(ROOT, 'agent-profiles', 'js-text.json')))));
 });
 
