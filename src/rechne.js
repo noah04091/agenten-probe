@@ -16,7 +16,11 @@ function multipliziere(a, b) {
   return a * b;
 }
 
-module.exports = { addiere, subtrahiere, multipliziere };
+function hoch(basis, exponent) {
+  return basis ** exponent;
+}
+
+module.exports = { addiere, subtrahiere, multipliziere, hoch };
 
 // T14
 // T16 a

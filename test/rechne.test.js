@@ -1,6 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { addiere, subtrahiere, multipliziere } = require('../src/rechne');
+const { addiere, subtrahiere, multipliziere, hoch } = require('../src/rechne');
+
+test('hoch entspricht basis ** exponent', () => {
+  assert.strictEqual(hoch(2, 10), 1024);
+  assert.strictEqual(hoch(2, -1), 0.5);
+  assert.strictEqual(hoch(-2, 3), -8);
+  assert.strictEqual(hoch(0, 0), 1);
+});
 
 test('addiere zählt zwei Zahlen zusammen', () => {
   assert.strictEqual(addiere(2, 3), 5);
