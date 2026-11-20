@@ -991,32 +991,6 @@ test('K3: Gegenproben, jede Mutation des Messschritts scheitert am Waechter', ()
   }
 });
 
-// Ausweichloesung (b): nur falls GitHub agent-auftrag.yml auf seinem eigenen PR nicht startet.
-const A6_AUSWEICH_SHA256 = '02b04a82b4eeab1a8e438e2a4c48a62334a8debbab49750908b3957f4f25a0b0';
-
-test('Ausweichloesung: ergaenzt den heutigen Trockenlauf nur und traegt Umgebung und Probejobs wortgleich', () => {
-  const aus = lies(`${ENTWURF}/ausweich/code-pilot-trockenlauf.yml`);
-  assert.equal(sha256(aus), A6_AUSWEICH_SHA256);
-  const z = WF.split('\n');
-  const envStart = z.indexOf('env:');
-  let envEnde = envStart + 1;
-
-  while (/^ {2}\S/.test(z[envEnde])) {
-    envEnde += 1;
-  }
-
-  const envBlock = z.slice(envStart, envEnde).join('\n');
-  const probe = WF.slice(WF.indexOf('  probe_auftrag:\n'), WF.indexOf('  # -------------------------------------------------------------------------------------------------\n  # Sammeljob')).replace(/\n+$/, '\n');
-  assert.ok(envBlock.length > 500 && probe.length > 10_000, 'Muss-Treffer: Umgebung und Probejobs gefunden');
-  assert.ok(aus.includes(`\n${envBlock}\n`), 'Umgebung nicht wortgleich');
-  assert.ok(aus.includes(`\n${probe}`), 'Probejobs nicht wortgleich');
-  // Ohne die zwei eingefuegten Teile bleibt genau der heutige Trockenlauf.
-  const kopf = aus.slice(aus.indexOf('# A6 P-1, Ausweichloesung (b): traegt'), aus.indexOf('concurrency:\n'));
-  const ohne = aus.replace(kopf, '').slice(0, aus.replace(kopf, '').indexOf('\n  # A6 P-1, Ausweichloesung (b): Probejobs'));
-  assert.equal(`${ohne.replace(/\n+$/, '')}\n`, lies('.github/workflows/code-pilot-trockenlauf.yml'));
-  assert.ok(/\n {2}probe_gesamt:\n[\s\S]*a6_sammel "probe_auftrag=\$R_PROBE_AUFTRAG"/.test(aus));
-});
-
 // ---------------------------------------------------------------------------
 // Teil 2: Eigentuemerstand (bis zum Eigentuemer-Commit bewusst rot)
 // ---------------------------------------------------------------------------

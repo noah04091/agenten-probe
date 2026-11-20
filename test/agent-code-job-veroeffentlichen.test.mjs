@@ -726,13 +726,11 @@ test('Vertrag: Job 3 liest nur die festen Namen, kennt keine Ausgabedatei und ke
 // A6 P-1: Einzige Ausnahme ist agent-auftrag.yml mit genau dem genehmigten SHA-256 (Zeilenenden LF). Jede
 // andere Fassung und jeder andere Workflow mit diesen Namen bleibt rot.
 const A6_WORKFLOW_SHA256 = 'd5bb6eaa3d16e2bd964c2466b8c2befa343c751703d0c8961d0b7026700eb20f';
-// Ausweichfassung (b) von code-pilot-trockenlauf.yml mit denselben Probejobs; nur genau diese Fassung.
-const A6_AUSWEICH_SHA256 = '02b04a82b4eeab1a8e438e2a4c48a62334a8debbab49750908b3957f4f25a0b0';
 
 test('Regression: Policy vorhanden, ausser dem genehmigten agent-auftrag.yml ruft kein Workflow Job-Einstieg oder Integritaetspruefer auf', () => {
   const workflows = join(ROOT, '.github', 'workflows');
   const files = readdirSync(workflows).filter(name => /\.ya?ml$/.test(name));
-  assert.ok(files.length >= 10, 'Gegenprobe: zu wenige Workflows gefunden');
+  assert.ok(files.length >= 4 && files.includes('agent-auftrag.yml'), 'Gegenprobe: zu wenige Workflows gefunden');
   const text = name => readFileSync(join(workflows, name), 'utf8').replace(/\r\n/g, '\n');
 
   if (files.includes('agent-auftrag.yml')) {
@@ -740,10 +738,10 @@ test('Regression: Policy vorhanden, ausser dem genehmigten agent-auftrag.yml ruf
     assert.ok(/agent-code-job-veroeffentlichen\.mjs/.test(text('agent-auftrag.yml')), 'Muss-Treffer im genehmigten Workflow');
   }
 
-  const genehmigt = name => name === 'agent-auftrag.yml' || (name === 'code-pilot-trockenlauf.yml' && sha256(Buffer.from(text(name), 'utf8')) === A6_AUSWEICH_SHA256);
+  const genehmigt = name => name === 'agent-auftrag.yml';
   const andere = files.filter(name => !genehmigt(name));
   assert.ok(andere.every(name => !/agent-code-job|agent-code-integritaet|A6_APP_TOKEN|A6_VERGLEICH/.test(text(name))));
-  assert.ok(files.some(name => readFileSync(join(workflows, name), 'utf8').includes('agent-code-package')), 'Muss-Treffer der Suche');
+  assert.ok(files.some(name => readFileSync(join(workflows, name), 'utf8').includes('agent-code-job')), 'Muss-Treffer der Suche');
   assert.equal(existsSync(join(ROOT, '.github', 'agent', 'policy.json')), true);
   // Das Profil js-text auf main ist genau der inaktive Ausgangsstand, genau dessen Aktivierung (P-3) oder genau
   // diese Aktivierung mit 12 statt 8 Runden (Protokollkorrektur 2b). Die Tests aktivieren es sonst nur in

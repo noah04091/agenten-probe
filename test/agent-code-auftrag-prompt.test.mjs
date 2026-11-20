@@ -716,8 +716,8 @@ test('Wache: kein Workflow ruft eines der drei Auftragsmodule auf', () => {
   const dir = join(ROOT, '.github/workflows');
   const files = readdirSync(dir).filter(name => /\.ya?ml$/.test(name));
   const texts = files.map(name => readFileSync(join(dir, name), 'utf8'));
-  assert.ok(files.length >= 10, 'Gegenprobe: zu wenige Workflows gefunden');
-  assert.ok(texts.some(text => text.includes('agent-code-package')), 'Gegenprobe ohne Treffer');
+  assert.ok(files.length >= 4 && files.includes('agent-auftrag.yml'), 'Gegenprobe: zu wenige Workflows gefunden');
+  assert.ok(texts.some(text => text.includes('agent-code-job')), 'Gegenprobe ohne Treffer');
   assert.ok(texts.every(text => !text.includes('agent-code-auftrag')), 'ein Workflow verweist auf ein Auftragsmodul');
 });
 

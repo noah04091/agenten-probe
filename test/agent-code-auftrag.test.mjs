@@ -833,8 +833,8 @@ const importsOf = text => [...text.matchAll(/^\s*import\s[^;]*?from\s+'([^']+)'/
 
 test('Wachtest: kein Workflow und kein anderes Skript verweist auf das Modul', () => {
   const workflows = workflowTexts();
-  assert.ok(workflows.length >= 10);
-  assert.ok(workflows.some(text => text.includes('agent-code-package')), 'Kontrolle: Suche findet Skriptaufrufe');
+  assert.ok(workflows.length >= 4);
+  assert.ok(workflows.some(text => text.includes('agent-code-job')), 'Kontrolle: Suche findet Skriptaufrufe');
   assert.ok(!workflows.some(text => text.includes('agent-code-auftrag')));
 
   const scripts = scriptTexts();

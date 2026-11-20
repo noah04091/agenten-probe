@@ -18,7 +18,6 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const lies = pfad => readFileSync(join(ROOT, pfad), 'utf8').replace(/\r\n/g, '\n');
 const sha256 = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
 const WF = lies('entwurf/a6-p1/agent-auftrag.yml');
-const AUSWEICH = lies('entwurf/a6-p1/ausweich/code-pilot-trockenlauf.yml');
 
 // SHA-256 der Live-Teile von .github/workflows/agent-auftrag.yml (Zeilenenden LF), wie im K1-Test: alles vor dem
 // Abschnitt Generalprobe und der Sammeljob.
@@ -146,8 +145,6 @@ test('Live-1-Fix Struktur: Generalprobe Job 2 laedt wortgleich wie Job 2 und pru
     pos = i;
   }
   assert.ok(!/\|\| true|\|\| :|set \+e/.test(skript), 'Fehler wird verschluckt');
-  // Die Ausweichloesung traegt Generalprobe Job 2 wortgleich.
-  assert.equal(job(AUSWEICH, 'probe_abnahme').replace(/\n+$/, '\n'), job(WF, 'probe_abnahme').replace(/\n+$/, '\n'));
 });
 
 // ---------------------------------------------------------------------------
