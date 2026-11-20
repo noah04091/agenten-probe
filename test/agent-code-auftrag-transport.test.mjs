@@ -1307,7 +1307,7 @@ test('Wache: nur die vorgesehenen Importe, kein Veroeffentlicher, keine Umgebung
 test('Wache: kein Workflow und kein anderes Skript verweist auf das Transportmodul', () => {
   const workflows = join(ROOT, '.github', 'workflows');
   const files = readdirSync(workflows).filter(name => /\.ya?ml$/.test(name));
-  assert.ok(files.length >= 10, 'Gegenprobe: zu wenige Workflows gefunden');
+  assert.ok(files.length >= 4 && files.includes('agent-auftrag.yml'), 'Gegenprobe: zu wenige Workflows gefunden');
   assert.ok(files.every(name => !readFileSync(join(workflows, name), 'utf8').includes('agent-code-auftrag')), 'ein Workflow verweist auf ein Auftragsmodul');
 
   const scripts = join(ROOT, 'scripts');

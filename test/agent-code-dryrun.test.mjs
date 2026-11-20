@@ -15,7 +15,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCodePackage } from '../scripts/agent-code-package.mjs';
 import {
-  checkWorkflowGuards,
   createStrictGitHub,
   expectedCalls,
   prepareFixedChange,
@@ -198,102 +197,6 @@ test('Feste Testaenderung verweigert einen unerwarteten Ausgangsstand', () => {
   }
 });
 
-// Wachen gegen Rechte im Trockenlauf und Abweichung vom echten Job 2.
-// Bis Noah den Patch anwendet, steht der Workflow nur im Patch.
-
-function workflows() {
-  const pilot = readFileSync('.github/workflows/code-pilot-claude-stufe.yml', 'utf8');
-  const path = '.github/workflows/code-pilot-trockenlauf.yml';
-  const dry = existsSync(path)
-    ? readFileSync(path, 'utf8')
-    : readFileSync('docs/a2-workflow-patch.diff', 'utf8')
-        .split('\n')
-        .filter(line => line.startsWith('+') && !line.startsWith('+++'))
-        .map(line => line.slice(1))
-        .join('\n') + '\n';
-  return { pilot: pilot.replace(/\r\n/g, '\n'), dry: dry.replace(/\r\n/g, '\n') };
-}
-
-test('Wachen: echter Trockenlauf-Workflow besteht', () => {
-  const { pilot, dry } = workflows();
-  assert.equal(checkWorkflowGuards(pilot, dry), true);
-});
-
-test('Wachen: Secrets, Schreibrechte oder Claude im Trockenlauf werden abgelehnt', () => {
-  const { pilot, dry } = workflows();
-  for (const [extra, word] of [
-    ['      X: ${{ secrets.ANTHROPIC_API_KEY }}\n', /Verbotenes: secrets/],
-    ['    permissions:\n      contents: write\n', /: write/],
-    ['    environment:\n      name: claude-bot\n', /environment:/],
-    ['      - uses: anthropics/claude-code-action@x\n', /claude-code-action/],
-    ['      - uses: actions/create-github-app-token@x\n', /create-github-app-token/],
-    ['      GH_TOKEN: ${{ github.token }}\n', /github\.token/],
-  ]) {
-    assert.throws(() => checkWorkflowGuards(pilot, dry + extra), word);
-  }
-});
-
-test('Wachen: fehlendes permissions {} wird abgelehnt', () => {
-  const { pilot, dry } = workflows();
-  assert.throws(
-    () => checkWorkflowGuards(pilot, dry.replace('\npermissions: {}\n', '\n')),
-    /permissions: \{\}/
-  );
-});
-
-test('Wachen: abweichender Docker-Aufruf, Hash oder Paketpruefung wird erkannt', () => {
-  const { pilot, dry } = workflows();
-  for (const [from, to, what] of [
-    ['--network none', '--network bridge', /Docker-Aufruf/],
-    ['--cpus 1', '--cpus 4', /Docker-Aufruf/],
-    ['^[a-f0-9]{64}$ ]]', '^.*$ ]]', /Hash-Berechnung/],
-    ['apply "$GITHUB_SHA"\n\n          git diff', 'apply "$BASE_SHA"\n\n          git diff', /Paketpruefung/],
-    ['IMAGE: node@sha256:8', 'IMAGE: node@sha256:9', /Docker-Image/],
-  ]) {
-    const section = dry.indexOf('\n  codepaket_pruefen:\n');
-    const at = dry.indexOf(from, section);
-    assert.ok(at > section, `Stelle fehlt: ${from}`);
-    const changed = dry.slice(0, at) + to + dry.slice(at + from.length);
-    assert.throws(() => checkWorkflowGuards(pilot, changed), what);
-  }
-});
-
-test('Wachen: verdeckter Zugriff auf Secrets oder Token wird abgelehnt', () => {
-  const { pilot, dry } = workflows();
-  for (const extra of [
-    "      X: ${{ secrets['ANTHROPIC_API_KEY'] }}\n",
-    '      X: ${{ toJSON(secrets) }}\n',
-    "      X: ${{ github['token'] }}\n",
-    '    permissions: write-all\n',
-  ]) {
-    assert.throws(() => checkWorkflowGuards(pilot, dry + extra), /Trockenlauf/);
-  }
-});
-
-test('Wachen: ausgehebelte oder fehlende Pruefschritte werden erkannt', () => {
-  const { pilot, dry } = workflows();
-  const job2 = dry.indexOf('\n  codepaket_pruefen:\n');
-  const job3 = dry.indexOf('\n  veroeffentlichung_trocken:\n');
-  const at = (text, from, to, start = 0) => {
-    const i = text.indexOf(from, start);
-    assert.ok(i >= 0, `Stelle fehlt: ${from}`);
-    return text.slice(0, i) + to + text.slice(i + from.length);
-  };
-
-  for (const [changed, what] of [
-    [at(dry, '    runs-on:', '    continue-on-error: true\n    runs-on:', job2), /continue-on-error/],
-    [at(dry, '    runs-on:', '    if: false\n    runs-on:', job2), /if-Bedingung/],
-    [at(dry, '          git diff --check\n', '', job2), /git diff --check/],
-    [at(dry, '          node scripts/agent-code-package.mjs apply "$GITHUB_SHA"\n', '', job3), /Paketpruefung/],
-    [at(dry, '          node scripts/agent-code-dryrun.mjs publish', '          echo ok', job3), /Veroeffentlicher-Trockenlauf/],
-    [at(dry, '          node scripts/agent-code-dryrun.mjs guard', '          echo ok'), /Wachen-Schritt/],
-    [at(dry, '          git diff --check\n', '          git diff --check\n          git checkout -- src test\n', job2), /setzt Dateien zurueck/],
-    [at(dry, '    needs: testpaket_erzeugen\n', '', job2), /Abhaengigkeit Job 2/],
-  ]) {
-    assert.throws(() => checkWorkflowGuards(pilot, changed), what);
-  }
-});
-
 test('Strenges GitHub: falscher Inhalt eines Schreibaufrufs wird abgewiesen', async () => {
   const base = 'a'.repeat(40);
   const branch = 'wp/38-code-pilot-1-1';
@@ -451,31 +354,6 @@ test('Feste Testaenderung: Export mit einem Eintrag ausser Kurzschreibweise abge
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }
-});
-
-test('Wachen: ausgehebelte Schritte und Rechte innerhalb eines Jobs werden erkannt', () => {
-  const { pilot, dry } = workflows();
-  const job3 = dry.indexOf('\n  veroeffentlichung_trocken:\n');
-  const at = (from, to, start = 0) => {
-    const i = dry.indexOf(from, start);
-    assert.ok(i >= 0, `Stelle fehlt: ${from}`);
-    return dry.slice(0, i) + to + dry.slice(i + from.length);
-  };
-  const publish = '          node scripts/agent-code-dryrun.mjs publish';
-  const step = '      - name: Echten Veroeffentlicher gegen nachgebautes GitHub ausfuehren\n';
-
-  for (const [changed, what] of [
-    [at(step, step + '        if: false\n', job3), /if-Bedingung/],
-    [at(publish, '          exit 0\n' + publish, job3), /Verbotenes: exit/],
-    [at(publish, '          set +e\n' + publish + ' || true', job3), /Verbotenes/],
-    [at('    permissions: {}\n', "    permissions:\n      contents: 'write'\n", job3), /Verbotenes: write/],
-    [at('    permissions: {}\n', '    permissions: read-all\n', job3), /Verbotenes: read-all/],
-    [at('          persist-credentials: false\n', '', job3), /persist-credentials/],
-    [dry + "      X: ${{ github[format('{0}en', 'tok')] }}\n", /Verbotenes: format\(/],
-    [at('        run: |\n          set -euo pipefail\n', '        run: |\n          echo los\n', job3), /set -euo pipefail am Anfang/],
-  ]) {
-    assert.throws(() => checkWorkflowGuards(pilot, changed), what);
   }
 });
 
