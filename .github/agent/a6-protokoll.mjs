@@ -6,11 +6,13 @@
 //   - Aufruf:       assistant-Ereignis, Inhaltsblock {type: "tool_use", id, name, input}
 //   - Ergebnis:     user-Ereignis, Inhaltsblock {type: "tool_result", tool_use_id, is_error?}
 //   - Entscheidung: user-Ereignis, tool_result_meta[] {id, permission_decision: {decision, reason_type}}
-//                   (accept/reject, rule oder mode); fehlt bei Werkzeugen, die es in der Sitzung nicht gibt
+//                   (accept/reject, rule oder mode); fehlt bei Werkzeugen, die es in der Sitzung nicht gibt,
+//                   und bei einem Edit, der vor der Berechtigungspruefung an der Eingabe scheitert
 //   - Ablehnungen:  result.permission_denials[] {tool_use_id} und, nur bei Ablehnung durch den Modus,
 //                   system/permission_denied {tool_use_id, decision_reason_type}
 // Belegt am 18.11.2026 mit der gepinnten Version gegen eine lokale Modell-Attrappe (ohne Schluessel, ohne
 // Anthropic), Mitschnitte in test/fixtures/a6-k1a/. Andere Felder und Ereignisse werden nicht angenommen.
+// Korrektur 2b nach Live 2 (Lauf 44620884909), belegt am 19.11.2026 mit Mitschnitten in test/fixtures/a6-k1a/live2/.
 //
 // Ausgabe: nur feste Kennungen aus den Listen unten und kleine Zahlen. Nie Pfade, Pfad-Hashes, Prompts,
 // Werkzeugeingaben, Dateiinhalte, Tokens oder Protokollzeilen. Exitcode 0 nur, wenn das Protokoll
@@ -35,7 +37,7 @@ export const GRUENDE = Object.freeze([
   'ablehnung-grund', 'ablehnung-inkonsistent', 'ablehnung-nicht-gelistet', 'ablehnung-ohne-aufruf', 'annahme-und-ablehnung',
   'aufruf', 'aufruf-form', 'ausnahme', 'block-unerwartet', 'ereignis-nach-ergebnis', 'ergebnis-doppelt', 'ergebnis-doppelt-id',
   'ergebnis-fehlerfeld', 'ergebnis-form', 'ergebnis-ohne-aufruf', 'init-abweichend', 'init-doppelt', 'init-zu-spaet', 'kein-ergebnis',
-  'kein-init', 'kein-utf8', 'letzte-zeile', 'meta-entscheidung', 'meta-fehlt', 'meta-form', 'meta-ohne-ergebnis', 'nachricht-form',
+  'kein-init', 'kein-utf8', 'letzte-zeile', 'meta-entscheidung', 'meta-fehlt', 'meta-form', 'meta-ohne-ergebnis', 'werkzeug-ohne-ergebnis', 'nachricht-form',
   'ohne-zeilenende', 'profil', 'sitzung-gemischt', 'unbekannt', 'unteragent', 'werkzeugereignis-unerwartet', 'zeile-ungueltig',
 ]);
 
@@ -385,6 +387,13 @@ export function werteAus(bytes, profil) {
     } else if (m === undefined) {
       if (!sitzungsWerkzeuge.has(aufruf.name) && r.fehler && !liste && modus === undefined) {
         wert = 'nicht-verfuegbar';
+      } else if (aufruf.name === 'Edit' && sitzungsWerkzeuge.has('Edit') && r.fehler && !liste && modus === undefined && profil.has(aufruf.input.file_path)) {
+        // Edit auf eine Profildatei scheitert an der Eingabepruefung vor der Berechtigungspruefung (Suchtext fehlt
+        // oder mehrdeutig, keine Aenderung, Datei nicht gelesen): Claude Code 2.1.326 schreibt dann ein
+        // Fehlerergebnis ohne tool_result_meta, ohne permission_denials und ohne permission_denied (belegt
+        // 19.11.2026, Live-2-Nachbau). Kein Zugriff, nie Erfolg, nie Ablehnung. Ausserhalb des Profils bleibt es
+        // meta-fehlt.
+        wert = 'fehler';
       } else {
         widerspruch('meta-fehlt');
         wert = r.fehler ? 'fehler' : 'erfolgreich';
@@ -445,6 +454,11 @@ export function werteAus(bytes, profil) {
       a.lauf = 'fehler-api';
     } else {
       a.lauf = 'fehler-sonst';
+    }
+
+    // Ein Aufruf ohne Werkzeugergebnis ist nur bei einem Abbruch moeglich, nie in einem regulaer beendeten Lauf.
+    if (a.lauf === 'erfolg' && a.aufrufe.some(x => x.ergebnis === 'ohne-ergebnis')) {
+      widerspruch('werkzeug-ohne-ergebnis');
     }
   }
 
