@@ -1601,9 +1601,9 @@ test('Laufzeit: ohne import.meta.main endet jeder Start mit job-umgebung-fehlt; 
 
 // A6 P-1: Einzige Ausnahme ist agent-auftrag.yml mit genau dem genehmigten SHA-256 (Zeilenenden LF). Jede
 // andere Fassung und jeder andere Workflow, der auf einen Job-Einstieg verweist, bleibt rot.
-const A6_WORKFLOW_SHA256 = '5e22e562cbbdb18821195b05af79ae8376f98cbc76061a3375559161fb43ef06';
+const A6_WORKFLOW_SHA256 = 'd5bb6eaa3d16e2bd964c2466b8c2befa343c751703d0c8961d0b7026700eb20f';
 // Ausweichfassung (b) von code-pilot-trockenlauf.yml mit denselben Probejobs; nur genau diese Fassung.
-const A6_AUSWEICH_SHA256 = '02812459f1a890bffb5b1f1e6e48096e523380d874b147134175a3aa8844f5c3';
+const A6_AUSWEICH_SHA256 = '02b04a82b4eeab1a8e438e2a4c48a62334a8debbab49750908b3957f4f25a0b0';
 
 test('Wache: ausser dem genehmigten agent-auftrag.yml ruft kein Workflow die Job-Einstiege auf; genau diese fuenf Einstiege und die Hilfsdatei, keine weitere Jobdatei', () => {
   const workflows = join(ROOT, '.github', 'workflows');

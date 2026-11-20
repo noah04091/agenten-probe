@@ -20,9 +20,13 @@ const sha256 = text => createHash('sha256').update(Buffer.from(text, 'utf8')).di
 const WF = lies('entwurf/a6-p1/agent-auftrag.yml');
 const AUSWEICH = lies('entwurf/a6-p1/ausweich/code-pilot-trockenlauf.yml');
 
-// SHA-256 der Live-Teile von .github/workflows/agent-auftrag.yml auf main 27c7989 (Zeilenenden LF), wie im
-// K1-Test: alles vor dem Abschnitt Generalprobe und der Sammeljob.
-const LIVE_VORN_MAIN_SHA256 = '65c642af5f55133a7d4ab5866b231d107e933ea1e75626a512feafc895b9f303';
+// SHA-256 der Live-Teile von .github/workflows/agent-auftrag.yml (Zeilenenden LF), wie im K1-Test: alles vor dem
+// Abschnitt Generalprobe und der Sammeljob.
+// Protokollkorrektur 2b (20.11.2026): neuer Soll-Hash, weil Job 1 den neuen Auswerter ueber den Anker
+// A6_PROTOKOLL_SHA256 der globalen Umgebung prueft; der Live-Teil aendert sich also gewollt in genau dieser Zeile
+// (Beleg: Test 'Protokollkorrektur 2b' in a6-k1-nachweis.test.mjs). Bisher (main 27c7989 bis 42654a4):
+// 65c642af5f55133a7d4ab5866b231d107e933ea1e75626a512feafc895b9f303.
+const LIVE_VORN_MAIN_SHA256 = '5b044704f48f7f2ef356d6315059a65073efb5b2d19ee69eb53e4416899fe199';
 const LIVE_SAMMEL_SHA256 = '437b6cddaac1291e463a009980a26af91a997f65df35c28f347a24b104415ac7';
 const TRENNER = '  # -------------------------------------------------------------------------------------------------\n';
 
@@ -91,7 +95,7 @@ function pruefSkript(text = WF) {
 // Teil 1: Struktur
 // ---------------------------------------------------------------------------
 
-test('Live-1-Fix Struktur: Job 2 laedt mit fetch-depth 0, sonst ist der Live-Teil byte-gleich mit main 27c7989 (bis auf den Probeanker)', () => {
+test('Live-1-Fix Struktur: Job 2 laedt mit fetch-depth 0, sonst ist der Live-Teil byte-gleich mit dem freigegebenen Stand (main 27c7989 mit dem Protokollanker 2b, bis auf den Probeanker)', () => {
   const { vorn, sammel } = liveTeile(WF);
   const abnahme = job(WF, 'abnahme');
   assert.equal(schritte(abnahme)[0], CHECKOUT_JOB2, 'Checkout von Job 2 nicht genau wie freigegeben');
@@ -106,7 +110,7 @@ test('Live-1-Fix Struktur: Job 2 laedt mit fetch-depth 0, sonst ist der Live-Tei
   const at = vorn.indexOf(`          ref: \${{ github.sha }}\n${TIEFE}`, vorn.indexOf('\n  abnahme:\n'));
   assert.ok(at > 0 && at < vorn.indexOf('\n  veroeffentlichen:\n'), 'Zeile nicht in Job 2');
   const ohne = mitProbeAnkerVonMain(vorn.slice(0, at) + vorn.slice(at).replace(TIEFE, ''));
-  assert.equal(sha256(ohne), LIVE_VORN_MAIN_SHA256, 'Live-Teil weicht ausser in der Tiefe von main ab');
+  assert.equal(sha256(ohne), LIVE_VORN_MAIN_SHA256, 'Live-Teil weicht ausser in der Tiefe vom freigegebenen Stand ab');
   assert.equal(sha256(sammel), LIVE_SAMMEL_SHA256);
 });
 

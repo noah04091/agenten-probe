@@ -163,15 +163,18 @@ function withTree(entries, check) {
 // Echte Dateien: die zwei Profile, die Entwuerfe, die Wirkungslosigkeit
 // ---------------------------------------------------------------------------
 
-// Der echte Stand von agent-profiles/js-text.json auf main darf genau zwei Formen haben: den inaktiven
-// Ausgangsstand oder genau dessen Aktivierung (P-3: nur "aktiv": false wird "aktiv": true). Jeder dritte
-// Stand ist rot. Die Werte sind die SHA-256 der Bytes, der Wert dahinter das erwartete aktiv.
+// Der echte Stand von agent-profiles/js-text.json auf main darf genau drei Formen haben: den inaktiven
+// Ausgangsstand (8 Runden), genau dessen Aktivierung (P-3: nur "aktiv": false wird "aktiv": true) und genau
+// diese Aktivierung mit 12 statt 8 Runden (Protokollkorrektur 2b, separater Profil-PR: nur "max_runden": 8 wird
+// "max_runden": 12, Budget und Laufzeit unveraendert). Jeder weitere Stand ist rot. Die Werte sind die SHA-256
+// der Bytes, der Wert dahinter das erwartete aktiv und max_runden.
 const JS_TEXT_STAENDE = Object.freeze({
-  '71d1656f410fcae598f3c6390e8531fc45a85b2adf1f0be4726e47bbd8f1a108': false,
-  '214807047e5c6b99ed6f7253e16d3a10e8a78057d22d1643e1e0be054dfbe0ae': true,
+  '71d1656f410fcae598f3c6390e8531fc45a85b2adf1f0be4726e47bbd8f1a108': Object.freeze({ aktiv: false, runden: 8 }),
+  '214807047e5c6b99ed6f7253e16d3a10e8a78057d22d1643e1e0be054dfbe0ae': Object.freeze({ aktiv: true, runden: 8 }),
+  '2930994b54d0d7c19c9248cb989eb699bf3f7e55909fc3677fda1514b7b33a6d': Object.freeze({ aktiv: true, runden: 12 }),
 });
 
-test('Echte Profile: genau js-rechner und js-text, beide gueltig, js-text genau inaktiv oder genau aktiviert', () => {
+test('Echte Profile: genau js-rechner und js-text, beide gueltig, js-text genau inaktiv, aktiviert oder aktiviert mit 12 Runden', () => {
   const names = readdirSync(join(ROOT, 'agent-profiles')).sort();
   assert.deepEqual(names, ['js-rechner.json', 'js-text.json']);
 
@@ -186,8 +189,11 @@ test('Echte Profile: genau js-rechner und js-text, beide gueltig, js-text genau 
   assert.deepEqual([...loaded['js-rechner'].dateien], ['src/rechne.js', 'test/rechne.test.js']);
   const textBytes = readFileSync(join(ROOT, 'agent-profiles', 'js-text.json'));
   const textSha = createHash('sha256').update(textBytes).digest('hex');
-  assert.ok(Object.hasOwn(JS_TEXT_STAENDE, textSha), `js-text.json ist weder der inaktive noch der aktivierte Stand: ${textSha}`);
-  assert.equal(loaded['js-text'].aktiv, JS_TEXT_STAENDE[textSha]);
+  assert.ok(Object.hasOwn(JS_TEXT_STAENDE, textSha), `js-text.json ist keiner der drei freigegebenen Staende: ${textSha}`);
+  assert.equal(loaded['js-text'].aktiv, JS_TEXT_STAENDE[textSha].aktiv);
+  assert.equal(loaded['js-text'].max_runden, JS_TEXT_STAENDE[textSha].runden);
+  assert.equal(loaded['js-text'].budget_usd, 1);
+  assert.equal(loaded['js-text'].max_laufzeit_minuten, 15);
   assert.deepEqual([...loaded['js-text'].dateien], ['src/text.js', 'test/text.test.js']);
   assert.ok(!Object.hasOwn(loaded['js-rechner'], 'werkzeuge'));
 });

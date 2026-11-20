@@ -36,9 +36,17 @@ const JQ = spawnSync('jq', ['--version'], { encoding: 'utf8' }).status === 0;
 // Teil 1: Trennung vom Live-Pfad
 // ---------------------------------------------------------------------------
 
-// SHA-256 der Live-Teile von .github/workflows/agent-auftrag.yml auf main d7626c6 (Zeilenenden LF): alles vor
-// dem Abschnitt Generalprobe (Kopf, on, permissions, concurrency, env, Job 0 bis 3) und der Sammeljob.
-const LIVE_VORN_SHA256 = '65c642af5f55133a7d4ab5866b231d107e933ea1e75626a512feafc895b9f303';
+// SHA-256 der Live-Teile von .github/workflows/agent-auftrag.yml (Zeilenenden LF): alles vor dem Abschnitt
+// Generalprobe (Kopf, on, permissions, concurrency, env, Job 0 bis 3) und der Sammeljob.
+// Protokollkorrektur 2b (20.11.2026): Der Live-Teil aendert sich gewollt. Job 1 prueft den Auswerter
+// .github/agent/a6-protokoll.mjs ueber a6_protokoll_auswerten gegen A6_PROTOKOLL_SHA256 aus der globalen Umgebung;
+// der neue Auswerter braucht also den neuen Anker im Live-Pfad. Deshalb hier ausdruecklich der neue Soll-Hash
+// und keine Ausnahme fuer diese Zeile. Bisher (main 42654a4): 65c642af5f55133a7d4ab5866b231d107e933ea1e75626a512feafc895b9f303.
+// Dass gegenueber main genau diese eine Ankerzeile abweicht, belegt der Test 'Protokollkorrektur 2b' unten.
+const LIVE_VORN_SHA256 = '5b044704f48f7f2ef356d6315059a65073efb5b2d19ee69eb53e4416899fe199';
+const LIVE_VORN_MAIN_42654A4_SHA256 = '65c642af5f55133a7d4ab5866b231d107e933ea1e75626a512feafc895b9f303';
+const PROTOKOLL_ANKER_MAIN = '  A6_PROTOKOLL_SHA256: 35125ef007c575419204559d5812d0901511457270828b0e8314657edf0c5e20\n';
+const PROTOKOLL_ANKER_NEU = '  A6_PROTOKOLL_SHA256: 2ab5e55bf22d5c6167e11bbe9daef7fc7a5cd0033440a5eb9b342ce8ba9334da\n';
 const LIVE_SAMMEL_SHA256 = '437b6cddaac1291e463a009980a26af91a997f65df35c28f347a24b104415ac7';
 const TRENNER = '  # -------------------------------------------------------------------------------------------------\n';
 
@@ -87,6 +95,26 @@ test('K1 Trennung: Kopf, Umgebung, Job 0 bis 3 und Sammeljob sind byte-gleich mi
   assert.equal(sha256(ist.sammel), LIVE_SAMMEL_SHA256);
   // Der K1-Nachweis steht nur im Probejob.
   assert.ok(!ent.vorn.includes('K1-Nachweis') && !ent.vorn.includes('k1-attrappe') && !ent.sammel.includes('k1-'));
+});
+
+test('Protokollkorrektur 2b: der Live-Teil des Entwurfs weicht von main 42654a4 genau in der Ankerzeile A6_PROTOKOLL_SHA256 ab', () => {
+  const vorn = ohneTiefeJob2(mitProbeAnkerVonMain(liveTeile(WF).vorn));
+  // Der neue Anker steht genau einmal, in der globalen Umgebung, und ist der SHA-256 des Auswerter-Entwurfs.
+  const treffer = [...vorn.matchAll(/^ {2}A6_PROTOKOLL_SHA256: [0-9a-f]{64}\n/gm)];
+  assert.equal(treffer.length, 1, 'Anker nicht genau einmal');
+  assert.equal(treffer[0][0], PROTOKOLL_ANKER_NEU);
+  assert.ok(treffer[0].index > vorn.indexOf('\nenv:\n') && treffer[0].index < vorn.indexOf('\njobs:\n'), 'Anker nicht in der globalen Umgebung');
+  assert.equal(PROTOKOLL_ANKER_NEU, `  A6_PROTOKOLL_SHA256: ${sha256(readFileSync(AUSWERTER, 'utf8').replace(/\r\n/g, '\n'))}\n`);
+  assert.ok(!vorn.includes(PROTOKOLL_ANKER_MAIN));
+  // Mit dem alten Anker an derselben Stelle ist der Live-Teil byte-gleich mit main 42654a4. Jede weitere
+  // Aenderung im Live-Teil faellt hier und beim Soll-Hash oben auf.
+  assert.equal(sha256(vorn.replace(PROTOKOLL_ANKER_NEU, PROTOKOLL_ANKER_MAIN)), LIVE_VORN_MAIN_42654A4_SHA256);
+  assert.equal(sha256(vorn), LIVE_VORN_SHA256);
+  // Zeilenweise: gleiche Zeilenzahl, genau eine abweichende Zeile.
+  const neu = vorn.split('\n');
+  const alt = vorn.replace(PROTOKOLL_ANKER_NEU, PROTOKOLL_ANKER_MAIN).split('\n');
+  assert.equal(neu.length, alt.length);
+  assert.deepEqual(neu.flatMap((z, i) => (z === alt[i] ? [] : [z])), [PROTOKOLL_ANKER_NEU.trimEnd()]);
 });
 
 // ---------------------------------------------------------------------------

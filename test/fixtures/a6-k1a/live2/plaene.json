@@ -1,0 +1,598 @@
+{
+ "D": [
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x01",
+    "name": "Read",
+    "input": {
+     "file_path": "/arbeit/src/text.js"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x02",
+    "name": "Read",
+    "input": {
+     "file_path": "/arbeit/test/text.test.js"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x03",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 1\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x04",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/test/text.test.js",
+     "old_string": "const { zeichenzahl } = textModul;",
+     "new_string": "const { zeichenzahl } = textModul;\n// NACHBAU T"
+    }
+   }
+  ],
+  [
+   {
+    "type": "text",
+    "text": "Attrappe fertig."
+   }
+  ]
+ ],
+ "A": [
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x01",
+    "name": "Read",
+    "input": {
+     "file_path": "/arbeit/src/text.js"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x02",
+    "name": "Read",
+    "input": {
+     "file_path": "/arbeit/test/text.test.js"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x03",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "GIBT-ES-NICHT-1",
+     "new_string": "x"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x04",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/test/text.test.js",
+     "old_string": "const { zeichenzahl } = textModul;",
+     "new_string": "const { zeichenzahl } = textModul;\n// NACHBAU T"
+    }
+   }
+  ],
+  [
+   {
+    "type": "text",
+    "text": "Attrappe fertig."
+   }
+  ]
+ ],
+ "B": [
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x01",
+    "name": "Read",
+    "input": {
+     "file_path": "/arbeit/src/text.js"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x02",
+    "name": "Read",
+    "input": {
+     "file_path": "/arbeit/test/text.test.js"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x03",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 1\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x04",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/test/text.test.js",
+     "old_string": "const { zeichenzahl } = textModul;",
+     "new_string": "const { zeichenzahl } = textModul;\n// NACHBAU T"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x05",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 2\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x06",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 3\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x07",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 4\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x08",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 5\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x09",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 6\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x10",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 7\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "text",
+    "text": "Attrappe fertig."
+   }
+  ]
+ ],
+ "C": [
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x01",
+    "name": "Read",
+    "input": {
+     "file_path": "/arbeit/src/text.js"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x02",
+    "name": "Read",
+    "input": {
+     "file_path": "/arbeit/test/text.test.js"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x03",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "GIBT-ES-NICHT-1",
+     "new_string": "x"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x04",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/test/text.test.js",
+     "old_string": "const { zeichenzahl } = textModul;",
+     "new_string": "const { zeichenzahl } = textModul;\n// NACHBAU T"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x05",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 2\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x06",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 3\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x07",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "GIBT-ES-NICHT-2",
+     "new_string": "x"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x08",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 5\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x09",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 6\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x10",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU 7\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "text",
+    "text": "Attrappe fertig."
+   }
+  ]
+ ],
+ "G": [
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x01",
+    "name": "Read",
+    "input": {
+     "file_path": "/arbeit/src/text.js"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x02",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "// NACHBAU g1\nmodule.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x03",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "GIBT-ES-NICHT-g2",
+     "new_string": "x"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x04",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "text",
+     "new_string": "TEXT"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x05",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "module.exports",
+     "new_string": "module.exports"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x06",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/test/text.test.js",
+     "old_string": "const test",
+     "new_string": "const  test"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x07",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/.git/config",
+     "old_string": "a",
+     "new_string": "b"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x08",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/agent-profiles/js-text.json",
+     "old_string": "a",
+     "new_string": "b"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x09",
+    "name": "Edit",
+    "input": {
+     "file_path": "/opt/a6/settings.json",
+     "old_string": "\"allow\"",
+     "new_string": "\"allow\"x"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x10",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/neu.js",
+     "old_string": "a",
+     "new_string": "b"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x11",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/rechne.js",
+     "old_string": "module.exports",
+     "new_string": "x"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_x12",
+    "name": "Read",
+    "input": {
+     "file_path": "/etc/hostname"
+    }
+   }
+  ],
+  [
+   {
+    "type": "text",
+    "text": "Attrappe fertig."
+   }
+  ]
+ ],
+ "M": [
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_m01",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/rechne.js",
+     "old_string": "",
+     "new_string": "x"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_m02",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/neu.js",
+     "old_string": "",
+     "new_string": "x"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_m03",
+    "name": "Read",
+    "input": {
+     "file_path": "/opt/a6/settings.json"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_m04",
+    "name": "Read",
+    "input": {
+     "file_path": "/arbeit/src/nicht-da.js"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_m05",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "",
+     "new_string": "x"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_m06",
+    "name": "Read",
+    "input": {
+     "file_path": "/arbeit/src/text.js"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_m07",
+    "name": "Edit",
+    "input": {
+     "file_path": "/arbeit/src/text.js",
+     "old_string": "",
+     "new_string": "x"
+    }
+   }
+  ],
+  [
+   {
+    "type": "tool_use",
+    "id": "toolu_m08",
+    "name": "Bash",
+    "input": {
+     "command": "true"
+    }
+   }
+  ],
+  [
+   {
+    "type": "text",
+    "text": "Attrappe fertig."
+   }
+  ]
+ ]
+}
