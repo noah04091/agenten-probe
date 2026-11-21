@@ -36,7 +36,10 @@ automatisch. Bei einem PR laufen statt der Live-Jobs die Generalprobe-Jobs; dere
 - Kein Zweig `wp/<ISSUE>-*` und kein früherer PR von einem solchen Zweig, gleich in welchem Zustand.
 - Während des Laufs bleiben `main` und das Issue unverändert. Ein Merge nach `main` bricht den Lauf bei der
   nächsten Live-Prüfung ab (`live-main-geaendert`). Jede Änderung am Issue nach dem Startlabel, auch ein
-  Kommentar, ein Label oder eine Bearbeitung von einem anderen Konto, führt zu `auftrag-issue-geaendert`.
+  Kommentar, ein Label oder eine Bearbeitung von einem anderen Konto, macht den Auftrag ungültig. Der
+  Abbruchcode hängt davon ab, welche Prüfung zuerst anschlägt. Möglich sind unter anderem
+  `auftrag-issue-geaendert`, `auftrag-label-start-fehlt` (bei entferntem Startlabel, so in NF3),
+  `auftrag-freigabe-entzogen` und `auftrag-profil-label-geaendert`.
 - Während eines Live-Laufs im ganzen Repository keine Labels setzen. Jedes `labeled`-Ereignis erzeugt einen
   Lauf in derselben Gruppe `agent-auftrag-live` (Abschnitt 7).
 - Environment `claude-bot` mit `ANTHROPIC_API_KEY` und dem App-Schlüssel, Pflichtprüfer nur `noah04091`,

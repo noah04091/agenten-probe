@@ -308,7 +308,6 @@ Lokale Vorschläge archiviert (`docs/archiv/2026-11-02-lokal/`), lokale Sicherun
 
 ### Phase 2: Erster echter Code-Lauf (Ziel A, MVP) ✅ abgeschlossen am 10.11.
 A0 bis A5 sind erfüllt. Stand 10.11.: A6 bis A8 offen. **Stand 21.11.: A6 bis A8 erfüllt, siehe Phase 3 und Abschnitt 6.**
-Abschnitt 9 sind offen. Nächstes Paket ist **A6 Auftragsprofile**.
 
 | Paket | Ergebnis | Abnahme |
 |---|---|---|
@@ -878,9 +877,6 @@ etwas anderes nahelegen, gilt dieser Nachtrag.
   - Ausgabenlimit auf dem Schlüssel (offene Entscheidung 9).
 
 **Verschoben (Stand vor Live 1):** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele Läufe, Neustart-Grenzen, Kostenauswertung, neue Dateien in Profilen, Claude Code ohne Action im Container, zweite Review-Person, Skripte in geschütztem Ordner statt Hash-Bindung. **Stand 21.11.:** A7 und A8 erledigt (Abschnitt 6); die alten Skripte bleiben vorerst (R9).
-Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele
-Läufe, Neustart-Grenzen, Kostenauswertung, neue Dateien in Profilen, Claude Code ohne Action im
-Container, zweite Review-Person, Skripte in geschütztem Ordner statt Hash-Bindung.
 
 ### Phase 4: Ziel B (noch nicht freigegeben)
 Beginnt erst nach dem offiziellen Abschluss von Ziel A und mit eigener Freigabe durch Noah.
