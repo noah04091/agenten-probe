@@ -9,10 +9,12 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  freigabenAus, issueZuLauf, jobsAus, laeufeAus, monatsKosten, offeneAuftraege, pflichtchecks, prZuLauf, restMinuten, startfreigaben,
+  CLAUDE_NICHT_GESTARTET, freigabenAus, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, monatsKosten, offeneAuftraege, pflichtchecks, prZuLauf,
+  restMinuten, startfreigaben,
 } from '../werkzeuge/zentrale/daten.mjs';
+import { KOSTEN_TOLERANZ, SOLL, echtprobe, fensterAnfang, vergleicheLauf } from '../werkzeuge/zentrale/echtprobe.mjs';
 import { erzeugeLeser } from '../werkzeuge/zentrale/github-lesen.mjs';
-import { durchlauf, sammle, zusammenfuehren } from '../werkzeuge/zentrale/zentrale.mjs';
+import { durchlauf, main, sammle, schleifeBeenden, zusammenfuehren } from '../werkzeuge/zentrale/zentrale.mjs';
 
 const FIX = join(fileURLToPath(new URL('.', import.meta.url)), 'fixtures', 'zentrale');
 const api = name => JSON.parse(readFileSync(join(FIX, 'api', `${name}.json`), 'utf8'));
@@ -80,6 +82,22 @@ const lauf = async (stoerung, cache = {}) => {
   return { ...r, aufrufe: g.aufrufe };
 };
 
+// Stoerungen fuer K1 und K2: Laufliste ohne bestimmte Laeufe; Antwort nur fuer einen Pfad ersetzen; mehrere verbinden.
+const RUNS = `${P}/actions/workflows/agent-auftrag.yml/runs`;
+function ohneLauf(...ids) {
+  return (p, u) => {
+    if (p !== RUNS || u.searchParams.get('event') !== 'issues' || (u.searchParams.get('page') ?? '1') !== '1') {
+      return null;
+    }
+
+    const w = api('runs').workflow_runs.filter(x => !ids.includes(x.id));
+    return antwort(200, { total_count: w.length, workflow_runs: w });
+  };
+}
+const nur = (pfad, ersatz) => p => (p === pfad ? ersatz() : null);
+const beide = (...s) => (p, u) => s.reduce((r, f) => r ?? f(p, u), null);
+const eintrag = (r, id) => r.modell.bereiche.laeufe.eintraege.find(x => x.id === id);
+
 test('Abbildung: offene Auftraege nur mit genau einem agent:-Label, ohne PRs', () => {
   const a = offeneAuftraege(api('issues-offen'));
   assert.deepEqual(a.map(x => [x.nummer, x.profil, x.startlabel]), [[90, 'js-text', true], [91, 'js-rechner', false]]);
@@ -116,7 +134,7 @@ test('Abbildung: Jobs, Draft-PR, Pflichtchecks, Freigaben, Frist', () => {
   const pr = prZuLauf(api('pulls'), 79, 44765669207);
   assert.deepEqual(pr, { nummer: 104, url: 'https://github.com/noah04091/agenten-probe/pull/104', zustand: 'gemergt', sha: '32e7691ba585e4a2d74cc975f6117971f2933a9b' });
   assert.equal(prZuLauf(api('pulls'), 79, 4476566920), null, 'Praefix reicht nicht');
-  assert.equal(prZuLauf([...api('pulls'), api('pulls')[0]], 79, 44765669207), null, 'mehrdeutig');
+  assert.equal(prZuLauf([...api('pulls'), api('pulls')[0]], 79, 44765669207), 'mehrdeutig', 'mehrdeutig');
 
   assert.deepEqual(pflichtchecks(api('checks-32e7691b').check_runs), ['build', 'tests', 'schutzdateien', 'agent-auftrag-sammel'].map(name => ({ name, ergebnis: 'success' })));
   const gemischt = pflichtchecks([{ name: 'tests', status: 'completed', conclusion: 'success', app: { id: 15368 } }, { name: 'tests', status: 'completed', conclusion: 'failure', app: { id: 15368 } }, { name: 'build', status: 'in_progress', conclusion: null, app: { id: 15368 } }]);
@@ -151,9 +169,17 @@ test('Ablauf: Laeufe Live 2, NF2, NF3 und eine wartende Freigabe wie in der Abna
   assert.deepEqual([l[44826212314].issue.nummer, l[44826212314].code, l[44826212314].kosten], [80, 'auftrag-label-start-fehlt', null]);
   // Wartende Freigabe: Job 1, claude-bot, 40 Minuten Restfrist.
   assert.deepEqual(b.freigaben.eintraege, [{ laufId: 44900000001, url: 'https://github.com/noah04091/agenten-probe/actions/runs/44900000001', environment: 'claude-bot', job: 1, restMinuten: 40 }]);
-  // Monatssumme: genau die Kostenzeilen der Laeufe im Monat.
+  // Monatssumme: genau die Kostenzeilen der Laeufe im Monat. Der wartende Lauf hat noch keine belegten Kosten (Job 1
+  // wartet), die Summe ist deshalb nur "mindestens". NF3 hat belegt keine Kosten (Code vor dem Claude-Start).
   assert.deepEqual({ summe: b.kosten.summe, mitKosten: b.kosten.mitKosten, ohneKosten: b.kosten.ohneKosten, vollstaendig: b.kosten.vollstaendig, monat: b.kosten.monat },
-    { summe: 0.047427800000000006 + 0.026869399999999998, mitKosten: 2, ohneKosten: 2, vollstaendig: true, monat: '2026-11' });
+    { summe: 0.047427800000000006 + 0.026869399999999998, mitKosten: 2, ohneKosten: 2, vollstaendig: false, monat: '2026-11' });
+  assert.equal(l[44900000001].kostenOffen, true);
+  assert.equal(l[44826212314].kostenOffen, false);
+  assert.equal(l[44765669207].runden, 6);
+  // Ohne den wartenden Lauf ist die Summe belegt vollstaendig (Muss-Treffer fuer "vollstaendig").
+  const ohneWartend = await lauf(ohneLauf(44900000001));
+  assert.equal(ohneWartend.modell.bereiche.kosten.vollstaendig, true);
+  assert.equal(ohneWartend.modell.bereiche.kosten.teilFehler, null);
 
   // Logs: nur abgeschlossene Jobs 1 bis 3 (und Job 0 nur bei Rot); der Cache traegt nur die drei Werte.
   assert.equal(aufrufe.filter(p => p.endsWith('/logs')).length, 6);
@@ -162,6 +188,237 @@ test('Ablauf: Laeufe Live 2, NF2, NF3 und eine wartende Freigabe wie in der Abna
   const zweiter = await lauf(() => null, cache);
   assert.equal(zweiter.aufrufe.filter(p => p.endsWith('/logs')).length, 0, 'abgeschlossene Jobs aus dem Cache');
   assert.deepEqual(zweiter.modell.bereiche.kosten.summe, b.kosten.summe);
+  assert.equal(Object.fromEntries(zweiter.modell.bereiche.laeufe.eintraege.map(x => [x.id, x]))[44826212314].kostenOffen, false, 'Beleg auch aus dem Cache');
+});
+
+test('K1: gescheiterte oder unvollstaendige Jobliste: Jobs unbekannt statt "nicht gestartet", Kosten offen, Summe unvollstaendig', async () => {
+  // Jobliste von Live 2 scheitert (500).
+  let r = await lauf(beide(ohneLauf(44900000001), nur(`${P}/actions/runs/44765669207/jobs`, () => antwort(500, {}))));
+  let e = eintrag(r, 44765669207);
+  assert.deepEqual(e.jobs, [null, null, null, null]);
+  assert.equal(e.kostenOffen, true);
+  assert.equal(e.kosten, null);
+  // Ohne Jobliste wird trotzdem gesucht: der PR steht in der vollstaendigen Liste und wird gefunden, nie "kein PR".
+  assert.equal(e.pr.nummer, 104, 'ohne Jobliste trotzdem gesucht');
+  r = await lauf(beide(nur(`${P}/actions/runs/44765669207/jobs`, () => antwort(500, {})), nur(`${P}/pulls`, () => antwort(500, {}))));
+  assert.equal(eintrag(r, 44765669207).pr, 'unbekannt', 'ohne Jobliste und ohne PR-Liste: unbekannt, nie "kein PR"');
+  r = await lauf(beide(ohneLauf(44900000001), nur(`${P}/actions/runs/44765669207/jobs`, () => antwort(500, {}))));
+  assert.equal(r.modell.bereiche.kosten.vollstaendig, false);
+  assert.ok(Number.isFinite(r.modell.bereiche.kosten.teilFehler));
+  assert.ok(Number.isFinite(r.modell.bereiche.laeufe.teilFehler));
+
+  // Jobliste des wartenden Laufs unvollstaendig (total_count 4, nur Job 0 und 1 geliefert): Job 2 und 3 unbekannt.
+  r = await lauf(nur(`${P}/actions/runs/44900000001/jobs`, () => antwort(200, { ...api('jobs-44900000001'), total_count: 4 })));
+  e = eintrag(r, 44900000001);
+  assert.deepEqual(e.jobs.map(j => (j ? j.status : 'unbekannt')), ['completed', 'waiting', 'unbekannt', 'unbekannt']);
+  assert.ok(Number.isFinite(r.modell.bereiche.laeufe.teilFehler));
+  // Gegenprobe: vollstaendig geliefert heisst es "nicht gestartet".
+  assert.deepEqual(eintrag(await lauf(), 44900000001).jobs.map(j => j.status), ['completed', 'waiting', 'nicht-gestartet', 'nicht-gestartet']);
+});
+
+test('K1: Kosten nur mit Beleg; gescheitertes Log oder Log ohne Kostenzeile und ohne Vor-Start-Code: unbekannt', async () => {
+  // Log von Job 1 (NF3) nicht ladbar: Kosten unbekannt, nicht "keine".
+  let r = await lauf(beide(ohneLauf(44900000001), nur('/log/136599633609', () => antwort(500, ''))));
+  assert.equal(eintrag(r, 44826212314).kostenOffen, true);
+  assert.equal(r.modell.bereiche.kosten.vollstaendig, false);
+
+  // Log von Job 1 (NF2) gelesen, aber ohne Kostenzeile und ohne Vor-Start-Code: Claude kann gelaufen sein.
+  r = await lauf(beide(ohneLauf(44900000001), nur('/log/136488370273', () => antwort(200, '2026-11-20T18:35:11.1234567Z irgendetwas\n'))));
+  assert.equal(eintrag(r, 44793828526).kosten, null);
+  assert.equal(eintrag(r, 44793828526).kostenOffen, true);
+  assert.equal(r.modell.bereiche.kosten.vollstaendig, false);
+
+  // Einheiten: jeder Zweig von kostenAusJob1.
+  const fertig = { status: 'completed' };
+  const job = (status, conclusion = null) => ({ id: 1, status, conclusion });
+  assert.deepEqual(kostenAusJob1(fertig, null, undefined), { kosten: null, runden: null, offen: true }, 'Job 1 unbekannt');
+  assert.equal(kostenAusJob1({ status: 'in_progress' }, job('nicht-gestartet'), undefined).offen, true, 'Lauf laeuft noch');
+  assert.equal(kostenAusJob1(fertig, job('nicht-gestartet'), undefined).offen, false, 'abgeschlossen, Job 1 nie gestartet');
+  assert.equal(kostenAusJob1(fertig, job('waiting'), undefined).offen, true, 'wartet');
+  assert.equal(kostenAusJob1(fertig, job('in_progress'), undefined).offen, true, 'laeuft');
+  assert.equal(kostenAusJob1(fertig, job('completed', 'skipped'), undefined).offen, false, 'uebersprungen');
+  assert.equal(kostenAusJob1(fertig, job('completed', 'failure'), null).offen, true, 'Log gescheitert');
+  assert.equal(kostenAusJob1(fertig, job('completed', 'failure'), { code: 'abnahme-exitcode', runden: null, kosten: null }).offen, true, 'anderer Code');
+  assert.equal(kostenAusJob1(fertig, job('completed', 'failure'), { code: 'mehrdeutig', runden: null, kosten: null }).offen, true, 'mehrdeutig');
+  for (const c of CLAUDE_NICHT_GESTARTET) {
+    assert.equal(kostenAusJob1(fertig, job('completed', 'failure'), { code: c, runden: null, kosten: null }).offen, false, c);
+  }
+  assert.deepEqual(kostenAusJob1(fertig, job('completed', 'success'), { code: null, runden: 6, kosten: 0.04 }), { kosten: 0.04, runden: 6, offen: false });
+});
+
+test('K1: PR-Liste gescheitert, unvollstaendig oder mehrdeutig: nie "kein PR"', async () => {
+  // Liste gescheitert.
+  let r = await lauf(nur(`${P}/pulls`, () => antwort(500, {})));
+  assert.equal(eintrag(r, 44765669207).pr, 'unbekannt');
+  assert.ok(Number.isFinite(r.modell.bereiche.laeufe.teilFehler));
+  // NF2 und NF3: Job 3 uebersprungen, belegt kein PR, auch ohne Liste.
+  assert.equal(eintrag(r, 44793828526).pr, null);
+
+  // Mehrere passende PRs.
+  r = await lauf(nur(`${P}/pulls`, () => antwort(200, [...api('pulls'), { ...api('pulls')[0], number: 105 }])));
+  assert.equal(eintrag(r, 44765669207).pr, 'mehrdeutig');
+  assert.ok(Number.isFinite(r.modell.bereiche.laeufe.teilFehler));
+
+  // Unvollstaendige Liste (Seitengrenze erreicht): unbekannt, auch wenn ein Treffer darin steht.
+  const voll = Array.from({ length: 100 }, (_, i) => ({ number: 2000 + i, head: { ref: `x-${i}` } }));
+  r = await lauf((p, u) => (p === `${P}/pulls` ? antwort(200, u.searchParams.get('page') === '1' ? [api('pulls')[0], ...voll.slice(1)] : voll) : null));
+  assert.equal(eintrag(r, 44765669207).pr, 'unbekannt');
+  assert.equal(prZuLauf(api('pulls'), 79, 44765669207, false), 'unbekannt');
+  assert.equal(prZuLauf(api('pulls'), 80, 44826212314, false), 'unbekannt', 'kein Treffer in unvollstaendiger Liste');
+  assert.equal(prZuLauf(api('pulls'), 80, 44826212314, true), null, 'Gegenprobe: vollstaendig ohne Treffer');
+  assert.equal(prZuLauf(null, 79, 44765669207), 'unbekannt');
+});
+
+test('K1: unvollstaendige Check- und Issue-Kandidatenlisten sichtbar gekennzeichnet', async () => {
+  // Check-Liste unvollstaendig (total_count groesser): jeder Pflichtcheck sichtbar unbekannt.
+  let r = await lauf(nur(`${P}/commits/32e7691ba585e4a2d74cc975f6117971f2933a9b/check-runs`, () => antwort(200, { ...api('checks-32e7691b'), total_count: 150 })));
+  assert.deepEqual(eintrag(r, 44765669207).pr.checks.map(c => c.ergebnis), Array(4).fill('unbekannt (Liste unvollständig)'));
+  assert.ok(Number.isFinite(r.modell.bereiche.laeufe.teilFehler));
+  assert.deepEqual(pflichtchecks(api('checks-32e7691b').check_runs, false).map(c => c.ergebnis), Array(4).fill('unbekannt (Liste unvollständig)'));
+
+  // Issue-Liste unvollstaendig (Seitengrenze): keine Zuordnung, Bereich sagt es.
+  const fuell = Array.from({ length: 100 }, (_, i) => ({ number: 5000 + i, title: `fuell ${i}` }));
+  r = await lauf((p, u) => (p === `${P}/issues` && u.searchParams.get('state') === 'all'
+    ? antwort(200, u.searchParams.get('page') === '1' ? [...api('issues-alle'), ...fuell].slice(0, 100) : fuell) : null));
+  assert.equal(r.modell.bereiche.laeufe.kandidatenUnvollstaendig, true);
+  assert.ok(r.modell.bereiche.laeufe.eintraege.every(x => x.issue === null));
+  assert.equal(eintrag(r, 44765669207).pr, 'unbekannt');
+  assert.ok(Number.isFinite(r.modell.bereiche.laeufe.teilFehler));
+  assert.equal((await lauf()).modell.bereiche.laeufe.kandidatenUnvollstaendig, false, 'Gegenprobe');
+
+  // Ereignisse eines Kandidaten unvollstaendig: dieser Kandidat zaehlt als unbekannt, kein Raten auf den anderen.
+  const l = { start: Date.parse('2026-11-20T22:07:07Z'), titel: 'T' };
+  assert.equal(issueZuLauf(l, [{ nummer: 80, titel: 'T', freigaben: [Date.parse('2026-11-20T22:07:04Z')] }, { nummer: 81, titel: 'T', freigaben: null }]), null);
+  // Erste Seite traegt das echte Startlabel, die Liste endet aber an der Seitengrenze: keine Zuordnung.
+  const leer = Array.from({ length: 100 }, () => ({ event: 'commented' }));
+  r = await lauf((p, u) => (p === `${P}/issues/80/events` ? antwort(200, u.searchParams.get('page') === '1' ? [...api('events-80'), ...leer].slice(0, 100) : leer) : null));
+  assert.equal(eintrag(r, 44826212314).issue, null);
+  assert.equal(eintrag(await lauf(), 44826212314).issue.nummer, 80, 'Gegenprobe: vollstaendige Ereignisse ordnen zu');
+});
+
+test('K1: Monatssumme nur vollstaendig mit Beleg (Lauf ohne Startzeit, Liste unvollstaendig)', () => {
+  const l = (start, kosten, kostenOffen = false) => ({ start, kosten, kostenOffen });
+  assert.equal(monatsKosten([l(Date.parse('2026-11-02T00:00:00Z'), 0.1)], JETZT, true).vollstaendig, true, 'Muss-Treffer');
+  assert.equal(monatsKosten([l(Date.parse('2026-11-02T00:00:00Z'), 0.1), l(null, null)], JETZT, true).vollstaendig, false, 'Startzeit unbekannt');
+  assert.equal(monatsKosten([{ start: Date.parse('2026-11-02T00:00:00Z'), kosten: null }], JETZT, true).vollstaendig, false, 'Beleg fehlt');
+  assert.equal(monatsKosten([l(Date.parse('2026-11-02T00:00:00Z'), null, true)], JETZT, true).vollstaendig, false, 'Kosten offen');
+  assert.equal(monatsKosten([l(Date.parse('2026-11-02T00:00:00Z'), null, false)], JETZT, true).vollstaendig, true, 'belegt keine Kosten');
+  assert.equal(monatsKosten([l(Date.parse('2026-11-02T00:00:00Z'), 0.1)], JETZT, false).vollstaendig, false, 'Liste unvollstaendig');
+});
+
+// K2: Echt-Probe gegen die nachgebaute API. Geloeschter Zweig antwortet wie GitHub mit "Branch not found".
+const zweig = nur(`${P}/branches/wp/78-agent-44536520447-1`, () => antwort(404, { message: 'Branch not found' }));
+async function probe(stoerung = () => null, jetzt = JETZT) {
+  const zeilen = [];
+  const code = await echtprobe([], {
+    tokenLaden: () => ({ ok: true, token: TOKEN }),
+    leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: github(beide(zweig, stoerung)).f }),
+    ausgabe: t => zeilen.push(t),
+    jetzt,
+  });
+  return { code, text: zeilen.join('\n') };
+}
+
+test('K2: Echt-Probe besteht nur mit allen Sollwerten und vollstaendigen Daten', async () => {
+  const gut = await probe(ohneLauf(44900000001));
+  assert.equal(gut.code, 0, gut.text);
+  assert.match(gut.text, /ECHTPROBE BESTANDEN/);
+  assert.match(gut.text, /lauf Live 2 44765669207: issue 79 .* kosten 0\.047427800000000006 runden 6 pr #104 gemergt build=success .* OK/);
+  assert.match(gut.text, /lauf NF3 44826212314: issue 80 .* code auftrag-label-start-fehlt kosten keine .* OK/);
+  assert.equal(SOLL.length, 3);
+  assert.deepEqual(SOLL.map(s => s.id), [44765669207, 44793828526, 44826212314]);
+
+  const faelle = [
+    ['Kosten weichen ab', beide(ohneLauf(44900000001), nur('/log/136488370273', () => antwort(200, 'Claude beendet: Runden 5, Kosten 0.0269 USD\n'))), /NF2 .*Abweichung: kosten 0\.0269 statt 0\.0268694/],
+    ['Code weicht ab', beide(ohneLauf(44900000001), nur('/log/136489652497', () => antwort(200, 'A6-FEHLER abnahme-ausgabe\n'))), /code abnahme-ausgabe statt abnahme-exitcode/],
+    ['Lauf fehlt im Zeitfenster', ohneLauf(44900000001, 44826212314), /NF3 44826212314: fehlt in der Laufliste/],
+    ['Log nicht ladbar', beide(ohneLauf(44900000001), nur('/log/136389814103', () => antwort(500, ''))), /Live 2 .*kosten unbekannt statt 0\.0474278/],
+    ['Monatssumme unvollstaendig', () => null, /monat 2026-11: summe .* vollstaendig false .*ABWEICHUNG/],
+    ['Teilfehler ohne sonstige Abweichung', beide(ohneLauf(44900000001), (p, u) => (p === RUNS && u.searchParams.get('event') === 'pull_request' ? antwort(500, {}) : null)), /laeufe-vollstaendig: .*Teilfehler ja ABWEICHUNG/],
+    ['Laufliste gescheitert', p => (p === RUNS ? antwort(500, {}) : null), /nicht pruefbar, Laufliste fehlgeschlagen/],
+    ['PR fehlt', beide(ohneLauf(44900000001), nur(`${P}/pulls`, () => antwort(200, []))), /Live 2 .*pr kein PR statt #104/],
+    ['Jobzustand weicht ab', beide(ohneLauf(44900000001), nur(`${P}/actions/runs/44793828526/jobs`, () => {
+      const j = api('jobs-44793828526');
+      return antwort(200, { ...j, jobs: j.jobs.map(x => (x.name.startsWith('Job 3 ') ? { ...x, conclusion: 'cancelled' } : x)) });
+    })), /NF2 .*Abweichung: jobs .*completed\/cancelled statt/],
+    ['Issue weicht ab', beide(ohneLauf(44900000001), nur(`${P}/issues/81/events`, () => antwort(200, []))), /NF2 .*Abweichung: issue unbekannt statt 81/],
+  ];
+
+  for (const [name, stoerung, muster] of faelle) {
+    const r = await probe(stoerung);
+    assert.equal(r.code, 1, `${name}: ${r.text}`);
+    assert.match(r.text, muster, name);
+    assert.match(r.text, /ECHTPROBE NICHT BESTANDEN/, name);
+  }
+
+  // Ausserhalb des Zeitfensters: nicht pruefbar ist kein Erfolg.
+  const spaet = await probe(ohneLauf(44900000001), Date.parse('2027-01-15T10:00:00Z'));
+  assert.equal(spaet.code, 1, spaet.text);
+  assert.match(spaet.text, /Live 2 44765669207: nicht pruefbar: Start 2026-11-20T15:40:42Z liegt vor dem Zeitfenster ab 2026-12-16/);
+  assert.equal(new Date(fensterAnfang(JETZT)).toISOString(), '2026-10-22T00:00:00.000Z');
+});
+
+test('K2: Kostenvergleich mit Toleranz, Sollwerte nicht aus dem Programm', () => {
+  const live2 = SOLL[0];
+  const basis = { issue: { nummer: 79 }, jobs: Array(4).fill({ status: 'completed', conclusion: 'success' }), code: null, runden: 6, kostenOffen: false,
+    pr: { nummer: 104, zustand: 'gemergt', checks: ['build', 'tests', 'schutzdateien', 'agent-auftrag-sammel'].map(name => ({ name, ergebnis: 'success' })) } };
+  assert.deepEqual(vergleicheLauf({ ...basis, kosten: 0.047427800000000006 }, live2), []);
+  assert.deepEqual(vergleicheLauf({ ...basis, kosten: 0.0474278 + 5e-7 }, live2), []);
+  assert.equal(vergleicheLauf({ ...basis, kosten: 0.0474278 + 2e-6 }, live2).length, 1);
+  assert.equal(vergleicheLauf({ ...basis, kosten: null, kostenOffen: true }, live2).length, 1);
+  assert.equal(KOSTEN_TOLERANZ, 1e-6);
+  assert.equal(live2.kosten, 0.0474278);
+});
+
+test('K3: Schleifenbetrieb schreibt Neuladen; endet die Schleife, traegt die letzte Seite den Hinweis und kein Neuladen', async () => {
+  const REFRESH = '<meta http-equiv="refresh" content="60">';
+  const ordner = join('Z', '.zentrale');
+  const html = join(ordner, 'zentrale.html');
+
+  // Einmalbetrieb: kein Neuladen.
+  const fs1 = speicher();
+  assert.equal(await main([], { tokenLaden: () => ({ ok: true, token: TOKEN }), leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: github().f }), jetzt: () => JETZT, fsImpl: fs1, ordner, sitzungen: keineSitzungen, ausgabe: () => {}, beiAbbruch: () => assert.fail('kein Handler ohne Schleife') }), 0);
+  assert.ok(!fs1.dateien.get(html).includes(REFRESH));
+  assert.ok(fs1.dateien.get(html).includes('Momentaufnahme: erzeugt am 21.11.2026 um 10:20 UTC.'));
+
+  // Schleife: erster Durchlauf gut, zweiter scheitert an der Startpruefung.
+  const fs2 = speicher();
+  let n = 0;
+  const stoer = p => (p === P && n >= 2 ? antwort(401, { message: 'Bad credentials' }) : null);
+  const zaehl = { f: async (url, o) => { if (new URL(url).pathname === P) n += 1; return github(stoer).f(url, o); } };
+  let zeit = JETZT;
+  const code = await main(['--schleife'], {
+    tokenLaden: () => ({ ok: true, token: TOKEN }), leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: zaehl.f }),
+    jetzt: () => zeit, warte: async () => { assert.ok(fs2.dateien.get(html).includes(REFRESH), 'Muss-Treffer: Neuladen in der Schleife'); zeit += 120_000; },
+    fsImpl: fs2, ordner, sitzungen: keineSitzungen, ausgabe: () => {}, beiAbbruch: () => {},
+  });
+  assert.equal(code, 1);
+  const ende = fs2.dateien.get(html);
+  assert.ok(!ende.includes(REFRESH), 'Neuladen nach dem Abbruch');
+  assert.ok(ende.includes('Die Schleife wurde am 21.11.2026 um 10:22 UTC beendet (Durchlauf gescheitert).'));
+  assert.ok(ende.includes('Momentaufnahme: erzeugt am 21.11.2026 um 10:20 UTC.'));
+
+  // Strg+C waehrend der Schleife: Handler schreibt die Endseite und beendet mit 130.
+  const fs3 = speicher();
+  let handler = null;
+  let beendet = null;
+  await main(['--schleife'], {
+    tokenLaden: () => ({ ok: true, token: TOKEN }), leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: github().f }),
+    jetzt: () => JETZT, warte: async () => { handler(); throw new Error('Ende'); },
+    fsImpl: fs3, ordner, sitzungen: keineSitzungen, ausgabe: () => {}, beiAbbruch: h => { handler = h; }, beenden: c => { beendet = c; },
+  }).catch(e => assert.equal(e.message, 'Ende'));
+  assert.equal(beendet, 130);
+  assert.ok(!fs3.dateien.get(html).includes(REFRESH));
+  assert.ok(fs3.dateien.get(html).includes('beendet (Strg+C)'));
+});
+
+test('K3: Endseite geht durch den Geheimnis-Filter und schreibt ohne Modell nichts', () => {
+  const fs = speicher();
+  assert.equal(schleifeBeenden({ modell: null, token: TOKEN, um: JETZT, grund: 'x', fsImpl: fs, ordner: 'Z' }), false);
+  assert.equal(fs.dateien.size, 0);
+  const modell = { erzeugt: JETZT, bereiche: { auftraege: { stand: JETZT, fehlschlag: null, eintraege: [{ nummer: 1, titel: 'ghp_ABC', profil: 'p', startlabel: true, freigaben: 1, abnahme: 'fehlt' }] } } };
+  assert.equal(schleifeBeenden({ modell, token: TOKEN, um: JETZT, grund: 'x', fsImpl: fs, ordner: 'Z' }), false);
+  assert.equal(fs.dateien.size, 0);
 });
 
 test('Ablauf: Teilfehler machen Werte unbekannt und die Summe unvollstaendig, nie vollstaendig behauptet', async () => {

@@ -3,11 +3,16 @@
 // Kein Skript, kein externer Inhalt, strenge CSP. Jeder uebernommene Text wird maskiert. Links nur auf
 // https://github.com/noah04091/agenten-probe/... (dazu genau ein fester lokaler Link auf die Sitzungsuebersicht).
 // Je Bereich "Stand: HH:MM UTC"; aelter als 10 Minuten: grau mit "veraltet"; gescheiterter Abruf: "Abruf
-// fehlgeschlagen um ...", nie alte Werte als aktuell.
+// fehlgeschlagen um ...", nie alte Werte als neu. Die Datei ist statisch: Sie nennt sich oben ausdruecklich
+// Momentaufnahme mit Erzeugungszeit und behauptet nie, aktuell zu sein. Neu laden laesst sie den Browser nur im
+// Schleifenbetrieb; dann nennt sie die Zeit, bis zu der die naechste Erzeugung faellig ist. Eine Seite nach dem Ende
+// der Schleife traegt kein Neuladen mehr und sagt, dass die Schleife beendet ist.
 
 import { klartext } from './fehlercodes.mjs';
 
 export const VERALTET_MS = 10 * 60 * 1000;
+// Schleifenbetrieb: neue Datei alle 120 Sekunden; faellig ist die naechste spaetestens eine Minute danach.
+export const NAECHSTE_FAELLIG_MS = 3 * 60 * 1000;
 export const GITHUB_PRAEFIX = 'https://github.com/noah04091/agenten-probe/';
 export const CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'";
 const GEHEIM_MUSTER = Object.freeze(['github_pat_', 'ghp_', 'gho_', 'ghs_', 'ghu_', 'sk-ant', '-----BEGIN']);
@@ -48,11 +53,21 @@ function datumZeit(ms) {
   return `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}. ${uhrzeit(ms)}`;
 }
 
+function tagUndZeit(ms) {
+  if (!Number.isFinite(ms)) {
+    return 'unbekannt';
+  }
+
+  const d = new Date(ms);
+  return `am ${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}.${d.getUTCFullYear()} um ${uhrzeit(ms)}`;
+}
+
 export function dollar(betrag) {
   return Number.isFinite(betrag) ? `${betrag.toFixed(3).replace('.', ',')} $` : 'unbekannt';
 }
 
-// Zustand eines Bereichs: 'fehlgeschlagen', 'leer' (noch nie geladen), 'veraltet' oder 'aktuell'.
+// Zustand eines Bereichs zum Erzeugungszeitpunkt: 'fehlgeschlagen', 'leer' (noch nie geladen), 'veraltet' oder
+// 'geladen' (in diesem Durchlauf frisch geholt).
 export function bereichZustand(bereich, jetzt) {
   const stand = bereich?.stand;
   const fehlschlag = bereich?.fehlschlag;
@@ -65,7 +80,7 @@ export function bereichZustand(bereich, jetzt) {
     return 'leer';
   }
 
-  return jetzt - stand > VERALTET_MS ? 'veraltet' : 'aktuell';
+  return jetzt - stand > VERALTET_MS ? 'veraltet' : 'geladen';
 }
 
 function rahmen(titel, bereich, jetzt, inhalt) {
@@ -80,7 +95,7 @@ function rahmen(titel, bereich, jetzt, inhalt) {
     kopf = '<p class="hinweis">Noch kein Stand.</p>';
     koerper = '';
   } else if (zustand === 'veraltet') {
-    kopf = `<p class="hinweis">veraltet, Stand: ${uhrzeit(bereich.stand)}. Die Werte sind nicht aktuell.</p>`;
+    kopf = `<p class="hinweis">veraltet, Stand: ${uhrzeit(bereich.stand)}. Die Werte stammen aus einem früheren Abruf.</p>`;
     koerper = inhalt();
   } else {
     kopf = `<p class="stand">Stand: ${uhrzeit(bereich.stand)}</p>`;
@@ -140,6 +155,14 @@ function prText(pr) {
     return 'unbekannt';
   }
 
+  if (pr === 'mehrdeutig') {
+    return 'mehrere passende PRs, Zuordnung unbekannt';
+  }
+
+  if (typeof pr !== 'object') {
+    return 'unbekannt';
+  }
+
   const checks = pr.checks.map(c => `${maskiere(c.name)} ${maskiere(c.ergebnis)}`).join(', ');
   return `${link(pr.url, `#${pr.nummer}`)} ${maskiere(pr.zustand)}${checks ? ` (${checks})` : ''}`;
 }
@@ -159,6 +182,10 @@ function laeufe(b) {
 
   if (b.unvollstaendig) {
     teile.push('<p class="hinweis">Nicht alle Läufe konnten geladen werden. Die Liste ist unvollständig.</p>');
+  }
+
+  if (b.kandidatenUnvollstaendig) {
+    teile.push('<p class="hinweis">Die Issue-Liste konnte nicht vollständig geladen werden. Die Zuordnung Lauf zu Issue ist deshalb unbekannt.</p>');
   }
 
   teile.push(`<p>Läufe aus Pull Requests (Generalprobe), 30 Tage: ${Number.isInteger(b.generalprobe) ? b.generalprobe : 'unbekannt'}</p>`);
@@ -202,17 +229,35 @@ const STIL = 'body{font-family:system-ui,sans-serif;margin:16px;color:#111;backg
   + 'table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;vertical-align:top}'
   + '@media (max-width:700px){table,tr,td,th{display:block}th{display:none}tr{border-bottom:2px solid #ccc;padding:4px 0}}';
 
-export function seite(modell, jetzt) {
+// Kopf: was diese Datei ist. Ohne Schleife: Momentaufnahme, aktualisiert sich nicht. Mit Schleife: Neuladen und die
+// Zeit, bis zu der die naechste Datei faellig ist. Nach dem Ende der Schleife: Hinweis auf das Ende, kein Neuladen.
+function momentaufnahme(modell, schleife, beendet) {
+  const kopf = `<p class="momentaufnahme"><strong>Momentaufnahme: erzeugt ${tagUndZeit(modell.erzeugt)}.</strong>`;
+
+  if (beendet) {
+    return `${kopf} Die Schleife wurde ${tagUndZeit(beendet.um)} beendet${beendet.grund ? ` (${maskiere(beendet.grund)})` : ''}. `
+      + 'Diese Seite wird nicht mehr erneuert.</p>';
+  }
+
+  if (schleife) {
+    return `${kopf} Schleifenbetrieb: eine neue Momentaufnahme ist bis ${uhrzeit(modell.erzeugt + NAECHSTE_FAELLIG_MS)} fällig. `
+      + 'Steht danach noch diese Erzeugungszeit da, läuft die Schleife nicht mehr und die Werte sind veraltet.</p>';
+  }
+
+  return `${kopf} Die Seite erneuert sich nicht von selbst. Für einen neuen Stand den Befehl erneut ausführen.</p>`;
+}
+
+export function seite(modell, jetzt, { schleife = false, beendet = null } = {}) {
   const b = modell.bereiche;
   const uebersicht = typeof modell.sitzungsUebersicht === 'string'
-    ? ` · <a href="${maskiere(modell.sitzungsUebersicht)}" rel="noopener noreferrer">Sitzungsübersicht</a>` : '';
+    ? `<p><a href="${maskiere(modell.sitzungsUebersicht)}" rel="noopener noreferrer">Sitzungsübersicht</a></p>` : '';
   return [
     '<!doctype html><html lang="de"><head><meta charset="utf-8">',
     `<meta http-equiv="Content-Security-Policy" content="${CSP}">`,
-    '<meta http-equiv="refresh" content="60">',
+    schleife === true && !beendet ? '<meta http-equiv="refresh" content="60">' : '',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
-    `<title>Zentrale</title><style>${STIL}</style></head><body>`,
-    `<h1>Zentrale Agentensystem</h1><p>Erzeugt: ${datumZeit(modell.erzeugt)}${uebersicht}</p>`,
+    `<title>Zentrale (Momentaufnahme ${uhrzeit(modell.erzeugt)})</title><style>${STIL}</style></head><body>`,
+    `<h1>Zentrale Agentensystem</h1>${momentaufnahme(modell, schleife === true, beendet)}${uebersicht}`,
     rahmen('1 Offene Aufträge', b.auftraege, jetzt, () => auftraege(b.auftraege)),
     rahmen('2 Agentenläufe', b.laeufe, jetzt, () => laeufe(b.laeufe)),
     rahmen('3 Meine Freigaben', b.freigaben, jetzt, () => freigaben(b.freigaben, jetzt)),

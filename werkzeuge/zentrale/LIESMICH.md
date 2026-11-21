@@ -16,8 +16,14 @@ node werkzeuge/zentrale/zentrale.mjs              einmal erzeugen
 node werkzeuge/zentrale/zentrale.mjs --schleife   alle 120 Sekunden neu erzeugen, Ende mit Strg+C
 ```
 
-Die Seite liegt danach in `%USERPROFILE%\.zentrale\zentrale.html`, außerhalb jedes Repositorys. Der Browser lädt sie alle
-60 Sekunden neu. Neu erzeugt wird sie nur durch den Befehl oben.
+Die Seite liegt danach in `%USERPROFILE%\.zentrale\zentrale.html`, außerhalb jedes Repositorys. Sie ist eine
+**Momentaufnahme** und sagt das oben mit Datum und Uhrzeit (UTC). Neu erzeugt wird sie nur durch den Befehl oben.
+
+- **Ohne `--schleife`:** kein Neuladen im Browser. Die Seite sagt, dass sie sich nicht von selbst erneuert.
+- **Mit `--schleife`:** der Browser lädt alle 60 Sekunden neu, und die Seite nennt die Uhrzeit, bis zu der die nächste
+  Momentaufnahme fällig ist. Steht danach noch dieselbe Erzeugungszeit da, läuft die Schleife nicht mehr.
+- **Ende der Schleife** (Strg+C oder gescheiterter Durchlauf): Die letzte Seite wird ohne Neuladen und mit dem Hinweis
+  „Die Schleife wurde … beendet“ neu geschrieben. Wird der Prozess hart beendet, bleibt die Fälligkeitszeit der Beleg.
 
 ## Lese-Token einrichten (nur Noah)
 
@@ -44,13 +50,20 @@ Fehlen dem Token Rechte, steht im betroffenen Bereich „keine Berechtigung (403
   für die Abnahme-Datei. Alles andere ist „unbekannt“. Ein ganz gescheiterter Bereich zeigt „Abruf fehlgeschlagen
   um …“ und keine alten Werte. Einzelne gescheiterte Abrufe stehen als „unbekannt“ da, mit dem Hinweis „Abruf
   fehlgeschlagen (teilweise)“.
-- **Stand:** je Bereich „Stand: HH:MM UTC“. Älter als 10 Minuten: grau und „veraltet“.
+- **Stand:** je Bereich „Stand: HH:MM UTC“. Stammt ein Bereich aus einem Abruf, der zur Erzeugungszeit älter als
+  10 Minuten war: grau und „veraltet“.
 - **Logs:** Sie werden nur über die 302-Weiterleitung von GitHub geladen, nur von
   `https://productionresultssa<n>.blob.core.windows.net`, ohne Token. Daraus werden nur der Fehlercode
   (`A6-FEHLER …`), die Runden und die Kosten (`Claude beendet: …`) gelesen. Der Logtext wird verworfen.
   `%USERPROFILE%\.zentrale\cache.json` enthält nur diese drei Werte je abgeschlossenem Job.
-- **Kosten:** Summe im laufenden Kalendermonat (UTC). Ist die Laufliste unvollständig oder ein Kostenwert nicht abrufbar,
-  steht „mindestens … (unvollständig)“ da.
+- **Kosten:** Summe im laufenden Kalendermonat (UTC). „keine“ steht nur mit Beleg da: Job 1 übersprungen, Job 1 in einem
+  abgeschlossenen Lauf nie gestartet, oder im gelesenen Log von Job 1 ein Code vor dem Claude-Start
+  (`auftrag-label-start-fehlt`, `auftrag-freigabe-entzogen`) ohne Kostenzeile. Sonst, auch bei wartendem oder laufendem
+  Job 1, steht „unbekannt“ da. Vollständig ist die Summe nur, wenn die Laufliste vollständig ist und jeder Lauf des
+  Monats einen Beleg hat; sonst steht „mindestens … (unvollständig)“ da.
+- **Unsichere Zuordnungen:** Jobs aus einer unvollständigen Jobliste, PRs aus einer gescheiterten oder unvollständigen
+  PR-Liste und Issues aus einer unvollständigen Issue-Liste stehen als „unbekannt“ da. Mehrere passende PRs: „mehrere
+  passende PRs“. Eine unvollständige Check-Liste zeigt jeden Pflichtcheck als „unbekannt (Liste unvollständig)“.
 - **Sitzungen:** nur `name`, `cwd`, Start, letzte Aktivität, `status`, `kind` und die ersten 8 Zeichen der Sitzungs-ID aus
   `%USERPROFILE%\.claude\sessions\*.json`. Keine `.key`-Dateien, keine Links, keine Gesprächsinhalte. Für die Tiefe
   verlinkt die Seite die bestehende Sitzungsübersicht `Documents/claude-werkzeuge/sitzungen.html`, falls vorhanden.
@@ -67,8 +80,11 @@ Fehlen dem Token Rechte, steht im betroffenen Bereich „keine Berechtigung (403
 node werkzeuge/zentrale/echtprobe.mjs
 ```
 
-Prüft die Antwortklassen an echten 404, zeigt die Werte der bekannten Läufe 44765669207, 44793828526 und 44826212314 und
-die Monatssumme. Eine Schreibprobe gibt es in B1.1 nicht.
+Prüft die Antwortklassen an echten 404 und vergleicht die Läufe Live 2 (44765669207), NF2 (44793828526) und NF3
+(44826212314) mit festen Sollwerten: Issue, Jobzustände, Fehlercode, Runden, Kosten (Toleranz 0,000001 $) und Draft-PR.
+Exitcode 0 nur, wenn alles stimmt und die Daten vollständig sind. Jede Abweichung, ein fehlender oder außerhalb des
+Zeitfensters liegender Lauf, ein Teilfehler oder eine unvollständige Monatssumme ergibt Exitcode 1. Eine Schreibprobe
+gibt es in B1.1 nicht.
 
 ## Tests
 

@@ -6,6 +6,8 @@
 // Ausgabe %USERPROFILE%\.zentrale\zentrale.html (ueber eine Nebendatei und Umbenennen). Cache
 // %USERPROFILE%\.zentrale\cache.json nur mit ausgezogenen Werten abgeschlossener Jobs, nie Rohtext. Die Zentrale
 // schreibt nie auf GitHub. Exitcode 1 ohne Seite bei Token-Fehler, gescheiterter Startpruefung oder Geheimnis-Treffer.
+// Die Seite ist eine Momentaufnahme. Nur mit --schleife laedt der Browser sie neu; endet die Schleife (Strg+C oder
+// gescheiterter Durchlauf), wird die letzte Seite ohne Neuladen und mit Hinweis auf das Ende neu geschrieben.
 
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
@@ -13,7 +15,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
-  REPO, freigabenAus, issueZuLauf, jobsAus, laeufeAus, monatsKosten, offeneAuftraege, pflichtchecks, prZuLauf, restMinuten,
+  REPO, freigabenAus, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, monatsKosten, offeneAuftraege, pflichtchecks, prZuLauf, restMinuten,
   startfreigaben, wartenderJob,
 } from './daten.mjs';
 import { geheimnisTreffer, seite } from './darstellung.mjs';
@@ -101,38 +103,37 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
     b.kosten = fehl(runs.grund ?? 'unerwartete Antwort');
   } else {
     let teil = !runs.vollstaendig || generalprobe === null;
-    let kostenOffen = false;
 
-    // Kandidaten fuer die Issue-Zuordnung: alle Issues, deren Titel einem Lauftitel gleicht.
+    // Kandidaten fuer die Issue-Zuordnung: alle Issues, deren Titel einem Lauftitel gleicht. Nur eine vollstaendige
+    // Kandidatenliste traegt eine Zuordnung; sonst bleibt jedes Issue "unbekannt" und der Bereich sagt es.
     const alle = await leser.holeAlleSeiten(`${R}/issues?state=all&per_page=100`);
     const titel = new Set(laeufe.map(l => l.titel));
     const kandidaten = [];
+    const kandidatenVollstaendig = alle.klasse === 'ok' && alle.vollstaendig === true;
 
     if (alle.klasse === 'ok') {
       for (const i of alle.daten) {
         if (i && i.pull_request === undefined && Number.isInteger(i.number) && titel.has(i.title)) {
           const ev = await leser.holeAlleSeiten(`${R}/issues/${i.number}/events?per_page=100`);
-          kandidaten.push({ nummer: i.number, titel: i.title, url: typeof i.html_url === 'string' ? i.html_url : null, freigaben: ev.klasse === 'ok' ? startfreigaben(ev.daten) : null });
-          teil ||= ev.klasse !== 'ok';
+          const evOk = ev.klasse === 'ok' && ev.vollstaendig === true;
+          kandidaten.push({ nummer: i.number, titel: i.title, url: typeof i.html_url === 'string' ? i.html_url : null, freigaben: evOk ? startfreigaben(ev.daten) : null });
+          teil ||= !evOk;
         }
       }
-    } else {
-      teil = true;
     }
 
-    teil ||= alle.klasse === 'ok' && !alle.vollstaendig;
+    teil ||= !kandidatenVollstaendig;
     const pulls = await leser.holeAlleSeiten(`${R}/pulls?state=all&per_page=100`);
+    const pullsVollstaendig = pulls.klasse === 'ok' && pulls.vollstaendig === true;
     const freigaben = [];
     const eintraege = [];
 
     for (const l of laeufe) {
       const jr = await leser.holeAlleSeiten(`${R}/actions/runs/${l.id}/jobs?per_page=100`, { feld: 'jobs' });
-      const jobs = jr.klasse === 'ok' ? jobsAus(jr.daten) : [null, null, null, null];
-      teil ||= jr.klasse !== 'ok';
+      const jobs = jr.klasse === 'ok' ? jobsAus(jr.daten, jr.vollstaendig === true) : [null, null, null, null];
+      teil ||= jr.klasse !== 'ok' || jr.vollstaendig !== true;
       const codes = [];
-      let kosten = null;
-      let runden = null;
-      let offenKosten = false;
+      let auszug1;
 
       for (const [n, j] of jobs.entries()) {
         // Job 0 nur, wenn er rot endete (sonst hat er keinen Fehlercode); Jobs 1 bis 3, wenn abgeschlossen.
@@ -151,10 +152,6 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
           } else {
             auszug = null;
             teil = true;
-
-            if (n === 1) {
-              offenKosten = true;
-            }
           }
         }
 
@@ -162,25 +159,31 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
           codes.push(auszug.code);
         }
 
-        if (n === 1 && auszug) {
-          kosten = auszug.kosten;
-          runden = auszug.runden;
+        if (n === 1) {
+          auszug1 = auszug;
         }
       }
 
-      const issue = issueZuLauf(l, kandidaten);
+      // Kosten nur mit Beleg; ein gescheiterter Abruf, ein laufender oder unbekannter Job 1 lassen sie offen.
+      const k1 = kostenAusJob1(l, jobs[1], auszug1);
+      const issue = kandidatenVollstaendig ? issueZuLauf(l, kandidaten) : null;
       let pr = null;
 
-      if (issue !== null && jobs[3]?.conclusion === 'success') {
-        const p = pulls.klasse === 'ok' ? prZuLauf(pulls.daten, issue.nummer, l.id) : 'unbekannt';
+      // "Kein PR" nur, wenn Job 3 belegt nie lief (uebersprungen oder nie gestartet). Sonst wird gesucht, und jede
+      // Unsicherheit (Issue, Liste, mehrere Treffer) bleibt sichtbar.
+      const j3 = jobs[3];
+      const ohneJob3 = j3 !== null && (j3.status === 'nicht-gestartet' || j3.conclusion === 'skipped');
 
-        if (p && p !== 'unbekannt') {
+      if (!ohneJob3) {
+        const p = issue === null || pulls.klasse !== 'ok' ? 'unbekannt' : prZuLauf(pulls.daten, issue.nummer, l.id, pullsVollstaendig);
+
+        if (p !== null && typeof p === 'object') {
           const cr = p.sha ? await leser.holeAlleSeiten(`${R}/commits/${p.sha}/check-runs?per_page=100`, { feld: 'check_runs' }) : { klasse: 'unbekannt' };
-          pr = { ...p, checks: cr.klasse === 'ok' ? pflichtchecks(cr.daten) : [{ name: 'Pflichtchecks', ergebnis: 'unbekannt' }] };
-          teil ||= cr.klasse !== 'ok';
+          pr = { ...p, checks: cr.klasse === 'ok' ? pflichtchecks(cr.daten, cr.vollstaendig === true) : [{ name: 'Pflichtchecks', ergebnis: 'unbekannt' }] };
+          teil ||= cr.klasse !== 'ok' || cr.vollstaendig !== true;
         } else {
-          pr = p === null ? null : 'unbekannt';
-          teil ||= p === 'unbekannt';
+          pr = p;
+          teil ||= p !== null;
         }
       }
 
@@ -196,17 +199,17 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
         }
       }
 
-      kostenOffen ||= offenKosten;
       eintraege.push({
         id: l.id, url: l.url, start: l.start, issue: issue ? { nummer: issue.nummer, url: issue.url } : null, jobs,
-        code: codes.length === 0 ? null : codes.length === 1 ? codes[0] : 'mehrdeutig', kosten, runden, pr, kostenOffen: offenKosten,
+        code: codes.length === 0 ? null : codes.length === 1 ? codes[0] : 'mehrdeutig', kosten: k1.kosten, runden: k1.runden, pr, kostenOffen: k1.offen,
       });
     }
 
     const stempel = teil ? jetzt : null;
-    b.laeufe = { stand: jetzt, fehlschlag: null, teilFehler: stempel, eintraege, generalprobe, unvollstaendig: !runs.vollstaendig };
+    const summe = monatsKosten(eintraege, jetzt, runs.vollstaendig === true);
+    b.laeufe = { stand: jetzt, fehlschlag: null, teilFehler: stempel, eintraege, generalprobe, unvollstaendig: runs.vollstaendig !== true, kandidatenUnvollstaendig: !kandidatenVollstaendig };
     b.freigaben = { stand: jetzt, fehlschlag: null, teilFehler: stempel, eintraege: freigaben };
-    b.kosten = { stand: jetzt, fehlschlag: null, teilFehler: kostenOffen || !runs.vollstaendig ? jetzt : null, ...monatsKosten(eintraege, jetzt, runs.vollstaendig) };
+    b.kosten = { stand: jetzt, fehlschlag: null, teilFehler: summe.vollstaendig ? null : jetzt, ...summe };
   }
 
   // --- Bereich 4: Sitzungen -------------------------------------------------------------------------------------
@@ -246,9 +249,38 @@ function cacheLaden(fsImpl, datei) {
   }
 }
 
-// Ein Durchlauf. Liefert { exitcode, meldung, modell }.
+// Seite pruefen und schreiben. Liefert null bei Erfolg, sonst die Liste der Geheimnis-Treffer.
+function seiteSchreiben({ modell, jetzt, token, fsImpl, ordner, modus }) {
+  const html = seite(modell, jetzt, modus);
+  const treffer = geheimnisTreffer(html, token);
+
+  if (treffer.length > 0) {
+    return treffer;
+  }
+
+  fsImpl.mkdirSync(ordner, { recursive: true });
+  schreibeAtomar(join(ordner, 'zentrale.html'), html, fsImpl);
+  return null;
+}
+
+// Ende des Schleifenbetriebs: die letzte Seite ohne Neuladen und mit Hinweis auf das Ende neu schreiben, damit die
+// Datei nach dem Ende keine laufende Aktualisierung vortaeuscht. Wirft nie.
+export function schleifeBeenden({ modell, token, um, grund, fsImpl = fs, ordner = ORDNER }) {
+  if (!modell) {
+    return false;
+  }
+
+  try {
+    return seiteSchreiben({ modell, jetzt: um, token, fsImpl, ordner, modus: { schleife: true, beendet: { um, grund } } }) === null;
+  } catch {
+    return false;
+  }
+}
+
+// Ein Durchlauf. Liefert { exitcode, meldung, modell }. schleife: Seite mit Neuladen und Faelligkeit (nur in --schleife).
 export async function durchlauf({
   token, leser, jetzt, vorher = null, fsImpl = fs, ordner = ORDNER, sitzungen = () => leseSitzungen(), uebersicht = SITZUNGS_UEBERSICHT,
+  schleife = false,
 }) {
   const start = await leser.holeJson(`/repos/${REPO}`);
 
@@ -260,20 +292,24 @@ export async function durchlauf({
   const { modell: neu, cache } = await sammle({ leser, jetzt, cache: cacheLaden(fsImpl, cacheDatei), sitzungen });
   const modell = zusammenfuehren(vorher, neu);
   modell.sitzungsUebersicht = fsImpl.existsSync(uebersicht) ? pathToFileURL(uebersicht).href : null;
-  const html = seite(modell, jetzt);
-  const treffer = geheimnisTreffer(html, token);
+  const treffer = seiteSchreiben({ modell, jetzt, token, fsImpl, ordner, modus: { schleife } });
 
-  if (treffer.length > 0) {
+  if (treffer !== null) {
     return { exitcode: 1, meldung: `Seite nicht geschrieben: Geheimnis-Muster gefunden (${treffer.join(', ')})` };
   }
 
-  fsImpl.mkdirSync(ordner, { recursive: true });
-  schreibeAtomar(join(ordner, 'zentrale.html'), html, fsImpl);
   schreibeAtomar(cacheDatei, `${JSON.stringify(cacheBereinigt(cache))}\n`, fsImpl);
   return { exitcode: 0, meldung: `Zentrale geschrieben: ${join(ordner, 'zentrale.html')}`, modell };
 }
 
-export async function main(argv, { tokenLaden = ladeToken, leserBauen = erzeugeLeser, jetzt = () => Date.now(), warte = ms => new Promise(r => setTimeout(r, ms)), ausgabe = t => process.stdout.write(`${t}\n`), ...rest } = {}) {
+const STRG_C = handler => {
+  process.once('SIGINT', handler);
+};
+
+export async function main(argv, {
+  tokenLaden = ladeToken, leserBauen = erzeugeLeser, jetzt = () => Date.now(), warte = ms => new Promise(r => setTimeout(r, ms)),
+  ausgabe = t => process.stdout.write(`${t}\n`), beiAbbruch = STRG_C, beenden = code => process.exit(code), ...rest
+} = {}) {
   const schleife = argv.includes('--schleife');
 
   if (argv.some(a => a !== '--schleife')) {
@@ -290,12 +326,28 @@ export async function main(argv, { tokenLaden = ladeToken, leserBauen = erzeugeL
 
   const leser = leserBauen({ token: t.token });
   let vorher = null;
+  // Wo beim Abschluss geschrieben wird: dieselben Werte wie im Durchlauf.
+  const ziel = { fsImpl: rest.fsImpl ?? fs, ordner: rest.ordner ?? ORDNER };
+
+  if (schleife) {
+    beiAbbruch(() => {
+      schleifeBeenden({ modell: vorher, token: t.token, um: jetzt(), grund: 'Strg+C', ...ziel });
+      ausgabe('Schleife beendet (Strg+C). Die Seite trägt den Hinweis auf das Ende.');
+      beenden(130);
+    });
+  }
 
   for (;;) {
-    const r = await durchlauf({ token: t.token, leser, jetzt: jetzt(), vorher, ...rest });
+    const r = await durchlauf({ token: t.token, leser, jetzt: jetzt(), vorher, schleife, ...rest });
     ausgabe(r.meldung);
 
-    if (!schleife || r.exitcode !== 0) {
+    if (!schleife) {
+      return r.exitcode;
+    }
+
+    if (r.exitcode !== 0) {
+      // Die zuletzt geschriebene Seite darf nach dem Abbruch kein Neuladen mehr versprechen.
+      schleifeBeenden({ modell: vorher, token: t.token, um: jetzt(), grund: 'Durchlauf gescheitert', ...ziel });
       return r.exitcode;
     }
 

@@ -47,7 +47,6 @@ test('Seite: CSP, Neuladen, kein externer Inhalt, Links nur auf das eigene Repos
   const html = seite(modell(), JETZT);
   assert.equal(CSP, "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'");
   assert.ok(html.includes(`<meta http-equiv="Content-Security-Policy" content="${CSP}">`));
-  assert.ok(html.includes('<meta http-equiv="refresh" content="60">'));
   assert.ok(html.includes('@media (max-width:700px)'));
   assert.ok(!/<(script|iframe|object|embed|link|img)\b/i.test(html));
   const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map(m => m[1]);
@@ -84,7 +83,7 @@ test('Seite: Werte und Texte (Fehlercode mit Klartext, Kosten, Frist mit Reserve
 });
 
 test('Veraltet und fehlgeschlagen (W8): nie alte Werte als aktuell', () => {
-  assert.equal(bereichZustand({ stand: JETZT - VERALTET_MS }, JETZT), 'aktuell');
+  assert.equal(bereichZustand({ stand: JETZT - VERALTET_MS }, JETZT), 'geladen');
   assert.equal(bereichZustand({ stand: JETZT - VERALTET_MS - 1 }, JETZT), 'veraltet');
   assert.equal(bereichZustand({ stand: JETZT, fehlschlag: JETZT }, JETZT), 'fehlgeschlagen');
   assert.equal(bereichZustand({ stand: JETZT - 1000, fehlschlag: JETZT }, JETZT), 'fehlgeschlagen');
@@ -102,6 +101,36 @@ test('Veraltet und fehlgeschlagen (W8): nie alte Werte als aktuell', () => {
 
   const teil = seite(modell({ teilFehler: JETZT }), JETZT);
   assert.ok(teil.includes('Abruf fehlgeschlagen um 10:20 UTC (teilweise)'));
+});
+
+test('K3: Momentaufnahme mit Erzeugungszeit, Neuladen nur im Schleifenbetrieb, nach dem Ende kein Neuladen', () => {
+  const REFRESH = '<meta http-equiv="refresh" content="60">';
+  const einmal = seite(modell(), JETZT);
+  assert.ok(einmal.includes('<strong>Momentaufnahme: erzeugt am 21.11.2026 um 10:20 UTC.</strong>'), 'Kennzeichnung fehlt');
+  assert.ok(einmal.includes('Die Seite erneuert sich nicht von selbst.'));
+  assert.ok(!einmal.includes(REFRESH), 'Neuladen ohne Schleife');
+  assert.ok(!/http-equiv="refresh"/i.test(einmal));
+  assert.ok(!/aktuell/i.test(einmal), 'die Seite behauptet Aktualitaet');
+  assert.ok(einmal.includes('<title>Zentrale (Momentaufnahme 10:20 UTC)</title>'));
+
+  const schleife = seite(modell(), JETZT, { schleife: true });
+  assert.ok(schleife.includes(REFRESH), 'Muss-Treffer: Neuladen im Schleifenbetrieb');
+  assert.ok(schleife.includes('Momentaufnahme: erzeugt am 21.11.2026 um 10:20 UTC.'));
+  assert.ok(schleife.includes('eine neue Momentaufnahme ist bis 10:23 UTC fällig'));
+  assert.ok(schleife.includes('läuft die Schleife nicht mehr und die Werte sind veraltet'));
+  assert.ok(!/aktuell/i.test(schleife));
+
+  const ende = seite(modell(), JETZT + 5 * 60_000, { schleife: true, beendet: { um: JETZT + 5 * 60_000, grund: 'Strg+C' } });
+  assert.ok(!ende.includes(REFRESH), 'Neuladen nach dem Ende');
+  assert.ok(ende.includes('Die Schleife wurde am 21.11.2026 um 10:25 UTC beendet (Strg+C). Diese Seite wird nicht mehr erneuert.'));
+  assert.ok(ende.includes('Momentaufnahme: erzeugt am 21.11.2026 um 10:20 UTC.'));
+  assert.ok(!ende.includes('fällig'));
+
+  // CSP unveraendert, kein Skript in allen drei Formen.
+  for (const h of [einmal, schleife, ende]) {
+    assert.ok(h.includes(`content="${CSP}"`));
+    assert.ok(!/<script/i.test(h));
+  }
 });
 
 test('Geheimnis-Filter (W9): Seite mit Muster oder Token-Wert wird nicht geschrieben, Exitcode 1', async () => {

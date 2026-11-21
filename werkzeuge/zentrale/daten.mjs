@@ -8,6 +8,10 @@ export const FRIST_MS = 60 * 60 * 1000;
 export const ZUORDNUNG_MS = 60 * 1000;
 export const PFLICHTCHECKS = Object.freeze(['build', 'tests', 'schutzdateien', 'agent-auftrag-sammel']);
 export const ACTIONS_APP_ID = 15368;
+// Codes, die Job 1a vor dem Start von Claude ausgibt (scripts/agent-code-auftrag.mjs). Der Claude-Schritt druckt die
+// Kostenzeile, sobald Claude erfolgreich lief; steht einer dieser Codes ohne Kostenzeile im gelesenen Log von Job 1,
+// ist belegt, dass Claude nicht lief.
+export const CLAUDE_NICHT_GESTARTET = Object.freeze(['auftrag-label-start-fehlt', 'auftrag-freigabe-entzogen']);
 
 const istObjekt = x => typeof x === 'object' && x !== null && !Array.isArray(x);
 const text = (x, max = 300) => (typeof x === 'string' && x.length <= max ? x : null);
@@ -85,14 +89,20 @@ export function issueZuLauf(lauf, kandidaten) {
     return null;
   }
 
-  const treffer = kandidaten.filter(k => k.titel === lauf.titel && Array.isArray(k.freigaben)
-    && k.freigaben.some(ms => ms <= lauf.start && lauf.start - ms <= ZUORDNUNG_MS));
+  const gleich = kandidaten.filter(k => k.titel === lauf.titel);
+
+  // Ein Kandidat mit unbekannten Ereignissen koennte der richtige sein: dann nicht raten.
+  if (gleich.some(k => !Array.isArray(k.freigaben))) {
+    return null;
+  }
+
+  const treffer = gleich.filter(k => k.freigaben.some(ms => ms <= lauf.start && lauf.start - ms <= ZUORDNUNG_MS));
   return treffer.length === 1 ? treffer[0] : null;
 }
 
-// Jobs 0 bis 3 nach Namen "Job <n> ...". Fehlt ein Job in der (vollstaendig geladenen) Liste: nicht gestartet.
-// Doppelte Namen ergeben fuer diesen Job "unbekannt" (null).
-export function jobsAus(jobs) {
+// Jobs 0 bis 3 nach Namen "Job <n> ...". Fehlt ein Job in der vollstaendig geladenen Liste: nicht gestartet.
+// Fehlt er in einer unvollstaendigen Liste, ist er unbekannt (null). Doppelte Namen ergeben ebenfalls null.
+export function jobsAus(jobs, vollstaendig = true) {
   const ergebnis = [null, null, null, null];
 
   if (!Array.isArray(jobs)) {
@@ -113,19 +123,29 @@ export function jobsAus(jobs) {
     ergebnis[n] = { id: j.id, status: text(j.status, 40), conclusion: text(j.conclusion, 40) };
   }
 
-  return ergebnis.map((j, n) => (gesehen[n] === 1 ? j : gesehen[n] === 0 ? { id: null, status: 'nicht-gestartet', conclusion: null } : null));
+  return ergebnis.map((j, n) => (gesehen[n] === 1 ? j : gesehen[n] === 0 && vollstaendig === true ? { id: null, status: 'nicht-gestartet', conclusion: null } : null));
 }
 
-// Draft-PR zum Lauf: head.ref genau wp/<issue>-agent-<lauf>-1. Mehrere Treffer: null.
-export function prZuLauf(pulls, issueNummer, laufId) {
+// Draft-PR zum Lauf: head.ref genau wp/<issue>-agent-<lauf>-1. "Kein PR" (null) nur bei vollstaendiger Liste ohne
+// Treffer. Mehrere Treffer: 'mehrdeutig'. Unvollstaendige oder unbrauchbare Liste: 'unbekannt' (ein Treffer oder ein
+// zweiter koennte auf einer nicht geladenen Seite stehen).
+export function prZuLauf(pulls, issueNummer, laufId, vollstaendig = true) {
   if (!Array.isArray(pulls) || !Number.isInteger(issueNummer)) {
-    return null;
+    return 'unbekannt';
   }
 
   const ref = `wp/${issueNummer}-agent-${laufId}-1`;
   const treffer = pulls.filter(p => istObjekt(p) && istObjekt(p.head) && p.head.ref === ref && Number.isInteger(p.number));
 
-  if (treffer.length !== 1) {
+  if (treffer.length > 1) {
+    return 'mehrdeutig';
+  }
+
+  if (vollstaendig !== true) {
+    return 'unbekannt';
+  }
+
+  if (treffer.length === 0) {
     return null;
   }
 
@@ -136,9 +156,14 @@ export function prZuLauf(pulls, issueNummer, laufId) {
 
 // Die vier Pflichtchecks am PR-Kopf, nur von GitHub Actions (app.id 15368). Fehlend: "fehlt"; mehrere
 // Ergebnisse mit unterschiedlichem Ausgang: "uneinheitlich".
-export function pflichtchecks(checkRuns) {
+// Unvollstaendige Liste: jeder Check sichtbar unbekannt.
+export function pflichtchecks(checkRuns, vollstaendig = true) {
   if (!Array.isArray(checkRuns)) {
     return null;
+  }
+
+  if (vollstaendig !== true) {
+    return PFLICHTCHECKS.map(name => ({ name, ergebnis: 'unbekannt (Liste unvollständig)' }));
   }
 
   return PFLICHTCHECKS.map(name => {
@@ -180,8 +205,43 @@ export function monat(ms) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-// Monatssumme (UTC) aus den Laeufen. vollstaendig nur, wenn die Laufliste vollstaendig ist und fuer jeden Lauf
-// mit gelaufenem Job 1 feststeht, ob es Kosten gibt.
+// Kosten eines Laufs aus Job 1: { kosten, runden, offen }. offen heisst: nicht belegt, ob und wie viel Claude
+// gekostet hat. "Keine Kosten" (kosten null, offen false) nur mit Beleg: Job 1 uebersprungen; Job 1 in der
+// vollstaendigen Jobliste eines abgeschlossenen Laufs nie gestartet; oder Job-1-Log gelesen, ohne Kostenzeile, mit
+// einem Code aus CLAUDE_NICHT_GESTARTET. auszug: Ergebnis von logAuszug, null bei gescheitertem Abruf.
+export function kostenAusJob1(lauf, job1, auszug) {
+  const offen = { kosten: null, runden: null, offen: true };
+  const keine = { kosten: null, runden: null, offen: false };
+
+  if (!istObjekt(job1)) {
+    return offen;
+  }
+
+  if (job1.status === 'nicht-gestartet') {
+    return istObjekt(lauf) && lauf.status === 'completed' ? keine : offen;
+  }
+
+  if (job1.status !== 'completed') {
+    return offen;
+  }
+
+  if (job1.conclusion === 'skipped') {
+    return keine;
+  }
+
+  if (!istObjekt(auszug)) {
+    return offen;
+  }
+
+  if (Number.isFinite(auszug.kosten)) {
+    return { kosten: auszug.kosten, runden: Number.isInteger(auszug.runden) ? auszug.runden : null, offen: false };
+  }
+
+  return CLAUDE_NICHT_GESTARTET.includes(auszug.code) ? keine : offen;
+}
+
+// Monatssumme (UTC) aus den Laeufen. vollstaendig nur, wenn die Laufliste vollstaendig ist, jeder Lauf eine
+// Startzeit hat und fuer jeden Lauf des Monats belegt ist, ob er Kosten hatte (kostenOffen === false).
 export function monatsKosten(laeufe, jetzt, listeVollstaendig) {
   const m = monat(jetzt);
   let summe = 0;
@@ -190,7 +250,12 @@ export function monatsKosten(laeufe, jetzt, listeVollstaendig) {
   let offen = false;
 
   for (const l of laeufe) {
-    if (l.start === null || monat(l.start) !== m) {
+    if (!Number.isFinite(l.start)) {
+      offen = true;
+      continue;
+    }
+
+    if (monat(l.start) !== m) {
       continue;
     }
 
@@ -200,7 +265,7 @@ export function monatsKosten(laeufe, jetzt, listeVollstaendig) {
     } else {
       ohneKosten += 1;
 
-      if (l.kostenOffen) {
+      if (l.kostenOffen !== false) {
         offen = true;
       }
     }
