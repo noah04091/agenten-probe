@@ -7,9 +7,10 @@
 // abgelehnt.
 //
 // Zwei Teile, beide mit derselben Abruf-Logik wie die Zentrale (sammle):
-//   1. Historischer Teil: sammle() mit dem festen Zeitpunkt REFERENZ_JETZT (Ende November 2026). Das Fenster beginnt
-//      damit immer am 2026-10-31, unabhaengig vom Tag der Probe. Geprueft werden Live 2, NF2, NF3 gegen SOLL und der
-//      November gegen MONAT_SOLL: belegte Summe, Zahl der Kostenlaeufe und genau die bekannten unbelegten Laeufe.
+//   1. Historischer Teil: sammle() mit dem festen Zeitpunkt REFERENZ_JETZT (Ende November 2026) und einem Leser, der
+//      die Issue-Laufliste serverseitig auf 2026-10-31 bis 2026-11-20 begrenzt. Spaetere Laeufe kommen damit gar nicht
+//      erst an. Geprueft werden Live 2, NF2, NF3 gegen SOLL und der November gegen MONAT_SOLL: belegte Summe, Zahl der
+//      Kostenlaeufe und genau die bekannten unbelegten Laeufe.
 //   2. Laufender Teil: sammle() mit der echten Uhrzeit. Der laufende Monat muss belegt vollstaendig sein; erlaubt ist
 //      nur ein unbelegter Lauf, der als historischer Sonderfall in MONAT_SOLL steht und in diesen Monat faellt.
 //
@@ -24,6 +25,45 @@ import { sammle } from './zentrale.mjs';
 export const KOSTEN_TOLERANZ = 1e-6;
 // Fester Zeitpunkt fuer den historischen Teil: letzte Sekunde des Novembers 2026 (UTC).
 export const REFERENZ_JETZT = Date.parse('2026-11-30T23:59:59Z');
+// Der historische Bestand ist bis einschliesslich 20.11.2026 unabhaengig geprueft (17 Laeufe). Die Issue-Laufliste
+// des historischen Abrufs wird deshalb serverseitig auf 2026-10-31 bis 2026-11-20 begrenzt: Aus dem Filter, den
+// sammle() fuer REFERENZ_JETZT baut, wird ein Datumsbereich. ".." steht URL-kodiert da, weil github-lesen.mjs ".." im
+// Pfad ablehnt; GitHub dekodiert es (gegengeprueft: dieselben 17 Laeufe wie mit "..").
+export const LAUFLISTE_PFAD = '/actions/workflows/agent-auftrag.yml/runs?event=issues&';
+export const FILTER_OFFEN = 'created=%3E%3D2026-10-31';
+export const FILTER_REFERENZ = 'created=2026-10-31%2E%2E2026-11-20';
+
+// Leser fuer den historischen Abruf: schreibt genau in der Issue-Laufliste den offenen Filter in den Bereich um und
+// zaehlt, wie oft. Alle anderen Abrufe gehen unveraendert durch.
+export function referenzLeser(leser) {
+  const zaehler = { umschreibungen: 0 };
+  const umschreiben = pfad => {
+    if (typeof pfad === 'string' && pfad.includes(LAUFLISTE_PFAD) && pfad.includes(FILTER_OFFEN)) {
+      zaehler.umschreibungen += 1;
+      return pfad.replace(FILTER_OFFEN, FILTER_REFERENZ);
+    }
+
+    return pfad;
+  };
+
+  return {
+    zaehler,
+    leser: {
+      holeJson: pfad => leser.holeJson(umschreiben(pfad)),
+      holeAlleSeiten: (pfad, optionen) => leser.holeAlleSeiten(umschreiben(pfad), optionen),
+      holeLog: id => leser.holeLog(id),
+    },
+  };
+}
+
+// Historischer Abruf mit begrenzter Laufliste. Greift die Umschreibung nicht genau einmal, ist der Abruf kein Beleg:
+// fehler nennt dann den Grund.
+export async function historischerAbruf(leser, sammleImpl = sammle) {
+  const r = referenzLeser(leser);
+  const { modell } = await sammleImpl({ leser: r.leser, jetzt: REFERENZ_JETZT, cache: {}, sitzungen: () => ({ ok: true, eintraege: [] }) });
+  const n = r.zaehler.umschreibungen;
+  return { bereiche: modell.bereiche, fehler: n === 1 ? null : `Begrenzung auf 2026-10-31 bis 2026-11-20 griff ${n}-mal statt genau einmal` };
+}
 
 // Feste Sollwerte, unabhaengig vom geprueften Programm aus den Laeufen auf GitHub abgeschrieben (Job-Liste, Logzeile
 // "Claude beendet" in Job 1, Zeile "A6-FEHLER" im scheiternden Job, Draft-PR). Terminal 1 prueft sie zusaetzlich gegen
@@ -147,7 +187,9 @@ function vollstaendigText(laeufe) {
   };
 }
 
-export async function echtprobe(argv, { tokenLaden = ladeToken, leserBauen = erzeugeLeser, ausgabe = t => process.stdout.write(`${t}\n`), jetzt = Date.now() } = {}) {
+export async function echtprobe(argv, {
+  tokenLaden = ladeToken, leserBauen = erzeugeLeser, ausgabe = t => process.stdout.write(`${t}\n`), jetzt = Date.now(), historisch = historischerAbruf,
+} = {}) {
   if (argv.includes('--schreibprobe')) {
     ausgabe('Abgelehnt: eine Schreibprobe ist in B1.1 nicht enthalten und braucht ein eigenes GO.');
     return 2;
@@ -180,8 +222,10 @@ export async function echtprobe(argv, { tokenLaden = ladeToken, leserBauen = erz
 
   const ohneSitzungen = () => ({ ok: true, eintraege: [] });
 
-  // --- 1. Historischer Teil: fester Zeitpunkt, unabhaengig vom Tag der Probe --------------------------------------
-  const hist = (await sammle({ leser, jetzt: REFERENZ_JETZT, cache: {}, sitzungen: ohneSitzungen })).modell.bereiche;
+  // --- 1. Historischer Teil: fester Zeitpunkt, Laufliste serverseitig bis 2026-11-20 begrenzt ---------------------
+  const ha = await historisch(leser);
+  const hist = ha.bereiche;
+  melde('historisch-zeitraum', ha.fehler === null, ha.fehler ?? 'Laufliste 2026-10-31 bis 2026-11-20 (serverseitig begrenzt)');
   const hv = vollstaendigText(hist.laeufe);
   melde('historisch-laeufe', hv.ok, hv.text);
 

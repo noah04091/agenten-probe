@@ -13,7 +13,7 @@ import {
   restMinuten, startfreigaben,
 } from '../werkzeuge/zentrale/daten.mjs';
 import {
-  KOSTEN_TOLERANZ, MONAT_SOLL, REFERENZ_JETZT, SOLL, echtprobe, unbelegteLaeufe, vergleicheLauf, vergleicheMonat,
+  KOSTEN_TOLERANZ, MONAT_SOLL, REFERENZ_JETZT, SOLL, echtprobe, historischerAbruf, referenzLeser, unbelegteLaeufe, vergleicheLauf, vergleicheMonat,
 } from '../werkzeuge/zentrale/echtprobe.mjs';
 import { erzeugeLeser } from '../werkzeuge/zentrale/github-lesen.mjs';
 import { durchlauf, main, sammle, schleifeBeenden, zusammenfuehren } from '../werkzeuge/zentrale/zentrale.mjs';
@@ -344,12 +344,36 @@ function synthLog(s, n) {
   if (n === 1 && s.art === 'unbelegt') return '2026-11-10T09:01:00.0000000Z A6-CLAUDE aufruf-fehlgeschlagen\n';
   return '';
 }
-function november({ ohne = [44900000001], mehr = [] } = {}) {
+// created-Filter wie bei GitHub: ">=TAG" oder "VON..BIS" (beide Tage einschliesslich, UTC). Anderes: Fehler.
+function imZeitraum(created, filter) {
+  const tag = created.slice(0, 10);
+  let m = /^>=(\d{4}-\d{2}-\d{2})$/.exec(filter ?? '');
+
+  if (m) {
+    return tag >= m[1];
+  }
+
+  m = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(filter ?? '');
+  assert.ok(m, `unerwarteter created-Filter: ${filter}`);
+  return tag >= m[1] && tag <= m[2];
+}
+const runsAbrufe = [];
+// verfaelschen(liste, u): optional, aendert die gefilterte Liste vor dem Seitenschnitt (unvollstaendige Antworten).
+function november({ ohne = [44900000001], mehr = [], verfaelschen = null } = {}) {
   const synth = [...NOVEMBER, ...mehr].filter(s => !ohne.includes(s.id));
   return (p, u) => {
-    if (p === RUNS && u.searchParams.get('event') === 'issues' && (u.searchParams.get('page') ?? '1') === '1') {
-      const w = [...api('runs').workflow_runs.filter(x => !ohne.includes(x.id)), ...synth.map(synthLauf)];
-      return antwort(200, { total_count: w.length, workflow_runs: w });
+    if (p === RUNS && u.searchParams.get('event') === 'issues') {
+      runsAbrufe.push(u.searchParams.get('created'));
+      const alle = [...api('runs').workflow_runs.filter(x => !ohne.includes(x.id)), ...synth.map(synthLauf)];
+      let w = alle.filter(x => imZeitraum(x.created_at, u.searchParams.get('created')));
+      let gesamt = w.length;
+
+      if (verfaelschen) {
+        ({ w, gesamt } = verfaelschen(w, u));
+      }
+
+      const seite = Number(u.searchParams.get('page') ?? '1');
+      return antwort(200, { total_count: gesamt, workflow_runs: w.slice((seite - 1) * 100, seite * 100) });
     }
 
     let m = /\/actions\/runs\/(\d+)\/jobs$/.exec(p);
@@ -440,6 +464,85 @@ test('K2b: Monatswechsel: historischer Teil bleibt gueltig, kein Gruen durch das
   const ok = await probe(november({ mehr: [{ id: 44640000002, start: '2026-12-03T09:00:00Z', art: 'kosten', kosten: 0.01 }] }), dez);
   assert.equal(ok.code, 0, ok.text);
   assert.match(ok.text, /laufend-monat 2026-12: summe 0\.01 mit Kosten 1 vollstaendig true unbelegt \{\} .*OK/);
+});
+
+test('K2c: historischer Abruf serverseitig bis 2026-11-20 begrenzt, laufender Abruf unveraendert', async () => {
+  // Muss-Treffer: der wartende Lauf vom 21.11. erscheint im laufenden Teil, im historischen nicht.
+  runsAbrufe.length = 0;
+  const r = await probe(november({ ohne: [] }));
+  assert.deepEqual(runsAbrufe.filter(f => f.includes('..')), ['2026-10-31..2026-11-20'], 'historisch genau ein begrenzter Abruf');
+  assert.deepEqual(runsAbrufe.filter(f => f.startsWith('>=')), ['>=2026-10-22'], 'laufend unveraendert offen');
+  assert.match(r.text, /historisch-zeitraum: Laufliste 2026-10-31 bis 2026-11-20 \(serverseitig begrenzt\) OK/);
+  assert.match(r.text, /historisch-laeufe: 10 Laeufe, .* OK/);
+  assert.match(r.text, /historisch-monat 2026-11: summe 0\.17634\d* mit Kosten 6 unbelegt \{44620884909\} vollstaendig false OK/);
+  assert.match(r.text, /laufend-laeufe: 11 Laeufe/);
+  assert.match(r.text, /laufend-monat 2026-11: .*davon nicht als Sonderfall belegt \{44900000001\} .*ABWEICHUNG/);
+  assert.equal(r.code, 1);
+
+  // Zusaetzliche November-Laeufe nach dem 20.11.: historisch unberuehrt; laufend streng (unbelegt rot, belegt gruen).
+  const spaeterNov = Date.parse('2026-11-28T12:00:00Z');
+  const unbelegt = await probe(november({ mehr: [{ id: 44650000001, start: '2026-11-25T09:00:00Z', art: 'unbelegt' }] }), spaeterNov);
+  assert.equal(unbelegt.code, 1, unbelegt.text);
+  assert.match(unbelegt.text, /historisch-monat 2026-11: summe 0\.17634\d* mit Kosten 6 unbelegt \{44620884909\} vollstaendig false OK/);
+  assert.match(unbelegt.text, /laufend-monat 2026-11: .*unbelegt \{44620884909,44650000001\} davon nicht als Sonderfall belegt \{44650000001\} .*ABWEICHUNG/);
+  const belegt = await probe(november({ mehr: [{ id: 44650000002, start: '2026-11-25T09:00:00Z', art: 'kosten', kosten: 0.05 }] }), spaeterNov);
+  assert.equal(belegt.code, 0, belegt.text);
+  assert.match(belegt.text, /historisch-monat 2026-11: summe 0\.17634\d* mit Kosten 6 /);
+  assert.match(belegt.text, /laufend-monat 2026-11: summe 0\.22634\d* mit Kosten 7 /);
+
+  // Viele spaetere Laeufe (150, ueber zwei Seiten) im Dezember und Januar: der historische Teil sieht keinen davon.
+  const viele = Array.from({ length: 150 }, (_, i) => ({ id: 44700000000 + i, start: new Date(Date.parse('2026-12-20T00:00:00Z') + i * 3 * 3600 * 1000).toISOString(), art: i % 2 ? 'kosten' : 'ohneJob1', kosten: 0.001 }));
+  runsAbrufe.length = 0;
+  const jan = await probe(november({ mehr: viele }), Date.parse('2027-01-10T12:00:00Z'));
+  assert.equal(jan.code, 0, jan.text);
+  assert.match(jan.text, /historisch-laeufe: 10 Laeufe, Liste vollstaendig/);
+  assert.match(jan.text, /historisch-monat 2026-11: summe 0\.17634\d* mit Kosten 6 unbelegt \{44620884909\} vollstaendig false OK/);
+  assert.match(jan.text, /laufend-laeufe: 150 Laeufe, Liste vollstaendig/, 'Muss-Treffer: der laufende Teil sieht die spaeteren Laeufe');
+  assert.deepEqual(runsAbrufe.filter(f => f.includes('..')), ['2026-10-31..2026-11-20']);
+});
+
+test('K2c: unvollstaendige historische Antwort und Umschreibung nicht genau einmal: Exitcode 1', async () => {
+  const nurHistorisch = f => november({ verfaelschen: (w, u) => (u.searchParams.get('created').includes('..') ? f(w) : { w, gesamt: w.length }) });
+  // total_count groesser als geliefert.
+  let r = await probe(nurHistorisch(w => ({ w, gesamt: w.length + 5 })));
+  assert.equal(r.code, 1, r.text);
+  assert.match(r.text, /historisch-laeufe: .*Liste unvollstaendig.* ABWEICHUNG/);
+  assert.match(r.text, /laufend-laeufe: .*Liste vollstaendig.* OK/);
+  // Ein Lauf fehlt in der Antwort, total_count nennt ihn aber.
+  r = await probe(nurHistorisch(w => ({ w: w.filter(x => x.id !== 44620884909), gesamt: w.length })));
+  assert.equal(r.code, 1, r.text);
+  assert.match(r.text, /historisch-laeufe: .*Liste unvollstaendig.* ABWEICHUNG/);
+  // Historische Laufliste scheitert (500), die laufende nicht.
+  r = await probe(beide((p, u) => (p === RUNS && (u.searchParams.get('created') ?? '').includes('..') ? antwort(500, {}) : null), november()));
+  assert.equal(r.code, 1, r.text);
+  assert.match(r.text, /historisch-laeufe: Laufliste fehlgeschlagen .* ABWEICHUNG/);
+  assert.match(r.text, /lauf Live 2 44765669207: nicht pruefbar, Laufliste fehlgeschlagen ABWEICHUNG/);
+
+  // Umschreibung greift zweimal oder nie: kein Beleg.
+  const zeilen = [];
+  const code = await echtprobe([], {
+    tokenLaden: () => ({ ok: true, token: TOKEN }),
+    leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: github(beide(zweig, november())).f }),
+    ausgabe: t => zeilen.push(t), jetzt: JETZT,
+    historisch: l => historischerAbruf(l, async a => { await sammle(a); return sammle(a); }),
+  });
+  assert.equal(code, 1);
+  assert.match(zeilen.join('\n'), /historisch-zeitraum: Begrenzung auf 2026-10-31 bis 2026-11-20 griff 2-mal statt genau einmal ABWEICHUNG/);
+
+  const leerLeser = { holeJson: async () => ({ klasse: 'unbekannt' }), holeAlleSeiten: async () => ({ klasse: 'unbekannt' }), holeLog: async () => ({ klasse: 'unbekannt' }) };
+  const nie = await historischerAbruf(leerLeser, async () => ({ modell: { bereiche: {} } }));
+  assert.equal(nie.fehler, 'Begrenzung auf 2026-10-31 bis 2026-11-20 griff 0-mal statt genau einmal');
+  const einmal = await historischerAbruf(leerLeser, async ({ leser }) => { await leser.holeAlleSeiten(`${RUNS}?event=issues&per_page=100&created=%3E%3D2026-10-31`); return { modell: { bereiche: {} } }; });
+  assert.equal(einmal.fehler, null);
+
+  // Nur die Issue-Laufliste wird umgeschrieben; Generalprobe und andere Pfade gehen unveraendert durch.
+  const gesehen = [];
+  const rl = referenzLeser({ holeJson: async p => { gesehen.push(p); return {}; }, holeAlleSeiten: async p => { gesehen.push(p); return {}; }, holeLog: async () => ({}) });
+  await rl.leser.holeJson(`${RUNS}?event=pull_request&per_page=1&created=%3E%3D2026-10-31`);
+  await rl.leser.holeAlleSeiten(`${P}/issues?state=all&per_page=100`);
+  await rl.leser.holeAlleSeiten(`${RUNS}?event=issues&per_page=100&created=%3E%3D2026-10-31`, { feld: 'workflow_runs' });
+  assert.deepEqual(gesehen, [`${RUNS}?event=pull_request&per_page=1&created=%3E%3D2026-10-31`, `${P}/issues?state=all&per_page=100`, `${RUNS}?event=issues&per_page=100&created=2026-10-31%2E%2E2026-11-20`]);
+  assert.equal(rl.zaehler.umschreibungen, 1);
 });
 
 test('K2b: Monatsvergleich und unbelegte Laeufe als Einheit', () => {
