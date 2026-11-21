@@ -1,0 +1,65 @@
+[
+ {
+  "number": 79,
+  "title": "Text: Funktion umkehren(text) ergänzen",
+  "labels": [
+   {
+    "name": "agent:js-text"
+   }
+  ],
+  "state": "closed",
+  "updated_at": "2026-11-21T09:00:00Z",
+  "html_url": "https://github.com/noah04091/agenten-probe/issues/79"
+ },
+ {
+  "number": 80,
+  "title": "Text: Funktion grossschreiben(text) in src/text.js ergänzen",
+  "labels": [
+   {
+    "name": "agent:js-rechner"
+   }
+  ],
+  "state": "closed",
+  "updated_at": "2026-11-21T09:00:00Z",
+  "html_url": "https://github.com/noah04091/agenten-probe/issues/80"
+ },
+ {
+  "number": 81,
+  "title": "Rechner: Funktion bruttobetrag(netto) ergänzen",
+  "labels": [
+   {
+    "name": "agent:js-rechner"
+   }
+  ],
+  "state": "closed",
+  "updated_at": "2026-11-21T09:00:00Z",
+  "html_url": "https://github.com/noah04091/agenten-probe/issues/81"
+ },
+ {
+  "number": 90,
+  "title": "Text: Funktion zaehleVokale(text) ergänzen",
+  "labels": [
+   {
+    "name": "agent:js-text"
+   },
+   {
+    "name": "bot-auftrag"
+   }
+  ],
+  "state": "open",
+  "updated_at": "2026-11-21T09:00:00Z",
+  "html_url": "https://github.com/noah04091/agenten-probe/issues/90"
+ },
+ {
+  "number": 91,
+  "title": "Rechner: Funktion runde(x) ergänzen",
+  "labels": [
+   {
+    "name": "agent:js-rechner"
+   }
+  ],
+  "state": "open",
+  "updated_at": "2026-11-21T09:00:00Z",
+  "html_url": "https://github.com/noah04091/agenten-probe/issues/91"
+ }
+]

@@ -1,0 +1,13 @@
+[
+ {
+  "event": "labeled",
+  "label": {
+   "name": "agent:js-rechner"
+  },
+  "actor": {
+   "login": "noah04091"
+  },
+  "created_at": "2026-11-21T08:00:00Z",
+  "id": 1
+ }
+]

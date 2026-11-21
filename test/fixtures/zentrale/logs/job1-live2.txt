@@ -1,0 +1,9 @@
+﻿2026-11-20T15:42:10.1234567Z Current runner version: '2.330.0'
+2026-11-20T15:42:11.1234567Z ##[group]Run set -euo pipefail
+2026-11-20T15:42:12.1234567Z [36;1m  echo "A6-FEHLER nur-skriptanzeige"[0m
+2026-11-20T15:42:13.1234567Z [36;1m  jq -s -r '... "Claude beendet: Runden \(.num_turns), Kosten \(.total_cost_usd) USD"'[0m
+2026-11-20T15:42:14.1234567Z A6-PROTOKOLL vollstaendig
+2026-11-20T15:42:15.1234567Z A6-WERKZEUG Edit profil erfolgreich 2
+2026-11-20T15:42:16.1234567Z A6-DIAGNOSE ok
+2026-11-20T15:42:17.1234567Z Claude beendet: Runden 6, Kosten 0.047427800000000006 USD
+2026-11-20T15:42:18.1234567Z Cleaning up orphan processes
