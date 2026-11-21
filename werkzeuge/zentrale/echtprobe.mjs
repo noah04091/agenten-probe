@@ -2,21 +2,28 @@
 //
 //   node werkzeuge/zentrale/echtprobe.mjs
 //
-// Braucht Noahs Lese-Token in %USERPROFILE%\.zentrale\lese-token. Prueft die Antwortklassen an echten 404 und die
-// Werte der drei bekannten Laeufe gegen feste Sollwerte. Gibt nur feste Kennungen, Zahlen und Codes aus, nie den
-// Token-Wert oder Logtext. Eine Schreibprobe gibt es in B1.1 nicht (GO vom 21.11.2026); --schreibprobe wird abgelehnt.
+// Braucht Noahs Lese-Token in %USERPROFILE%\.zentrale\lese-token. Gibt nur feste Kennungen, Zahlen und Codes aus, nie
+// den Token-Wert oder Logtext. Eine Schreibprobe gibt es in B1.1 nicht (GO vom 21.11.2026); --schreibprobe wird
+// abgelehnt.
 //
-// Exitcode 0 nur, wenn jede Probe stimmt UND die Daten vollstaendig sind: kein Teilfehler, vollstaendige Laufliste,
-// vollstaendige Monatssumme, jeder Sollwert-Lauf vorhanden. Jede Abweichung, jeder fehlende oder nicht pruefbare
-// Lauf und jede Luecke ergibt Exitcode 1.
+// Zwei Teile, beide mit derselben Abruf-Logik wie die Zentrale (sammle):
+//   1. Historischer Teil: sammle() mit dem festen Zeitpunkt REFERENZ_JETZT (Ende November 2026). Das Fenster beginnt
+//      damit immer am 2026-10-31, unabhaengig vom Tag der Probe. Geprueft werden Live 2, NF2, NF3 gegen SOLL und der
+//      November gegen MONAT_SOLL: belegte Summe, Zahl der Kostenlaeufe und genau die bekannten unbelegten Laeufe.
+//   2. Laufender Teil: sammle() mit der echten Uhrzeit. Der laufende Monat muss belegt vollstaendig sein; erlaubt ist
+//      nur ein unbelegter Lauf, der als historischer Sonderfall in MONAT_SOLL steht und in diesen Monat faellt.
+//
+// Exitcode 0 nur, wenn jede Probe stimmt und die Daten vollstaendig sind. Jede Abweichung, jeder fehlende Lauf, jeder
+// zusaetzliche unbelegte Lauf, jeder Teilfehler und jede falsche Summe ergibt Exitcode 1.
 
-import { REPO } from './daten.mjs';
+import { REPO, monat } from './daten.mjs';
 import { erzeugeLeser } from './github-lesen.mjs';
 import { ladeToken } from './token.mjs';
 import { sammle } from './zentrale.mjs';
 
-const TAG_MS = 24 * 60 * 60 * 1000;
 export const KOSTEN_TOLERANZ = 1e-6;
+// Fester Zeitpunkt fuer den historischen Teil: letzte Sekunde des Novembers 2026 (UTC).
+export const REFERENZ_JETZT = Date.parse('2026-11-30T23:59:59Z');
 
 // Feste Sollwerte, unabhaengig vom geprueften Programm aus den Laeufen auf GitHub abgeschrieben (Job-Liste, Logzeile
 // "Claude beendet" in Job 1, Zeile "A6-FEHLER" im scheiternden Job, Draft-PR). Terminal 1 prueft sie zusaetzlich gegen
@@ -39,12 +46,12 @@ export const SOLL = Object.freeze([
   }),
 ]);
 
-// Fensteranfang wie in sammle(): der fruehere Zeitpunkt aus "vor 30 Tagen" und "Monatsanfang", auf den Tag gerundet.
-export function fensterAnfang(jetzt) {
-  const d = new Date(jetzt);
-  const tag = new Date(Math.min(jetzt - 30 * TAG_MS, Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)));
-  return Date.UTC(tag.getUTCFullYear(), tag.getUTCMonth(), tag.getUTCDate());
-}
+// November 2026, von ChatGPT und Terminal 1 unabhaengig aus den Laeufen und Logs ermittelt: 6 Laeufe mit belegten
+// Kosten, zusammen 0,1763432 USD; genau ein Lauf ohne Kostenbeleg (44620884909: Job 1 fehlgeschlagen, im Log weder
+// Kostenzeile noch Vor-Start-Code). Der Monat ist deshalb nur als Untergrenze belegt.
+export const MONAT_SOLL = Object.freeze({
+  monat: '2026-11', summe: 0.1763432, mitKosten: 6, unbelegt: Object.freeze([44620884909]), vollstaendig: false,
+});
 
 const jobText = j => (j ? `${j.status}/${j.conclusion}` : 'unbekannt');
 
@@ -54,6 +61,14 @@ function kostenText(l) {
   }
 
   return l.kostenOffen === false ? 'keine' : 'unbekannt';
+}
+
+// Laeufe eines Monats ohne Kostenbeleg (aufsteigend). Ein Lauf ohne Startzeit zaehlt mit, er koennte im Monat liegen.
+export function unbelegteLaeufe(eintraege, m) {
+  return eintraege
+    .filter(l => (!Number.isFinite(l.start) || monat(l.start) === m) && !Number.isFinite(l.kosten) && l.kostenOffen !== false)
+    .map(l => l.id)
+    .sort((a, b) => a - b);
 }
 
 // Vergleicht einen Lauf mit seinem Sollwert. Liefert die Liste der Abweichungen (leer heisst: stimmt).
@@ -90,6 +105,48 @@ export function vergleicheLauf(l, soll) {
   return ab;
 }
 
+// Vergleicht den Kostenbereich und die Laufliste eines Monats mit MONAT_SOLL. Liefert die Abweichungen.
+export function vergleicheMonat(kosten, eintraege, soll = MONAT_SOLL) {
+  const ab = [];
+
+  if (kosten.monat !== soll.monat) {
+    ab.push(`monat ${kosten.monat} statt ${soll.monat}`);
+  }
+
+  if (!Number.isFinite(kosten.summe) || Math.abs(kosten.summe - soll.summe) > KOSTEN_TOLERANZ) {
+    ab.push(`summe ${kosten.summe} statt ${soll.summe} (Toleranz ${KOSTEN_TOLERANZ})`);
+  }
+
+  if (kosten.mitKosten !== soll.mitKosten) {
+    ab.push(`mit Kosten ${kosten.mitKosten} statt ${soll.mitKosten}`);
+  }
+
+  const unbelegt = unbelegteLaeufe(eintraege, soll.monat).join(',');
+
+  if (unbelegt !== [...soll.unbelegt].sort((a, b) => a - b).join(',')) {
+    ab.push(`unbelegt {${unbelegt}} statt {${soll.unbelegt.join(',')}}`);
+  }
+
+  if (kosten.vollstaendig !== soll.vollstaendig) {
+    ab.push(`vollstaendig ${kosten.vollstaendig} statt ${soll.vollstaendig}`);
+  }
+
+  return ab;
+}
+
+// Vollstaendigkeit eines sammle()-Ergebnisses: Laufliste und Issue-Kandidaten vollstaendig, kein Teilfehler.
+function vollstaendigText(laeufe) {
+  if (laeufe.stand === null) {
+    return { ok: false, text: `Laufliste fehlgeschlagen (${laeufe.grund ?? 'unbekannt'})` };
+  }
+
+  const ok = !laeufe.unvollstaendig && !laeufe.kandidatenUnvollstaendig && laeufe.teilFehler === null;
+  return {
+    ok,
+    text: `${laeufe.eintraege.length} Laeufe, Liste ${laeufe.unvollstaendig ? 'unvollstaendig' : 'vollstaendig'}, Issue-Kandidaten ${laeufe.kandidatenUnvollstaendig ? 'unvollstaendig' : 'vollstaendig'}, Teilfehler ${laeufe.teilFehler === null ? 'nein' : 'ja'}`,
+  };
+}
+
 export async function echtprobe(argv, { tokenLaden = ladeToken, leserBauen = erzeugeLeser, ausgabe = t => process.stdout.write(`${t}\n`), jetzt = Date.now() } = {}) {
   if (argv.includes('--schreibprobe')) {
     ausgabe('Abgelehnt: eine Schreibprobe ist in B1.1 nicht enthalten und braucht ein eigenes GO.');
@@ -121,29 +178,18 @@ export async function echtprobe(argv, { tokenLaden = ladeToken, leserBauen = erz
   pruefe('repo-fehlt', (await leser.holeJson('/repos/noah04091/gibt-es-nicht-b1-zentrale')).klasse, 'fehlt');
   pruefe('rate-limit', (await leser.holeJson('/rate_limit')).klasse, 'ok');
 
-  const { modell } = await sammle({ leser, jetzt, cache: {}, sitzungen: () => ({ ok: true, eintraege: [] }) });
-  const laeufe = modell.bereiche.laeufe;
-  const geladen = laeufe.stand !== null;
+  const ohneSitzungen = () => ({ ok: true, eintraege: [] });
 
-  // Vollstaendigkeit: ohne vollstaendige Daten kein Abnahmenachweis.
-  melde('laeufe-abruf', geladen, geladen ? `${laeufe.eintraege.length} Laeufe` : `fehlgeschlagen (${laeufe.grund ?? 'unbekannt'})`);
-  melde('laeufe-vollstaendig', geladen && !laeufe.unvollstaendig && !laeufe.kandidatenUnvollstaendig && laeufe.teilFehler === null,
-    geladen ? `Liste ${laeufe.unvollstaendig ? 'unvollstaendig' : 'vollstaendig'}, Issue-Kandidaten ${laeufe.kandidatenUnvollstaendig ? 'unvollstaendig' : 'vollstaendig'}, Teilfehler ${laeufe.teilFehler === null ? 'nein' : 'ja'}` : 'keine Daten');
-
-  const anfang = fensterAnfang(jetzt);
+  // --- 1. Historischer Teil: fester Zeitpunkt, unabhaengig vom Tag der Probe --------------------------------------
+  const hist = (await sammle({ leser, jetzt: REFERENZ_JETZT, cache: {}, sitzungen: ohneSitzungen })).modell.bereiche;
+  const hv = vollstaendigText(hist.laeufe);
+  melde('historisch-laeufe', hv.ok, hv.text);
 
   for (const soll of SOLL) {
-    const startSoll = Date.parse(soll.start);
-
-    if (startSoll < anfang) {
-      melde(`lauf ${soll.name} ${soll.id}`, false, `nicht pruefbar: Start ${soll.start} liegt vor dem Zeitfenster ab ${new Date(anfang).toISOString().slice(0, 10)}`);
-      continue;
-    }
-
-    const l = geladen ? laeufe.eintraege.find(x => x.id === soll.id) : undefined;
+    const l = hist.laeufe.stand === null ? undefined : hist.laeufe.eintraege.find(x => x.id === soll.id);
 
     if (!l) {
-      melde(`lauf ${soll.name} ${soll.id}`, false, geladen ? 'fehlt in der Laufliste, obwohl er im Zeitfenster liegt' : 'nicht pruefbar, Laufliste fehlgeschlagen');
+      melde(`lauf ${soll.name} ${soll.id}`, false, hist.laeufe.stand === null ? 'nicht pruefbar, Laufliste fehlgeschlagen' : 'fehlt in der Laufliste');
       continue;
     }
 
@@ -153,11 +199,36 @@ export async function echtprobe(argv, { tokenLaden = ladeToken, leserBauen = erz
     melde(`lauf ${soll.name} ${soll.id}`, ab.length === 0, ab.length === 0 ? ist : `${ist}; Abweichung: ${ab.join('; ')}`);
   }
 
-  const k = modell.bereiche.kosten;
-  melde(`monat ${k.monat ?? 'unbekannt'}`, k.stand !== null && k.vollstaendig === true,
-    k.stand === null ? 'fehlgeschlagen' : `summe ${k.summe} mit ${k.mitKosten} ohne ${k.ohneKosten} vollstaendig ${k.vollstaendig} (Summe nachrechnen gegen gh run view --log)`);
-  ausgabe(`INFO auftraege: ${modell.bereiche.auftraege.stand === null ? 'fehlgeschlagen' : modell.bereiche.auftraege.eintraege.length}`);
-  ausgabe(`INFO freigaben: ${modell.bereiche.freigaben.stand === null ? 'fehlgeschlagen' : modell.bereiche.freigaben.eintraege.length}`);
+  const hk = hist.kosten;
+
+  if (hk.stand === null || hist.laeufe.stand === null) {
+    melde(`historisch-monat ${MONAT_SOLL.monat}`, false, 'nicht pruefbar, Abruf fehlgeschlagen');
+  } else {
+    const ab = vergleicheMonat(hk, hist.laeufe.eintraege);
+    const ist = `summe ${hk.summe} mit Kosten ${hk.mitKosten} unbelegt {${unbelegteLaeufe(hist.laeufe.eintraege, MONAT_SOLL.monat).join(',')}} vollstaendig ${hk.vollstaendig}`;
+    melde(`historisch-monat ${MONAT_SOLL.monat}`, ab.length === 0, ab.length === 0 ? ist : `${ist}; Abweichung: ${ab.join('; ')}`);
+  }
+
+  // --- 2. Laufender Teil: echte Uhrzeit, laufender Monat streng ----------------------------------------------------
+  const akt = (await sammle({ leser, jetzt, cache: {}, sitzungen: ohneSitzungen })).modell.bereiche;
+  const av = vollstaendigText(akt.laeufe);
+  melde('laufend-laeufe', av.ok, av.text);
+  const m = monat(jetzt);
+
+  if (akt.kosten.stand === null || akt.laeufe.stand === null) {
+    melde(`laufend-monat ${m}`, false, 'nicht pruefbar, Abruf fehlgeschlagen');
+  } else {
+    // Erlaubt ist nur ein unbelegter Lauf, der als historischer Sonderfall genau dieses Monats feststeht.
+    const ausnahmen = MONAT_SOLL.monat === m ? MONAT_SOLL.unbelegt : [];
+    const unbelegt = unbelegteLaeufe(akt.laeufe.eintraege, m);
+    const fremd = unbelegt.filter(id => !ausnahmen.includes(id));
+    const belegt = akt.kosten.vollstaendig === true || (fremd.length === 0 && unbelegt.length > 0 && akt.laeufe.unvollstaendig === false);
+    melde(`laufend-monat ${m}`, belegt && fremd.length === 0,
+      `summe ${akt.kosten.summe} mit Kosten ${akt.kosten.mitKosten} vollstaendig ${akt.kosten.vollstaendig} unbelegt {${unbelegt.join(',')}}${fremd.length ? ` davon nicht als Sonderfall belegt {${fremd.join(',')}}` : ''} (Summe nachrechnen gegen gh run view --log)`);
+  }
+
+  ausgabe(`INFO auftraege: ${akt.auftraege.stand === null ? 'fehlgeschlagen' : akt.auftraege.eintraege.length}`);
+  ausgabe(`INFO freigaben: ${akt.freigaben.stand === null ? 'fehlgeschlagen' : akt.freigaben.eintraege.length}`);
   ausgabe(fehler === 0 ? 'ECHTPROBE BESTANDEN' : `ECHTPROBE NICHT BESTANDEN: ${fehler} Abweichungen`);
   return fehler === 0 ? 0 : 1;
 }

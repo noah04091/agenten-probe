@@ -12,7 +12,9 @@ import {
   CLAUDE_NICHT_GESTARTET, freigabenAus, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, monatsKosten, offeneAuftraege, pflichtchecks, prZuLauf,
   restMinuten, startfreigaben,
 } from '../werkzeuge/zentrale/daten.mjs';
-import { KOSTEN_TOLERANZ, SOLL, echtprobe, fensterAnfang, vergleicheLauf } from '../werkzeuge/zentrale/echtprobe.mjs';
+import {
+  KOSTEN_TOLERANZ, MONAT_SOLL, REFERENZ_JETZT, SOLL, echtprobe, unbelegteLaeufe, vergleicheLauf, vergleicheMonat,
+} from '../werkzeuge/zentrale/echtprobe.mjs';
 import { erzeugeLeser } from '../werkzeuge/zentrale/github-lesen.mjs';
 import { durchlauf, main, sammle, schleifeBeenden, zusammenfuehren } from '../werkzeuge/zentrale/zentrale.mjs';
 
@@ -319,29 +321,84 @@ async function probe(stoerung = () => null, jetzt = JETZT) {
   return { code, text: zeilen.join('\n') };
 }
 
-test('K2: Echt-Probe besteht nur mit allen Sollwerten und vollstaendigen Daten', async () => {
-  const gut = await probe(ohneLauf(44900000001));
+// K2b: nachgestellter November 2026 wie in der Referenz. Zu Live 2 (0,0474278) und NF2 (0,0268694) kommen vier weitere
+// Kostenlaeufe (zusammen 0,102046), also 6 Kostenlaeufe mit 0,1763432; dazu der unbelegte Lauf 44620884909 (Job 1 rot,
+// im Log weder Kostenzeile noch Vor-Start-Code) und zwei Laeufe ohne Job 1. Der wartende Lauf ist nicht dabei.
+const NOVEMBER = Object.freeze([
+  { id: 44600000001, start: '2026-11-03T09:00:00Z', art: 'kosten', kosten: 0.03 },
+  { id: 44600000002, start: '2026-11-04T09:00:00Z', art: 'kosten', kosten: 0.03 },
+  { id: 44600000003, start: '2026-11-05T09:00:00Z', art: 'kosten', kosten: 0.03 },
+  { id: 44600000004, start: '2026-11-06T09:00:00Z', art: 'kosten', kosten: 0.012046 },
+  { id: 44620884909, start: '2026-11-10T09:00:00Z', art: 'unbelegt' },
+  { id: 44610000001, start: '2026-11-11T09:00:00Z', art: 'ohneJob1' },
+  { id: 44610000002, start: '2026-11-12T09:00:00Z', art: 'ohneJob1' },
+]);
+const synthLauf = s => ({ id: s.id, status: 'completed', conclusion: s.art === 'kosten' ? 'success' : 'failure', created_at: s.start,
+  display_title: `Synth ${s.id}`, html_url: `https://github.com/noah04091/agenten-probe/actions/runs/${s.id}` });
+function synthJobs(s) {
+  const c = s.art === 'kosten' ? ['success', 'success', 'skipped', 'skipped'] : s.art === 'unbelegt' ? ['success', 'failure', 'skipped', 'skipped'] : ['failure', 'skipped', 'skipped', 'skipped'];
+  return { total_count: 4, jobs: c.map((k, n) => ({ id: s.id * 10 + n, name: `Job ${n} synth`, status: 'completed', conclusion: k })) };
+}
+function synthLog(s, n) {
+  if (n === 1 && s.art === 'kosten') return `2026-11-03T09:01:00.0000000Z Claude beendet: Runden 4, Kosten ${s.kosten} USD\n`;
+  if (n === 1 && s.art === 'unbelegt') return '2026-11-10T09:01:00.0000000Z A6-CLAUDE aufruf-fehlgeschlagen\n';
+  return '';
+}
+function november({ ohne = [44900000001], mehr = [] } = {}) {
+  const synth = [...NOVEMBER, ...mehr].filter(s => !ohne.includes(s.id));
+  return (p, u) => {
+    if (p === RUNS && u.searchParams.get('event') === 'issues' && (u.searchParams.get('page') ?? '1') === '1') {
+      const w = [...api('runs').workflow_runs.filter(x => !ohne.includes(x.id)), ...synth.map(synthLauf)];
+      return antwort(200, { total_count: w.length, workflow_runs: w });
+    }
+
+    let m = /\/actions\/runs\/(\d+)\/jobs$/.exec(p);
+    const s1 = m ? synth.find(x => x.id === Number(m[1])) : undefined;
+
+    if (s1) {
+      return antwort(200, synthJobs(s1));
+    }
+
+    m = /^\/log\/(\d+)$/.exec(p);
+    const s2 = m ? synth.find(x => x.id === Math.floor(Number(m[1]) / 10)) : undefined;
+    return s2 ? antwort(200, synthLog(s2, Number(m[1]) % 10)) : null;
+  };
+}
+// Generalprobe-Zaehler scheitert nur im historischen (Fenster ab 2026-10-31) oder nur im laufenden Abruf.
+const generalprobeKaputt = tag => (p, u) => (p === RUNS && u.searchParams.get('event') === 'pull_request' && u.searchParams.get('created') === `>=${tag}` ? antwort(500, {}) : null);
+
+test('K2: Echt-Probe besteht nur mit allen Sollwerten, der November-Referenz und streng belegtem laufendem Monat', async () => {
+  const gut = await probe(november());
   assert.equal(gut.code, 0, gut.text);
   assert.match(gut.text, /ECHTPROBE BESTANDEN/);
   assert.match(gut.text, /lauf Live 2 44765669207: issue 79 .* kosten 0\.047427800000000006 runden 6 pr #104 gemergt build=success .* OK/);
   assert.match(gut.text, /lauf NF3 44826212314: issue 80 .* code auftrag-label-start-fehlt kosten keine .* OK/);
+  assert.match(gut.text, /historisch-monat 2026-11: summe 0\.17634\d* mit Kosten 6 unbelegt \{44620884909\} vollstaendig false OK/);
+  assert.match(gut.text, /laufend-monat 2026-11: .*unbelegt \{44620884909\} .*OK/);
   assert.equal(SOLL.length, 3);
   assert.deepEqual(SOLL.map(s => s.id), [44765669207, 44793828526, 44826212314]);
+  assert.deepEqual({ ...MONAT_SOLL, unbelegt: [...MONAT_SOLL.unbelegt] }, { monat: '2026-11', summe: 0.1763432, mitKosten: 6, unbelegt: [44620884909], vollstaendig: false });
+  assert.equal(new Date(REFERENZ_JETZT).toISOString(), '2026-11-30T23:59:59.000Z');
 
   const faelle = [
-    ['Kosten weichen ab', beide(ohneLauf(44900000001), nur('/log/136488370273', () => antwort(200, 'Claude beendet: Runden 5, Kosten 0.0269 USD\n'))), /NF2 .*Abweichung: kosten 0\.0269 statt 0\.0268694/],
-    ['Code weicht ab', beide(ohneLauf(44900000001), nur('/log/136489652497', () => antwort(200, 'A6-FEHLER abnahme-ausgabe\n'))), /code abnahme-ausgabe statt abnahme-exitcode/],
-    ['Lauf fehlt im Zeitfenster', ohneLauf(44900000001, 44826212314), /NF3 44826212314: fehlt in der Laufliste/],
-    ['Log nicht ladbar', beide(ohneLauf(44900000001), nur('/log/136389814103', () => antwort(500, ''))), /Live 2 .*kosten unbekannt statt 0\.0474278/],
-    ['Monatssumme unvollstaendig', () => null, /monat 2026-11: summe .* vollstaendig false .*ABWEICHUNG/],
-    ['Teilfehler ohne sonstige Abweichung', beide(ohneLauf(44900000001), (p, u) => (p === RUNS && u.searchParams.get('event') === 'pull_request' ? antwort(500, {}) : null)), /laeufe-vollstaendig: .*Teilfehler ja ABWEICHUNG/],
+    ['falsche November-Kosten', beide(nur('/log/446000000011', () => antwort(200, 'Claude beendet: Runden 4, Kosten 0.0301 USD\n')), november()), /historisch-monat 2026-11: .*Abweichung: summe 0\.17644\d* statt 0\.1763432/],
+    ['niedrigere November-Kosten (Kostenlauf fehlt)', november({ ohne: [44900000001, 44600000004] }), /historisch-monat 2026-11: .*Abweichung: summe .* statt 0\.1763432 .*; mit Kosten 5 statt 6/],
+    ['Referenzlauf fehlt', november({ ohne: [44900000001, 44620884909] }), /historisch-monat 2026-11: .*Abweichung: unbelegt \{\} statt \{44620884909\}; vollstaendig true statt false/],
+    ['zusaetzlicher unbelegter Lauf im November', november({ mehr: [{ id: 44630000001, start: '2026-11-15T09:00:00Z', art: 'unbelegt' }] }), /historisch-monat 2026-11: .*unbelegt \{44620884909,44630000001\} statt \{44620884909\}/],
+    ['wartender Lauf ohne Kostenbeleg', november({ ohne: [] }), /laufend-monat 2026-11: .*davon nicht als Sonderfall belegt \{44900000001\} .*ABWEICHUNG/],
+    ['Kosten weichen ab', beide(nur('/log/136488370273', () => antwort(200, 'Claude beendet: Runden 5, Kosten 0.0269 USD\n')), november()), /NF2 .*Abweichung: kosten 0\.0269 statt 0\.0268694/],
+    ['Code weicht ab', beide(nur('/log/136489652497', () => antwort(200, 'A6-FEHLER abnahme-ausgabe\n')), november()), /code abnahme-ausgabe statt abnahme-exitcode/],
+    ['Lauf fehlt', november({ ohne: [44900000001, 44826212314] }), /NF3 44826212314: fehlt in der Laufliste/],
+    ['Log nicht ladbar', beide(nur('/log/136389814103', () => antwort(500, '')), november()), /Live 2 .*kosten unbekannt statt 0\.0474278/],
+    ['Teilfehler nur im historischen Abruf', beide(generalprobeKaputt('2026-10-31'), november()), /historisch-laeufe: .*Teilfehler ja ABWEICHUNG/],
+    ['Teilfehler nur im laufenden Abruf', beide(generalprobeKaputt('2026-10-22'), november()), /laufend-laeufe: .*Teilfehler ja ABWEICHUNG/],
     ['Laufliste gescheitert', p => (p === RUNS ? antwort(500, {}) : null), /nicht pruefbar, Laufliste fehlgeschlagen/],
-    ['PR fehlt', beide(ohneLauf(44900000001), nur(`${P}/pulls`, () => antwort(200, []))), /Live 2 .*pr kein PR statt #104/],
-    ['Jobzustand weicht ab', beide(ohneLauf(44900000001), nur(`${P}/actions/runs/44793828526/jobs`, () => {
+    ['PR fehlt', beide(nur(`${P}/pulls`, () => antwort(200, [])), november()), /Live 2 .*pr kein PR statt #104/],
+    ['Jobzustand weicht ab', beide(nur(`${P}/actions/runs/44793828526/jobs`, () => {
       const j = api('jobs-44793828526');
       return antwort(200, { ...j, jobs: j.jobs.map(x => (x.name.startsWith('Job 3 ') ? { ...x, conclusion: 'cancelled' } : x)) });
-    })), /NF2 .*Abweichung: jobs .*completed\/cancelled statt/],
-    ['Issue weicht ab', beide(ohneLauf(44900000001), nur(`${P}/issues/81/events`, () => antwort(200, []))), /NF2 .*Abweichung: issue unbekannt statt 81/],
+    }), november()), /NF2 .*Abweichung: jobs .*completed\/cancelled statt/],
+    ['Issue weicht ab', beide(nur(`${P}/issues/81/events`, () => antwort(200, [])), november()), /NF2 .*Abweichung: issue unbekannt statt 81/],
   ];
 
   for (const [name, stoerung, muster] of faelle) {
@@ -350,12 +407,56 @@ test('K2: Echt-Probe besteht nur mit allen Sollwerten und vollstaendigen Daten',
     assert.match(r.text, muster, name);
     assert.match(r.text, /ECHTPROBE NICHT BESTANDEN/, name);
   }
+});
 
-  // Ausserhalb des Zeitfensters: nicht pruefbar ist kein Erfolg.
-  const spaet = await probe(ohneLauf(44900000001), Date.parse('2027-01-15T10:00:00Z'));
-  assert.equal(spaet.code, 1, spaet.text);
-  assert.match(spaet.text, /Live 2 44765669207: nicht pruefbar: Start 2026-11-20T15:40:42Z liegt vor dem Zeitfenster ab 2026-12-16/);
-  assert.equal(new Date(fensterAnfang(JETZT)).toISOString(), '2026-10-22T00:00:00.000Z');
+test('K2b: Monatswechsel: historischer Teil bleibt gueltig, kein Gruen durch das Datum, neuer Monat streng', async () => {
+  // Januar 2027: das alte 30-Tage-Fenster ist laengst vorbei, der historische Teil prueft trotzdem voll.
+  const jan = Date.parse('2027-01-15T10:00:00Z');
+  const gut = await probe(november(), jan);
+  assert.equal(gut.code, 0, gut.text);
+  assert.match(gut.text, /lauf Live 2 44765669207: .* OK/);
+  assert.match(gut.text, /historisch-monat 2026-11: summe 0\.17634\d* mit Kosten 6 unbelegt \{44620884909\} vollstaendig false OK/);
+  assert.match(gut.text, /laufend-monat 2027-01: summe 0 mit Kosten 0 vollstaendig true unbelegt \{\} .*OK/);
+
+  // Im Januar faellt jede Abweichung im November weiter auf.
+  for (const [name, stoerung, muster] of [
+    ['falsche November-Kosten', beide(nur('/log/446000000011', () => antwort(200, 'Claude beendet: Runden 4, Kosten 0.0301 USD\n')), november()), /historisch-monat 2026-11: .*Abweichung: summe/],
+    ['Referenzlauf fehlt', november({ ohne: [44900000001, 44620884909] }), /historisch-monat 2026-11: .*Abweichung: unbelegt \{\}/],
+    ['zusaetzlicher unbelegter Lauf im November', november({ mehr: [{ id: 44630000001, start: '2026-11-15T09:00:00Z', art: 'unbelegt' }] }), /unbelegt \{44620884909,44630000001\} statt/],
+    ['Lauf fehlt', november({ ohne: [44900000001, 44793828526] }), /NF2 44793828526: fehlt in der Laufliste/],
+  ]) {
+    const r = await probe(stoerung, jan);
+    assert.equal(r.code, 1, `${name}: ${r.text}`);
+    assert.match(r.text, muster, name);
+  }
+
+  // Dezember: ein unbelegter Lauf im laufenden Monat ist kein Sonderfall, auch nicht mit der November-Ausnahme.
+  const dez = Date.parse('2026-12-05T10:00:00Z');
+  const r = await probe(november({ mehr: [{ id: 44640000001, start: '2026-12-03T09:00:00Z', art: 'unbelegt' }] }), dez);
+  assert.equal(r.code, 1, r.text);
+  assert.match(r.text, /laufend-monat 2026-12: .*vollstaendig false unbelegt \{44640000001\} davon nicht als Sonderfall belegt \{44640000001\} .*ABWEICHUNG/);
+  assert.match(r.text, /historisch-monat 2026-11: .* OK/);
+  // Gegenprobe: derselbe Dezember mit belegtem Kostenlauf besteht.
+  const ok = await probe(november({ mehr: [{ id: 44640000002, start: '2026-12-03T09:00:00Z', art: 'kosten', kosten: 0.01 }] }), dez);
+  assert.equal(ok.code, 0, ok.text);
+  assert.match(ok.text, /laufend-monat 2026-12: summe 0\.01 mit Kosten 1 vollstaendig true unbelegt \{\} .*OK/);
+});
+
+test('K2b: Monatsvergleich und unbelegte Laeufe als Einheit', () => {
+  const k = { monat: '2026-11', summe: 0.1763432, mitKosten: 6, vollstaendig: false };
+  const e = [{ id: 44620884909, start: Date.parse('2026-11-10T09:00:00Z'), kosten: null, kostenOffen: true },
+    { id: 1, start: Date.parse('2026-11-11T09:00:00Z'), kosten: null, kostenOffen: false },
+    { id: 2, start: Date.parse('2026-10-30T09:00:00Z'), kosten: null, kostenOffen: true }];
+  assert.deepEqual(vergleicheMonat(k, e), []);
+  assert.deepEqual(vergleicheMonat({ ...k, summe: 0.1763432 + 5e-7 }, e), []);
+  assert.equal(vergleicheMonat({ ...k, summe: 0.1763432 + 2e-6 }, e).length, 1);
+  assert.equal(vergleicheMonat({ ...k, summe: 0.1763432 - 2e-6 }, e).length, 1);
+  assert.equal(vergleicheMonat({ ...k, mitKosten: 7 }, e).length, 1);
+  assert.equal(vergleicheMonat({ ...k, monat: '2026-12' }, e).length, 1);
+  assert.equal(vergleicheMonat({ ...k, vollstaendig: true }, e).length, 1);
+  assert.deepEqual(unbelegteLaeufe(e, '2026-11'), [44620884909]);
+  assert.deepEqual(unbelegteLaeufe([...e, { id: 3, start: null, kosten: null }], '2026-11'), [3, 44620884909], 'ohne Startzeit zaehlt mit');
+  assert.equal(vergleicheMonat(k, [...e, { id: 4, start: Date.parse('2026-11-12T00:00:00Z'), kosten: null, kostenOffen: true }]).length, 1);
 });
 
 test('K2: Kostenvergleich mit Toleranz, Sollwerte nicht aus dem Programm', () => {
