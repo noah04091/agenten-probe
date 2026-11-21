@@ -2,8 +2,13 @@
 
 > Verbindlicher Projektstand für `noah04091/agenten-probe`. Wer neu einsteigt (neues Terminal,
 > neuer Chat, anderes Modell), liest zuerst diese Datei und arbeitet dann Abschnitt 12 ab.
-> Jede Änderung am System aktualisiert diese Datei im selben Pull Request. Stand: 09.11.2026,
-> nach A3 (PR #37 auf `main`, Commit `aa3646d`).
+> Jede Änderung am System aktualisiert diese Datei im selben Pull Request. Stand: 21.11.2026,
+> nach A8 (PR #106 auf `main`, Commit `0628e05e`). **Ziel A ist technisch erfüllt** (Abschnitt 6);
+> offiziell abgeschlossen wird es mit dem Merge dieser Abschlussdokumentation.
+>
+> **Betrieb der Pipeline** (Ablauf, Fehlerdiagnose, Notabschaltung, Wartung): `docs/agent-auftrag-betrieb.md`.
+> Abschnitte und Dokumente, die als historisch markiert sind, beschreiben frühere Stände und sind keine
+> Handlungsanweisung. Insbesondere steuert `CODE_PILOT_ENABLED` die heutige Pipeline nicht.
 
 ## 1. Ursprung: die Terminal- und Sitzungsorganisation (Ziel 0)
 
@@ -53,48 +58,58 @@ A von Anfang an ohne Festverdrahtung auf einzelne Issues gebaut (Paket A6).
 | Claude Code im Bot-Terminal `Documents/agenten-probe-agent` | baut und pflegt die Plattform, pusht nur auf `wp/*`, öffnet Draft-PRs | GitHub `noah04091-agent`, Rolle write, nur dieses Repo, keine Admin-Ausnahme |
 | Claude Code im Repo-Terminal mit Noahs Konto | Bestandsaufnahme, Gegenprüfung, Übergaben, **keine Schreibvorgänge auf GitHub** | Noahs Token (Admin), deshalb nur lesend |
 | ChatGPT | Architektur, Planung, unabhängige Gegenprüfung jedes Arbeitsblocks | nur lesend |
-| Agent in GitHub Actions | bearbeitet freigegebene Issues | Claude ohne Shell und ohne Schreibrechte; geschrieben wird nur in Job 3 mit kurzlebigem App-Token |
+| Agent in GitHub Actions (`agent-auftrag.yml`) | bearbeitet freigegebene Issues | Claude Code im Container, nur `Read` und `Edit` auf genau die Profildateien, ohne Shell, ohne Schreibrechte auf GitHub; geschrieben wird nur in Job 3 mit kurzlebigem App-Token |
 
 ## 4. Architektur
 
+Stand nach A8: einziger Agentenpfad `.github/workflows/agent-auftrag.yml`. Bis A5 lief der Code-Pilot
+ohne Job 0 in `code-pilot-claude-stufe.yml` (historisch, siehe Git-Historie dieser Datei).
+
 ```
- Noah ──(Issue + Label "bot-auftrag")──► GitHub Issue
-   │                                        │ issues:labeled (nur Workflows auf main)
+ Noah ──(Issue + Profil-Label "agent:<id>", danach Startlabel "bot-auftrag")──► GitHub Issue
+   │                                        │ issues:labeled, nur Workflow auf main
    │                                        ▼
-   │                ┌── Job 1 Generator ─────────────────────┐
-   │  bestätigt im  │ Environment "claude-bot"               │
-   ├──Actions-UI───►│ Claude: nur Read/Edit/Write, kein Bash │
-   │                │ Budget-Deckel, Ergebnis = Codepaket    │
-   │                └───────────────┬────────────────────────┘
-   │                                ▼ Artefakt (unveränderlich)
-   │                ┌── Job 2 Prüfer, keine Secrets ─────────┐
-   │                │ frische Kopie, Paket prüfen, Docker    │
-   │                │ ohne Netz: npm test, Abnahme, Build    │
-   │                └───────────────┬────────────────────────┘
+   │                ┌── Job 0 Auftrag festlegen, keine Secrets ──────────────┐
+   │                │ Issue, Labels, Profil, Startfreigabe (K3) prüfen,      │
+   │                │ Schnappschuss als Artefakt                             │
+   │                └───────────────┬────────────────────────────────────────┘
+   │  Freigabe 1 im                 ▼
+   ├─Environment──►┌── Job 1 Claude im Container ("claude-bot") ─────────────┐
+   │  "claude-bot"  │ 1a Auftrag erneut live prüfen, dann Claude Code nur    │
+   │                │ Read/Edit auf die Profildateien, Netz nur über einen   │
+   │                │ Vorschaltcontainer mit dem Schlüssel; 1b Codepaket     │
+   │                └───────────────┬────────────────────────────────────────┘
+   │                                ▼ Artefakt mit Hash
+   │                ┌── Job 2 Abnahme ohne Netz, keine Secrets ──────────────┐
+   │                │ frische Kopie, Paket prüfen, Docker ohne Netz:         │
+   │                │ npm test, Abnahme agent-acceptance/issue-<n>.mjs, Build│
+   │                └───────────────┬────────────────────────────────────────┘
+   │  Freigabe 2 im                 ▼
+   ├─Environment──►┌── Job 3 Draft-PR veröffentlichen ("claude-bot") ────────┐
+   │                │ Auftrag erneut live prüfen, Paket-Hash aus Job 1b,     │
+   │                │ kurzlebiges App-Token, Branch, Draft-PR                │
+   │                └───────────────┬────────────────────────────────────────┘
    │                                ▼
-   │                ┌── Job 3 Veröffentlicher ───────────────┐
-   │                │ Issue live neu prüfen, Paket erneut    │
-   │                │ prüfen, kurzlebiges App-Token, Branch, │
-   │                │ Draft-PR. Führt keinen Agentencode aus │
-   │                └───────────────┬────────────────────────┘
-   │                                ▼
-   │                Pflicht-CI: build, tests, schutzdateien
+   │    Pflicht-CI: build, tests, schutzdateien, agent-auftrag-sammel
    ▼                                ▼
- Review + Merge (nur Noah) ◄── Draft-PR ──► Project-Board
+ Review + Merge (nur Noah) ◄── Draft-PR
 ```
 
 **Wo die Sicherheit wirklich liegt:**
 1. Environment `claude-bot`: Secrets (`ANTHROPIC_API_KEY`, `BOT_APP_PRIVATE_KEY`) nur dort, nur für
-   `main`, jeder Lauf braucht Noahs Bestätigung. Auf Repo-Ebene liegen keine Secrets.
-2. Job 2 und 3 arbeiten auf frischen Kopien. Die Prüfung in Job 1 ist nur eine Vorprüfung, denn
-   Claude hat dort Schreibzugriff auf den Arbeitsbereich und könnte auch Prüfskripte verändern.
-3. Agentencode läuft nur im Docker-Container ohne Netz, ohne Secrets, schreibgeschützt, ohne Rechte.
-4. Ruleset `main-pruefungen` (ohne Ausnahme): PR-Pflicht, kein Force-Push, kein Löschen,
-   Pflicht-Checks `build`, `tests`, `schutzdateien`. Ruleset `main-freigabe`: Code-Owner-Freigabe,
-   Freigabe nach dem letzten Push, Ausnahme nur für die Admin-Rolle.
-5. Check `schutzdateien`: Ein PR, der nicht von Noah stammt, darf `.github/`, `.claude/`,
+   `main`, Pflichtprüfer nur Noah, ohne Admin-Umgehung. Jeder Lauf braucht zwei getrennte Freigaben
+   (vor Job 1 und vor Job 3). Auf Repo-Ebene liegen keine Secrets.
+2. Erlaubte Dateien, Budget und Grenzen kommen aus Profilen auf `main` (`agent-profiles/`), nie aus dem
+   Issue. Job 1 und Job 3 prüfen den Auftrag vor Claude beziehungsweise vor dem ersten Schreiben erneut
+   live; ein entzogenes Startlabel stoppt den Lauf (NF3).
+3. Claude sieht nur eine eigene Sicht mit den Profildateien. Job 2 und 3 arbeiten auf frischen Kopien.
+4. Agentencode läuft nur im Docker-Container ohne Netz, ohne Secrets, schreibgeschützt, ohne Rechte.
+5. Ruleset `main-pruefungen` (ohne Ausnahme): PR-Pflicht, kein Force-Push, kein Löschen,
+   Pflicht-Checks `build`, `tests`, `schutzdateien`, `agent-auftrag-sammel`. Ruleset `main-freigabe`:
+   Code-Owner-Freigabe, Freigabe nach dem letzten Push, Ausnahme nur für die Admin-Rolle.
+6. Check `schutzdateien`: Ein PR, der nicht von Noah stammt, darf `.github/`, `.claude/`,
    `CODEOWNERS`, `package.json`, `CLAUDE.md` nicht ändern.
-6. Actions nur aus festgepinnten SHAs, Standard-Token nur lesend, Actions dürfen keine PRs freigeben.
+7. Actions nur aus festgepinnten SHAs, Standard-Token nur lesend, Actions dürfen keine PRs freigeben.
 
 ## 5. Meilensteine
 
@@ -117,8 +132,53 @@ A von Anfang an ohne Festverdrahtung auf einzelne Issues gebaut (Paket A6).
 | 10.11. | **A5 Versuch 1 gescheitert:** Claude lief echt (Sonnet, 6 Runden, gemeldete Kosten **0,04 $**), die Abnahme in Job 2 lehnte das Paket ab, Job 3 wurde übersprungen, kein Branch, kein PR | Lauf 42778651853, Abschnitt 6 |
 | 10.11. | Vorgabe zu `-0` als Kommentar in `src/rechne.js`, Abnahme unverändert | PR #46 (Autor Bot, regulär freigegeben, `21b9b56`) |
 | 10.11. | **A5 abgeschlossen: erster echter Code-Lauf bis zum gemergten PR.** Claude schrieb die Multiplikation, Job 2 bestand die unabhängige Abnahme, die App öffnete einen Draft-PR mit genau den zwei Dateien, Noah gab ihn regulär frei. Gemeldete Kosten 0,04 $ (beide Versuche zusammen rund 0,08 $) | Lauf 42783596004, PR #47 (`a64cab3`), Abschnitt 6 |
+| 10.11. bis 13.11. | **A6.1 bis A6.3:** Profile, Auftragsmodul, Live-Prüfung, Prompt, Paket v2, Abnahme je Issue, Veröffentlicher, Offline-Nachspiel und Zwei-Profile-Trockenlauf | PR #49 bis #62, Abschnitt 10 |
+| 13.11. | **A6.4-S:** alter Agent `claude-agent.yml` per `false &&` gesperrt | PR #63 |
+| 16.11. bis 19.11. | **A6.4:** `agent-auftrag.yml` mit Job 0 bis 3 auf `main` (Policy, Trennregel, P-1, K3, Token-Fix, P-4, K1-Nachweis), `agent-auftrag-sammel` Pflichtcheck | Eigentümer-PRs #73, #75, #77, #86, #88, #91, #93 |
+| 18.11. | **NF1** (Kanarienprobe, #80): Auftrag verlangt eine Datei außerhalb des Profils; Claude lief (1 Runde, 0,02 $), `A6-FEHLER paket-unveraendert`, kein PR | Lauf 44409459526, Kommentar in #80 |
+| 19.11. | **Live 1** (#78, `js-rechner`): nach Fix Job 2 (PR #95) Job 0 bis 3 grün, Draft-PR #96. Dessen CI war in der Generalprobe rot (Testvorlage, behoben mit PR #98); zählt deshalb **nicht** als grüner Nachweis, PR #96 bleibt unverändert offen | Läufe 44509846928 und 44536520447 |
+| 20.11. | **Live 2** (#79, `js-text`): nach Protokollkorrektur 2b (PR #102) Job 0 bis 3 grün, 6 Runden, 0,05 $, CI grün, regulär gemergt | Lauf 44765669207, PR #104 (`231c91e9`) |
+| 20.11. | **Live 3** (#82, `js-rechner`): Job 0 bis 3 grün, 5 Runden, 0,03 $, CI grün, regulär gemergt | Lauf 44788592290, PR #105 (`2ec29f13`) |
+| 20.11. | **NF2** (#81): Claude setzte 7 % korrekt um, die unabhängige Abnahme verlangt 19 %; `A6-FEHLER abnahme-exitcode`, Job 3 übersprungen, kein PR | Lauf 44793828526, Kommentar in #81 |
+| 20.11. | **NF3** (#80): Startlabel entzogen, während Job 1 wartete; Job 1 stoppte vor Claude mit `A6-FEHLER auftrag-label-start-fehlt`, 0 $, kein PR | Lauf 44826212314, Kommentar in #80 |
+| 20.11. | **A8:** neun alte Workflows entfernt, Wache „einziger Agentenpfad“; #28 und #35 mit Begründung geschlossen | PR #106 (`0628e05e`), Abschnitt 6 |
 
-## 6. Ist-Zustand (10.11.2026, nach A5)
+## 6. Ist-Zustand (21.11.2026, nach A8)
+
+**Ziel A ist technisch erfüllt.** Die Kriterien aus Abschnitt 9:
+
+| Kriterium | Nachweis |
+|---|---|
+| drei Code-Aufträge echt bis zum Draft-PR mit grüner CI | #38 / PR #47 (A5, noch über den Code-Pilot), #79 / PR #104 und #82 / PR #105 (beide über `agent-auftrag.yml`); alle drei regulär freigegeben und gemergt |
+| drei Negativfälle ohne PR und mit Grund | NF1 und NF3 auf #80, NF2 auf #81; Grund je als Kommentar im Issue (die Pipeline selbst schreibt nichts ins Issue) |
+| kein Lauf ohne Noahs Bestätigung | Startlabel zählt nur von `noah04091` (K3); Claude startete in allen Läufen erst nach Noahs Freigabe vor Job 1, jede Veröffentlichung erst nach der zweiten Freigabe vor Job 3 |
+| ein einziger Agenten-Workflow | PR #106; Wache `test/a8-einziger-agentenpfad.test.mjs` in `npm test` |
+| diese Datei aktuell | mit diesem Stand |
+
+| Baustein | Stand | Ort |
+|---|---|---|
+| Agentenpfad | einziger Workflow mit Agent; Live-Jobs nur bei `issues` auf `main`, Generalprobe bei jedem PR | `.github/workflows/agent-auftrag.yml`, `.github/agent/` |
+| Workflows auf `main` | genau vier: `agent-auftrag`, `build`, `tests`, `schutz` | `.github/workflows/` |
+| Pflichtchecks | `build`, `tests`, `schutzdateien`, `agent-auftrag-sammel`; letzter Stand auf `main`: 845 Tests, 843 bestanden, 0 rot, 2 übersprungen | Ruleset `main-pruefungen` |
+| Profile | `js-rechner` und `js-text`, beide aktiv | `agent-profiles/` |
+| Abnahmen | je Issue eine Datei | `agent-acceptance/issue-<n>.mjs` |
+| Environment | `claude-bot`, Prüfer nur `noah04091`, nur `main`, keine Admin-Umgehung | GitHub-Einstellungen |
+| `CODE_PILOT_ENABLED` | nicht gesetzt und ohne Wirkung auf die heutige Pipeline | |
+| Alte Skripte | `agent-code-package`, `-publish`, `-dryrun`, `-activation-check` u. a. liegen noch in `scripts/`, werden von keinem Workflow aufgerufen; sie bleiben, weil `.github/agent/policy.json` sie hasht | `scripts/` |
+| Kosten bisher | Code-Läufe mit Kostenzeile zusammen rund 0,26 $ laut Claude Code (A5 zwei Läufe 0,08 $, über `agent-auftrag.yml` sechs Läufe 0,18 $); bei Live 2 Versuch 1 (Lauf 44620884909) fehlt die Kostenzeile, NF3 kostete nichts | Logs von Job 1 |
+| Betrieb | Ablauf, Fehlerdiagnose, Notabschaltung, Wartung | `docs/agent-auftrag-betrieb.md` |
+
+**Bekannte Einschränkungen:** immer nur ein Live-Lauf gleichzeitig; Neustart nur über ein neues
+Startlabel (höchstens drei je Issue, „Re-run“ wird abgelehnt); während eines Laufs darf `main` sich nicht
+bewegen; die Pipeline schreibt keinen Fehlergrund ins Issue (nur ins Log); Profile kennen nur bestehende
+Dateien; die Live-Prüfung in Job 3 vor dem Schreiben ist nur durch Code und Tests belegt, nicht durch einen
+eigenen Live-Lauf. Die Issues #78, #79, #81 und #82 sind noch offen und tragen `bot-auftrag`.
+
+### 6.1 Historisch: Ist-Zustand 10.11.2026 nach A5 (überholt)
+
+> Beschreibt den Code-Pilot vor A6. Die genannten Workflows `claude-agent.yml`,
+> `code-pilot-claude-stufe.yml`, `code-pilot-trockenlauf.yml` und die Probe-Workflows existieren seit A8
+> nicht mehr; der Schalter `CODE_PILOT_ENABLED` ist gegenstandslos.
 
 | Baustein | Stand | Ort |
 |---|---|---|
@@ -211,14 +271,15 @@ abgelehnt.
 
 | # | Punkt | Gewicht | Geplante Lösung |
 |---|---|---|---|
-| R1 | ~~Abbruch nach Branch-Erstellung hinterlässt Branch ohne PR~~ | erledigt | A1a (PR #40): gelöscht wird nur ein belegt eigener Branch vor der PR-Anfrage, sonst bleibt er stehen und der Grund steht im Issue |
+| R1 | ~~Abbruch nach Branch-Erstellung hinterlässt Branch ohne PR~~ | erledigt | A1a (PR #40): gelöscht wird nur ein belegt eigener Branch vor der PR-Anfrage, sonst bleibt er stehen. Bis A5 stand der Grund zusätzlich im Issue; die heutige Pipeline schreibt nur ins Log |
 | R2 | ~~Bindung geprüftes Paket zu veröffentlichtem Inhalt nur indirekt~~ | erledigt | A1b (PR #40, `f192b2a`): Hash aus Job 2, Bytevergleich, Blob-SHAs im Baum und im Diff; auf GitHub im Trockenlauf belegt |
-| R3 | **Offen.** Alles fest auf Issue #38 verdrahtet (Workflow, Prompt, Paket, Plan, Publisher, Abnahmetest), die Auftragsbeschreibung eingeschlossen. Der Issue-Text erreicht Claude nicht (belegt in A5 Versuch 1, Abschnitt 6); die Vorgabe für Versuch 2 kam nur als Kommentar im Code | hoch für Ziel A | Auftragsprofile in einer vertrauenswürdigen Datei auf `main` (A6) |
-| R4 | Zwei Agenten-Workflows lauschen auf dieselben Label-Ereignisse | niedrig | alten Agenten nach Ziel A stilllegen (A8) |
+| R3 | ~~Alles fest auf Issue #38 verdrahtet; der Issue-Text erreicht Claude nicht~~ | erledigt | A6: Auftragsprofile und Abnahmen auf `main`, Auftragstext aus dem geprüften Issue; belegt durch Live 2 und Live 3 mit zwei Profilen ohne Workflow-Änderung |
+| R4 | ~~Zwei Agenten-Workflows lauschen auf dieselben Label-Ereignisse~~ | erledigt | A8 (PR #106): neun alte Workflows entfernt, nur noch `agent-auftrag.yml`; Wache `test/a8-einziger-agentenpfad.test.mjs` |
 | R5 | Sitzungen mit Noahs Admin-Token können die Freigaberegel umgehen | mittel | Schreiben nur im Bot-Terminal, Repo-Terminal nur lesend |
-| R6 | Admin-Ausnahme in `main-freigabe` | bewusst | nötig, weil Noah einziger Code-Owner ist und eigene PRs nicht selbst freigeben kann. Bisher dreimal genutzt (PR #39, PR #37, PR #44), siehe Abschnitt 10 |
+| R6 | Admin-Ausnahme in `main-freigabe` | bewusst | nötig, weil Noah einziger Code-Owner ist und eigene PRs nicht selbst freigeben kann. Genutzt für PR #39, #37, #44 und für die Eigentümer-PRs mit geschützten Dateien (#63, #73, #75, #77, #86, #88, #91, #93, #95, #98, #102, #106), jeweils einzeln freigegeben; `main-pruefungen` wurde nie umgangen. Siehe Abschnitt 10 |
 | R8 | Jede Änderung an `.github/`, `CODEOWNERS`, `package.json` oder `CLAUDE.md` lässt sich nur per Admin-Ausnahme mergen: Ein Bot-PR scheitert an `schutzdateien`, ein PR von Noah an der Code-Owner-Freigabe (er kann den eigenen PR nicht freigeben). Gewöhnliche Agenten-PRs (nur Code) sind davon nicht betroffen, die gibt Noah regulär frei | hoch für Ziel B | entschieden: Weg A jetzt, Weg B vor B7 (Abschnitt 10). Plattform so bauen, dass Agentenarbeit nie geschützte Dateien braucht, etwa Auftragsprofile (A6) in einem eigenen Ordner unter `CODEOWNERS`, aber außerhalb von `schutzdateien` |
 | R7 | Bot-Token ist ein klassisches Token (nur `public_repo`) mit begrenzter Laufzeit. Das erste vom 02.11. lief am 09.11. ab; erneuert am 09.11., läuft laut GitHub am 09.12.2026 um 14:43 UTC ab | mittel | rechtzeitig vor Ablauf erneuern; langfristig auch das Bot-Terminal über kurzlebige App-Tokens |
+| R9 | Alte Skripte des Code-Piloten (`agent-code-package`, `-publish`, `-dryrun`, `-activation-check`, `-acceptance`, `agent-issue-*` u. a.) liegen nach A8 ungenutzt in `scripts/` | niedrig | bewusst nicht in A8 entfernt, weil `.github/agent/policy.json` sie hasht und eine Änderung die live bewiesene Kette berührt; Entfernen als eigener Eigentümer-PR in Ziel B |
 | W1 | **Wartung:** Der Anthropic-API-Schlüssel (`ANTHROPIC_API_KEY` im Environment `claude-bot`) läuft laut Noah am **02.12.2026** ab. Danach scheitert Job 1 | mittel | Noah erneuert den Schlüssel vor dem 02.12.2026 und hinterlegt ihn im Environment; Claude-Sitzungen fassen Secrets nicht an |
 
 ### Aufgabe A1a: keine verwaisten Branches (R1)
@@ -246,7 +307,7 @@ Lokale Vorschläge archiviert (`docs/archiv/2026-11-02-lokal/`), lokale Sicherun
 `Documents/agenten-probe-sicherung_2026-11-09/`, Arbeitsplatz festgelegt, Masterplan auf main.
 
 ### Phase 2: Erster echter Code-Lauf (Ziel A, MVP) ✅ abgeschlossen am 10.11.
-A0 bis A5 sind erfüllt. **Ziel A ist damit noch nicht erreicht:** A6 bis A8 und die Kriterien aus
+A0 bis A5 sind erfüllt. Stand 10.11.: A6 bis A8 offen. **Stand 21.11.: A6 bis A8 erfüllt, siehe Phase 3 und Abschnitt 6.**
 Abschnitt 9 sind offen. Nächstes Paket ist **A6 Auftragsprofile**.
 
 | Paket | Ergebnis | Abnahme |
@@ -258,14 +319,17 @@ Abschnitt 9 sind offen. Nächstes Paket ist **A6 Auftragsprofile**.
 | A4 Entsperren ✅ 09.11. | Schalter statt `false &&`, Integrationstest bei jedem PR, Prüfung auch in `npm test`; Patch von Noah per dokumentierter Admin-Ausnahme | Diff nur in `code-pilot-claude-stufe.yml` an Integrationstest und den zwei Sperren; Integrationstest läuft auf dem A4-PR und ist grün; Claude-Jobs übersprungen; `CODE_PILOT_ENABLED` vor und nach dem Merge nicht gesetzt |
 | A5 Erster Lauf ✅ 10.11. | Label an #38, Noah bestätigt | erfüllt: Draft-PR #47 der App mit genau `src/rechne.js` und `test/rechne.test.js`, CI grün, regulär freigegeben und gemergt (`a64cab3`); zwei getrennte Environment-Freigaben belegt; Kosten rund 0,08 $ für beide Versuche. Versuch 1 scheiterte an der Abnahme (`-0`), Versuch 2 bestand. Schreibrechte des Bot-Kontos auf Repository-Variablen am 09.11. geprüft: Bot erreicht wie Noah HTTP 422 statt 403, kann den Schalter also sehr wahrscheinlich setzen (Abschnitt 6) |
 
-### Phase 3: Ziel A vollständig
+### Phase 3: Ziel A vollständig ✅ technisch erfüllt am 20.11.
 | Paket | Ergebnis | Abnahme |
 |---|---|---|
-| A6 Auftragsprofile (in Arbeit, Plan unten) | erlaubte Dateien, Prompt mit Auftragsbeschreibung, Abnahmetest je Auftrag aus vertrauenswürdigen Dateien auf main statt fest auf #38 (löst R3) | zwei neue Aufträge ohne Workflow-Änderung, Sicherheitskriterien K1 bis K4 erfüllt |
-| A7 Negativfälle | verbotene Datei, falscher Code, entzogenes Label | jeweils kein PR, Grund im Issue |
-| A8 Aufräumen | alter Agent und `claude-bot.yml` stillgelegt, Issues #28 und #35 geschlossen, Proben nach Zuordnungsliste entfernt | ein einziger Agenten-Workflow |
+| A6 Auftragsprofile ✅ | erlaubte Dateien, Prompt mit Auftragsbeschreibung, Abnahmetest je Auftrag aus vertrauenswürdigen Dateien auf main statt fest auf #38 (löst R3) | erfüllt: `agent-auftrag.yml` auf `main`, zwei Profile, Live 2 (#79, PR #104) und Live 3 (#82, PR #105) ohne Workflow-Änderung, K1 bis K4 bearbeitet (Abschnitt A6 unten, historische Planung) |
+| A7 Negativfälle ✅ | verbotene Datei, falscher Code, entzogenes Label | erfüllt: NF1 (#80, `paket-unveraendert`), NF2 (#81, `abnahme-exitcode`), NF3 (#80, `auftrag-label-start-fehlt`); jeweils kein PR, Grund als Kommentar im Issue |
+| A8 Aufräumen ✅ | alter Agent und `claude-bot.yml` stillgelegt, Issues #28 und #35 geschlossen, Proben nach Zuordnungsliste entfernt | erfüllt: PR #106 (`0628e05e`), genau vier Workflows, Build und Tests auf `main` grün, #28 und #35 mit Begründung geschlossen |
 
-### A6 Auftragsprofile: Architektur Version 2
+### A6 Auftragsprofile: Architektur Version 2 (historische Planung)
+
+> Planungs- und Prüfstand bis zur Umsetzung, mit den damaligen Zeilennummern und Zwischenständen. Er
+> bleibt als Nachweis erhalten. Was heute gilt, steht in Abschnitt 4 und 6 und in `docs/agent-auftrag-betrieb.md`.
 
 **Stand 10.11.2026:** Konzept Version 2 von ChatGPT geprüft und in der Grundarchitektur akzeptiert.
 **A6.1 ist auf `main` abgeschlossen** (PR #49, #50, #51, Merge `ed4940a`).
@@ -813,12 +877,13 @@ etwas anderes nahelegen, gilt dieser Nachtrag.
   - Freigabe der Kanarienprobe über Issue #80 (Text, Labels);
   - Ausgabenlimit auf dem Schlüssel (offene Entscheidung 9).
 
-**Verschoben:** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach
+**Verschoben (Stand vor Live 1):** A7 echte Negativläufe · A8 Fingerabdruck der Aktivierungsprüfung entfernen (erst nach Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele Läufe, Neustart-Grenzen, Kostenauswertung, neue Dateien in Profilen, Claude Code ohne Action im Container, zweite Review-Person, Skripte in geschütztem Ordner statt Hash-Bindung. **Stand 21.11.:** A7 und A8 erledigt (Abschnitt 6); die alten Skripte bleiben vorerst (R9).
 Nachweis der neuen Kontrolle), alten Agenten, Proben und altes Abnahmeskript stilllegen · B parallele
 Läufe, Neustart-Grenzen, Kostenauswertung, neue Dateien in Profilen, Claude Code ohne Action im
 Container, zweite Review-Person, Skripte in geschütztem Ordner statt Hash-Bindung.
 
-### Phase 4: Ziel B
+### Phase 4: Ziel B (noch nicht freigegeben)
+Beginnt erst nach dem offiziellen Abschluss von Ziel A und mit eigener Freigabe durch Noah.
 B1 Zentrale: Board automatisch, Sitzungsübersicht liest auch dieses Repo und die Agentenläufe ·
 B2 Prüfer-Agent, nur lesend, kommentiert jeden Draft-PR · B3 mehrere Aufträge parallel ·
 B4 Fehlerbehandlung und Neustart per Label, begrenzte Versuche · B5 Kosten: Konto-Limit,
@@ -829,6 +894,7 @@ B7 Übertrag auf ein echtes Projekt mit eigener App und eigenem Environment, nur
 
 **Ziel A:** drei verschiedene Code-Aufträge echt bis zum Draft-PR mit grüner CI, drei Negativfälle
 ohne PR und mit Grund, kein Lauf ohne Noahs Bestätigung, ein einziger Agenten-Workflow, diese Datei aktuell.
+**Stand 21.11.: technisch erfüllt** (Nachweise in Abschnitt 6); offiziell abgeschlossen mit dem Merge dieser Dokumentation.
 
 **Ziel B:** zwei Wochen Betrieb mit mindestens zehn Aufträgen, davon mindestens zwei parallel,
 Prüfer-Kommentar auf jedem PR, Board ohne Handpflege aktuell, Kosten je Auftrag sichtbar, jeder
@@ -874,8 +940,15 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
 | 17.11.2026 | **E1 mit Vorbehalt (A6-Abschlussplan F2, Abschnitt 0):** Claude läuft als gepinntes Claude Code direkt im Container statt über die Action, nur am internen Docker-Netz hinter einem Vorschaltcontainer, der allein den Schlüssel setzt; Werkzeugrechte in drei Schichten (`--tools "Read,Edit"`, geschützte `--settings` mit `--setting-sources ""`, `--strict-mcp-config`, `--permission-mode dontAsk`, `allow` nur mit Pfad). Vorbehalt: Scheitert K1a oder der Nachweis über den Vorschaltcontainer, wird angehalten und neu entschieden, nicht abgeschwächt. | Die Action arbeitet im Checkout, legt Zugangsdaten in die Umgebung und führt Post-Schritte aus (F1, F2, F7). Die Schalter sind für die gepinnte Version 2.1.326 per `--help` im Container belegt; `--max-turns` fehlt in der Hilfe, wird aber angenommen. |
 | 17.11.2026 | **Physisch getrennte Sicht für Claude (Nachbesserung P-1):** Claude bekommt als einzigen beschreibbaren Mount `RUNNER_TEMP/a6-claude-sicht` mit genau den Profildateien; `a6-claude-arbeit` mit dem vollständigen Ausgangsbaum bleibt außerhalb des Containers und unverändert Grundlage von Job 1b. Rückkopie nur nach beendetem Container und vollständiger strenger Prüfung, nur in vorhandene Profilpfade. | Werkzeugrechte allein sind keine physische Grenze; `prepareWorkspace` legt den ganzen Baum an. Die Lösung kommt ohne Änderung an `scripts/` und an den Policy-Hashes aus. |
 | 18.11.2026 | **K3-Pflichtnachweis bestanden; Reihenfolge bis Live 2:** P-3 (`js-text` aktivieren) ist keine Voraussetzung für A6.6 / Live 1, der erste echte Auftrag nutzt das aktive Profil `js-rechner`; P-3 erst vor A6.7 / Live 2; Profiländerungen getrennt von Test- und Dokumentationsänderungen; vor P-4 nimmt der Eigentümer `agent-auftrag-sammel` nach gesonderter Prüfung und Freigabe als Pflichtcheck in `main-pruefungen` auf; vor Live 1 K1-Nachweise, K4-Entscheidung und übrige Pflichtvoraussetzungen. Einzelheiten im Nachtrag 18.11.2026 in Phase 3. | K3 Versuch 2 (Läufe `44270231335` und `44271380015`) belegt den unveränderlichen Issue-Schnappschuss bei verzögertem Start. Die Trennregel in `schutz.yml` erzwingt getrennte Profil-PRs. K1 und K4 sind weiterhin offen. |
+| 20.11.2026 | **A8 umgesetzt:** neun alte Workflows per Eigentümer-PR #106 entfernt (Admin-Ausnahme nur `main-freigabe`, einzeln freigegeben); die Wachen, deren einziges Ziel ein entfernter Workflow war, entfallen; neue Wache „einziger Agentenpfad“. Versioniertes Entfernen statt Deaktivieren in den GitHub-Einstellungen | Entfernen ist prüfbar, steht in Git und wird durch die Wache gehalten; eine Deaktivierung wäre im Repository unsichtbar |
+| 20.11.2026 | **Alte Skripte bleiben vorerst** (R9) | sie sind in `.github/agent/policy.json` gehasht; Entfernen würde die live bewiesene Kette ändern |
+| 20.11.2026 | Ablehnungsgründe der Negativfälle stehen als Kommentar des Eigentümers im Issue, nicht automatisch aus der Pipeline | die Pipeline schreibt bewusst nichts ins Issue; die Begründung ist geprüft und belegt |
 
 ## 11. Offene Entscheidungen für Noah
+
+> **Stand 21.11.2026:** Punkte 6, 7, 8, 10, 13 und 14 sind mit der Umsetzung von A6 erledigt oder überholt
+> (Abschnitt 10: Claude Code im Container, eine Gruppe für Live-Läufe, Trennregel, K1-Nachweis, P-4).
+> Offen bleiben 1, 5, 9 und 11; vor Ziel B besonders 9 (Ausgabenlimit) und 11 zusammen mit W1.
 
 1. Die lokale Skill-Regel „Den Zweig aktualisiert immer der Agent, nie Noah“ (liegt als Patch im Archiv) aktiv übernehmen?
 2. ~~Laufzeit des neuen Bot-Tokens~~ entschieden 09.11.: 30 Tage, siehe R7.
@@ -899,16 +972,18 @@ Fehlschlag mit Grund im Issue, Wiederaufnahme mindestens einmal echt erprobt.
    `Documents/claude-werkzeuge/agent-fenster.ps1`. `gh api user --jq .login` muss `noah04091-agent` melden.
    Meldet es `noah04091`, wird nichts geschrieben.
 3. Stand holen: `git fetch origin`, dann gegen `origin/main` arbeiten, nie gegen einen alten lokalen Stand.
-4. Offene Arbeit finden: Abschnitt 8 (erstes Paket ohne Haken), offene PRs, Issue #26.
+4. Offene Arbeit finden: Abschnitt 8 (erstes Paket ohne Haken), offene PRs, Issue #26. Für den Betrieb der
+   Pipeline `docs/agent-auftrag-betrieb.md` lesen.
 5. Arbeiten nur auf einem eigenen Branch `wp/<issue>-<thema>`, am Ende Draft-PR, nie Merge.
 6. Verboten ohne Noahs ausdrückliche Freigabe im laufenden Block: Merge, Änderungen an Rulesets,
-   Environments, Secrets, Labels oder Einstellungen, Entfernen der `false &&`-Sperren, Start eines
+   Environments, Secrets, Labels oder Einstellungen, Setzen von `bot-auftrag`, Environment-Freigaben, Start eines
    Claude-Laufs, jede Arbeit an Contract AI oder FORDERA, laufende Sitzungen beenden.
 7. Am Ende eines Blocks: diese Datei aktualisieren (Meilensteine, Ist-Zustand, Risiken, Entscheidungen).
 
 ## 13. Historie und Quellen
 
-Ausführlich in den Issues #13, #15, #26 und den PRs #2 bis #41. Ältere Konzepte bleiben unverändert erhalten:
+Ausführlich in den Issues #13, #15, #26 und den PRs #2 bis #106. Betrieb: `docs/agent-auftrag-betrieb.md`. Ältere Konzepte bleiben erhalten
+(`docs/agent-code-pilot.md` seit A8 als historisch markiert, Abschnitte 7.4 und 7.5 auf den Stand nach A8 gebracht):
 `docs/agent-issue-routing.md`, in PR #37 zusätzlich `docs/agent-code-pilot.md`, `docs/agent-code-isolation.md`,
 `docs/code-pilot-auftrag-38.md`. Lokale Vorschläge vom 02.11. in `docs/archiv/2026-11-02-lokal/`.
 Planungsunterlagen außerhalb des Repos in `Documents/claude-werkzeuge/`: `C1-naechste-schritte.md`,
