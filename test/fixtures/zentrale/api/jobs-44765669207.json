@@ -1,0 +1,65 @@
+{
+ "total_count": 5,
+ "jobs": [
+  {
+   "id": 136389495363,
+   "name": "Job 0 Auftrag festlegen",
+   "status": "completed",
+   "conclusion": "success",
+   "run_id": 1,
+   "steps": [
+    {
+     "name": "x"
+    }
+   ]
+  },
+  {
+   "id": 136389814103,
+   "name": "Job 1 Claude im Container",
+   "status": "completed",
+   "conclusion": "success",
+   "run_id": 1,
+   "steps": [
+    {
+     "name": "x"
+    }
+   ]
+  },
+  {
+   "id": 136390747029,
+   "name": "Job 2 Abnahme ohne Netz",
+   "status": "completed",
+   "conclusion": "success",
+   "run_id": 1,
+   "steps": [
+    {
+     "name": "x"
+    }
+   ]
+  },
+  {
+   "id": 136391090980,
+   "name": "Job 3 Draft-PR veroeffentlichen",
+   "status": "completed",
+   "conclusion": "success",
+   "run_id": 1,
+   "steps": [
+    {
+     "name": "x"
+    }
+   ]
+  },
+  {
+   "id": 136392401723,
+   "name": "agent-auftrag-sammel",
+   "status": "completed",
+   "conclusion": "success",
+   "run_id": 1,
+   "steps": [
+    {
+     "name": "x"
+    }
+   ]
+  }
+ ]
+}

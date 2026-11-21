@@ -1,0 +1,29 @@
+{
+ "total_count": 2,
+ "jobs": [
+  {
+   "id": 136900000001,
+   "name": "Job 0 Auftrag festlegen",
+   "status": "completed",
+   "conclusion": "success",
+   "run_id": 1,
+   "steps": [
+    {
+     "name": "x"
+    }
+   ]
+  },
+  {
+   "id": 136900000002,
+   "name": "Job 1 Claude im Container",
+   "status": "waiting",
+   "conclusion": null,
+   "run_id": 1,
+   "steps": [
+    {
+     "name": "x"
+    }
+   ]
+  }
+ ]
+}

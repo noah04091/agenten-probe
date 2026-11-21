@@ -1,0 +1,3 @@
+﻿2026-11-20T18:36:10.1234567Z ##[group]Run node scripts/agent-code-job-abnahme.mjs
+2026-11-20T18:36:11.1234567Z A6-FEHLER abnahme-exitcode
+2026-11-20T18:36:12.1234567Z ##[error]Process completed with exit code 1.

@@ -1,0 +1,49 @@
+{
+ "total_count": 4,
+ "workflow_runs": [
+  {
+   "id": 44900000001,
+   "status": "waiting",
+   "conclusion": null,
+   "created_at": "2026-11-21T10:00:03Z",
+   "updated_at": "2026-11-21T10:00:03Z",
+   "display_title": "Text: Funktion zaehleVokale(text) ergänzen",
+   "html_url": "https://github.com/noah04091/agenten-probe/actions/runs/44900000001",
+   "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "event": "issues"
+  },
+  {
+   "id": 44826212314,
+   "status": "completed",
+   "conclusion": "failure",
+   "created_at": "2026-11-20T22:07:07Z",
+   "updated_at": "2026-11-20T22:07:07Z",
+   "display_title": "Text: Funktion grossschreiben(text) in src/text.js ergänzen",
+   "html_url": "https://github.com/noah04091/agenten-probe/actions/runs/44826212314",
+   "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "event": "issues"
+  },
+  {
+   "id": 44793828526,
+   "status": "completed",
+   "conclusion": "failure",
+   "created_at": "2026-11-20T18:33:06Z",
+   "updated_at": "2026-11-20T18:33:06Z",
+   "display_title": "Rechner: Funktion bruttobetrag(netto) ergänzen",
+   "html_url": "https://github.com/noah04091/agenten-probe/actions/runs/44793828526",
+   "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "event": "issues"
+  },
+  {
+   "id": 44765669207,
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-20T15:40:42Z",
+   "updated_at": "2026-11-20T15:40:42Z",
+   "display_title": "Text: Funktion umkehren(text) ergänzen",
+   "html_url": "https://github.com/noah04091/agenten-probe/actions/runs/44765669207",
+   "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "event": "issues"
+  }
+ ]
+}

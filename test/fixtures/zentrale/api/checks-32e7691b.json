@@ -1,0 +1,89 @@
+{
+ "total_count": 7,
+ "check_runs": [
+  {
+   "name": "build",
+   "status": "completed",
+   "conclusion": "success",
+   "app": {
+    "id": 15368,
+    "slug": "github-actions"
+   },
+   "output": {
+    "title": "nicht uebernommen"
+   }
+  },
+  {
+   "name": "tests",
+   "status": "completed",
+   "conclusion": "success",
+   "app": {
+    "id": 15368,
+    "slug": "github-actions"
+   },
+   "output": {
+    "title": "nicht uebernommen"
+   }
+  },
+  {
+   "name": "schutzdateien",
+   "status": "completed",
+   "conclusion": "success",
+   "app": {
+    "id": 15368,
+    "slug": "github-actions"
+   },
+   "output": {
+    "title": "nicht uebernommen"
+   }
+  },
+  {
+   "name": "agent-auftrag-sammel",
+   "status": "completed",
+   "conclusion": "success",
+   "app": {
+    "id": 15368,
+    "slug": "github-actions"
+   },
+   "output": {
+    "title": "nicht uebernommen"
+   }
+  },
+  {
+   "name": "Job 0 Auftrag festlegen",
+   "status": "completed",
+   "conclusion": "skipped",
+   "app": {
+    "id": 15368,
+    "slug": "github-actions"
+   },
+   "output": {
+    "title": "nicht uebernommen"
+   }
+  },
+  {
+   "name": "tests",
+   "status": "completed",
+   "conclusion": "success",
+   "app": {
+    "id": 15368,
+    "slug": "github-actions"
+   },
+   "output": {
+    "title": "nicht uebernommen"
+   }
+  },
+  {
+   "name": "schutzdateien",
+   "status": "completed",
+   "conclusion": "failure",
+   "app": {
+    "id": 99999,
+    "slug": "github-actions"
+   },
+   "output": {
+    "title": "nicht uebernommen"
+   }
+  }
+ ]
+}

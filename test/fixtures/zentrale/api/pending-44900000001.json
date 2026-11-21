@@ -1,0 +1,11 @@
+[
+ {
+  "environment": {
+   "id": 26238768633,
+   "name": "claude-bot"
+  },
+  "wait_timer": 0,
+  "current_user_can_approve": false,
+  "reviewers": []
+ }
+]

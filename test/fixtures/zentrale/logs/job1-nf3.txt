@@ -1,0 +1,3 @@
+﻿2026-11-20T22:12:10.1234567Z ##[group]Run node scripts/agent-code-job-claude-vor.mjs
+2026-11-20T22:12:11.1234567Z A6-FEHLER auftrag-label-start-fehlt
+2026-11-20T22:12:12.1234567Z ##[error]Process completed with exit code 1.

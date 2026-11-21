@@ -1,0 +1,31 @@
+[
+ {
+  "number": 104,
+  "state": "closed",
+  "draft": false,
+  "merged_at": "2026-11-20T16:07:13Z",
+  "head": {
+   "ref": "wp/79-agent-44765669207-1",
+   "sha": "32e7691ba585e4a2d74cc975f6117971f2933a9b"
+  },
+  "user": {
+   "login": "noah04091-agenten-probe-cloud-bot[bot]"
+  },
+  "html_url": "https://github.com/noah04091/agenten-probe/pull/104",
+  "body": "nicht uebernommen"
+ },
+ {
+  "number": 103,
+  "state": "closed",
+  "draft": false,
+  "merged_at": "2026-11-20T12:00:00Z",
+  "head": {
+   "ref": "wp/26-a6-js-text-12-runden",
+   "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "user": {
+   "login": "noah04091-agent"
+  },
+  "html_url": "https://github.com/noah04091/agenten-probe/pull/103"
+ }
+]

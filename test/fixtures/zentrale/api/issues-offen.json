@@ -1,0 +1,71 @@
+[
+ {
+  "number": 90,
+  "title": "Text: Funktion zaehleVokale(text) ergänzen",
+  "labels": [
+   {
+    "name": "agent:js-text"
+   },
+   {
+    "name": "bot-auftrag"
+   }
+  ],
+  "state": "open",
+  "updated_at": "2026-11-21T09:00:00Z",
+  "html_url": "https://github.com/noah04091/agenten-probe/issues/90"
+ },
+ {
+  "number": 91,
+  "title": "Rechner: Funktion runde(x) ergänzen",
+  "labels": [
+   {
+    "name": "agent:js-rechner"
+   }
+  ],
+  "state": "open",
+  "updated_at": "2026-11-21T09:00:00Z",
+  "html_url": "https://github.com/noah04091/agenten-probe/issues/91"
+ },
+ {
+  "number": 92,
+  "title": "Zwei Profile",
+  "labels": [
+   {
+    "name": "agent:js-text"
+   },
+   {
+    "name": "agent:js-rechner"
+   }
+  ],
+  "state": "open",
+  "updated_at": "2026-11-21T09:00:00Z",
+  "html_url": "https://github.com/noah04091/agenten-probe/issues/92"
+ },
+ {
+  "number": 93,
+  "title": "Ohne Profil",
+  "labels": [
+   {
+    "name": "dokumentation"
+   }
+  ],
+  "state": "open",
+  "updated_at": "2026-11-21T09:00:00Z",
+  "html_url": "https://github.com/noah04091/agenten-probe/issues/93"
+ },
+ {
+  "number": 94,
+  "title": "Ein Pull Request",
+  "labels": [
+   {
+    "name": "agent:js-text"
+   }
+  ],
+  "state": "open",
+  "updated_at": "2026-11-21T09:00:00Z",
+  "html_url": "https://github.com/noah04091/agenten-probe/issues/94",
+  "pull_request": {
+   "url": "x"
+  }
+ }
+]
