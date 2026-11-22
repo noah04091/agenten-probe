@@ -23,6 +23,9 @@ import { ladeToken } from './token.mjs';
 import { sammle } from './zentrale.mjs';
 
 export const KOSTEN_TOLERANZ = 1e-6;
+// B1.3: Ablauf von Noahs Lese-Token laut Kopfprobe vom 22.11.2026 ("2026-12-21 21:04:30 UTC"). Nach einer Erneuerung
+// des Tokens ist dieser Sollwert anzupassen; bis dahin ergibt jede Abweichung Exitcode 1.
+export const LESE_TOKEN_ABLAUF_SOLL_MS = Date.parse('2026-12-21T21:04:30Z');
 // Fester Zeitpunkt fuer den historischen Teil: letzte Sekunde des Novembers 2026 (UTC).
 export const REFERENZ_JETZT = Date.parse('2026-11-30T23:59:59Z');
 // Der historische Bestand ist bis einschliesslich 20.11.2026 unabhaengig geprueft (17 Laeufe). Die Issue-Laufliste
@@ -216,6 +219,13 @@ export async function echtprobe(argv, {
   const pruefe = (name, ist, soll) => melde(name, ist === soll, `${ist} (erwartet ${soll})`);
 
   pruefe('repo', (await leser.holeJson(`/repos/${REPO}`)).klasse, 'ok');
+
+  // B1.3: Ablaufdatum des Lese-Tokens aus dem Antwortkopf der Startpruefung (Muss-Treffer). Ausgegeben wird nur das
+  // streng gelesene Datum, nie der Rohwert des Kopfs.
+  const st = await leser.holeJson(`/repos/${REPO}`, { start: true });
+  const ablauf = st.klasse === 'ok' && Number.isFinite(st.tokenAblauf) ? st.tokenAblauf : null;
+  melde('frist-lese-token', ablauf === LESE_TOKEN_ABLAUF_SOLL_MS,
+    `${ablauf === null ? 'kein gueltiges Ablaufdatum im Kopf' : new Date(ablauf).toISOString()} (erwartet ${new Date(LESE_TOKEN_ABLAUF_SOLL_MS).toISOString()})`);
   pruefe('geloeschter-zweig', (await leser.holeJson(`/repos/${REPO}/branches/wp/78-agent-44536520447-1`)).klasse, 'unbekannt');
   pruefe('repo-fehlt', (await leser.holeJson('/repos/noah04091/gibt-es-nicht-b1-zentrale')).klasse, 'fehlt');
   pruefe('rate-limit', (await leser.holeJson('/rate_limit')).klasse, 'ok');

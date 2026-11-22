@@ -4,7 +4,7 @@ globalThis.fetch = () => { throw new Error('W10: Netz in Zentrale-Tests verboten
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { GRENZE_LOG, MAX_SEITEN, erzeugeLeser } from '../werkzeuge/zentrale/github-lesen.mjs';
+import { GRENZE_LOG, MAX_SEITEN, ablaufAusKopf, erzeugeLeser } from '../werkzeuge/zentrale/github-lesen.mjs';
 
 const TOKEN = 'github_pat_TESTNURATTRAPPE_0000000000';
 const antwort = (status, koerper = '', kopf = {}) => ({
@@ -159,4 +159,49 @@ test('Der Token-Wert steht in keinem Ergebnis und keiner Meldung', async () => {
 
   assert.ok(!JSON.stringify(ergebnisse).includes(TOKEN));
   assert.ok(!JSON.stringify(ergebnisse).includes('TESTNURATTRAPPE'));
+});
+
+// B1.3: Ablaufkopf der Startpruefung. Streng gelesen, nur aus 200, nie als Rohwert weitergegeben.
+test('B1.3 Kopf-Parser: nur "JJJJ-MM-TT hh:mm:ss UTC" mit gueltigem Datum, sonst null', () => {
+  assert.equal(ablaufAusKopf('2026-12-21 21:04:30 UTC'), Date.parse('2026-12-21T21:04:30Z'));
+  assert.equal(ablaufAusKopf('2028-02-29 00:00:00 UTC'), Date.parse('2028-02-29T00:00:00Z'), 'Schalttag');
+
+  for (const falsch of [null, undefined, '', ' ', 'leer', '2026-12-21T21:04:30Z', '2026-12-21 21:04:30', '2026-12-21 21:04:30 GMT',
+    '2026-12-21 21:04:30 +01:00', '2026-12-21 21:04:30 UTC+1', '2026-02-31 00:00:00 UTC', '2027-02-29 00:00:00 UTC', '2026-13-01 00:00:00 UTC',
+    '2026-12-21 24:00:00 UTC', '2026-12-21 21:60:00 UTC', '2026-12-21 21:04:60 UTC', ' 2026-12-21 21:04:30 UTC', '2026-12-21 21:04:30 UTC ',
+    '2026-12-21  21:04:30 UTC', '2026-12-21 21:04:30 UTCX', `2026-12-21 21:04:30 UTC${'x'.repeat(5000)}`, '<b>2026-12-21 21:04:30 UTC</b>',
+    '2026-12-21 21:04:30 UTC<script>', '１２０２6-12-21 21:04:30 UTC', '1999-12-31 23:59:59 UTC', 1766351070000, ['2026-12-21 21:04:30 UTC']]) {
+    assert.equal(ablaufAusKopf(falsch), null, JSON.stringify(falsch)?.slice(0, 60));
+  }
+});
+
+test('B1.3 Startpruefung: Status und Ablauf nur mit { start: true }, Ablauf nur aus 200, Rohwert nie im Ergebnis', async () => {
+  const KOPF = 'github-authentication-token-expiration';
+  const mit = (status, wert, koerper = { id: 1 }) => leser(() => antwort(status, koerper, wert === undefined ? {} : { [KOPF]: wert })).l;
+
+  let r = await mit(200, '2026-12-21 21:04:30 UTC').holeJson('/repos/noah04091/agenten-probe', { start: true });
+  assert.deepEqual([r.klasse, r.status, r.tokenAblauf], ['ok', 200, Date.parse('2026-12-21T21:04:30Z')]);
+  r = await mit(200, undefined).holeJson('/repos/noah04091/agenten-probe', { start: true });
+  assert.deepEqual([r.klasse, r.status, r.tokenAblauf], ['ok', 200, null], 'Kopf fehlt');
+
+  for (const falsch of ['2026-12-21T21:04:30Z', '<img src=x onerror=1>', '2026-02-31 00:00:00 UTC']) {
+    r = await mit(200, falsch).holeJson('/repos/noah04091/agenten-probe', { start: true });
+    assert.equal(r.tokenAblauf, null, falsch);
+    assert.ok(!JSON.stringify(r).includes(falsch), 'Rohwert im Ergebnis');
+  }
+
+  // 401 mit Kopf: kein Ablauf aus einer abgelehnten Antwort, Status 401 fuer die Unterscheidung.
+  r = await mit(401, '2026-12-21 21:04:30 UTC', { message: 'Bad credentials' }).holeJson('/repos/noah04091/agenten-probe', { start: true });
+  assert.deepEqual([r.klasse, r.status, r.tokenAblauf, r.grund], ['unbekannt', 401, null, 'nicht angemeldet (401)']);
+  r = await mit(403, '2026-12-21 21:04:30 UTC', { message: 'x' }).holeJson('/repos/noah04091/agenten-probe', { start: true });
+  assert.deepEqual([r.status, r.tokenAblauf], [403, null]);
+
+  // Ohne start: Form wie bisher, kein Ablauf, kein Status bei Fehlern.
+  r = await mit(200, '2026-12-21 21:04:30 UTC').holeJson('/repos/noah04091/agenten-probe');
+  assert.deepEqual(r, { klasse: 'ok', daten: { id: 1 }, status: 200 });
+  r = await mit(401, '2026-12-21 21:04:30 UTC', {}).holeJson('/repos/noah04091/agenten-probe');
+  assert.deepEqual(r, { klasse: 'unbekannt', grund: 'nicht angemeldet (401)' });
+  // Netzfehler bei der Startpruefung: kein Status, kein Ablauf.
+  r = await leser(() => new Error('weg')).l.holeJson('/repos/noah04091/agenten-probe', { start: true });
+  assert.deepEqual(r, { klasse: 'unbekannt', grund: 'Netzfehler' });
 });

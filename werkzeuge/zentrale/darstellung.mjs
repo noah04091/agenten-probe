@@ -8,6 +8,7 @@
 // Schleifenbetrieb; dann nennt sie die Zeit, bis zu der die naechste Erzeugung faellig ist. Eine Seite nach dem Ende
 // der Schleife traegt kein Neuladen mehr und sagt, dass die Schleife beendet ist.
 
+import { ZUGAENGE } from './daten.mjs';
 import { klartext, nurName } from './fehlercodes.mjs';
 
 export const VERALTET_MS = 10 * 60 * 1000;
@@ -246,10 +247,100 @@ function sitzungen(b) {
   return `<table><tr><th>Name</th><th>Ordner</th><th>Start</th><th>Letzte Aktivität</th><th>Status</th><th>Sitzung</th></tr>${zeilen.join('')}</table>`;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// B1.3 Fristen: Bereich "0 Fristen" ganz oben, rotes Banner fuer Warnung, dringend und abgelaufen. Jede Angabe nennt ihre
+// Herkunft und ihr Alter; was nicht belegt ist, steht als "Ablauf unbekannt" da, nie als ok.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const TAG_MS = 24 * 60 * 60 * 1000;
+const ROT = Object.freeze(['warnung', 'dringend', 'abgelaufen']);
+
+function nurTag(ms) {
+  if (!Number.isFinite(ms)) {
+    return 'unbekannt';
+  }
+
+  const d = new Date(ms);
+  return `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}.${d.getUTCFullYear()}`;
+}
+
+// Tagesgenaue Angaben ohne Uhrzeit, nie eine erfundene Uhrzeit.
+function fristDatumText(ms, tagesgenau) {
+  return tagesgenau ? nurTag(ms) : `${nurTag(ms)} um ${uhrzeit(ms)}`;
+}
+
+function fristText(e) {
+  if (e.stufe === 'unbekannt' || !Number.isFinite(e.restMs)) {
+    const h = e.historisch;
+    const alt = h && Number.isFinite(h.ablauf) && Number.isFinite(h.gemeldetAm)
+      ? ` Zuletzt von GitHub gemeldet ${tagUndZeit(h.gemeldetAm)}: Ablauf ${fristDatumText(h.ablauf, false)} (historische Angabe).` : '';
+    return `Ablauf unbekannt${e.grund ? `: ${maskiere(e.grund)}` : ''}.${alt}`;
+  }
+
+  const d = fristDatumText(e.ablauf, e.tagesgenau);
+  const tage = Math.floor(e.restMs / TAG_MS);
+  const noch = `noch ${tage} ${tage === 1 ? 'Tag' : 'Tage'}`;
+
+  if (e.stufe === 'abgelaufen') {
+    return `abgelaufen seit ${d}`;
+  }
+
+  if (e.stufe === 'dringend') {
+    const stunden = Math.floor(e.restMs / (60 * 60 * 1000));
+    const wann = stunden < 1 ? 'in weniger als einer Stunde' : `in ${stunden} ${stunden === 1 ? 'Stunde' : 'Stunden'}`;
+    return `läuft ${wann} ab (am ${d}), jetzt erneuern`;
+  }
+
+  const zusatz = e.stufe === 'warnung' ? ', jetzt erneuern' : e.stufe === 'hinweis' ? ', bald erneuern' : '';
+  return `läuft am ${d} ab (${noch})${zusatz}`;
+}
+
+function herkunftText(e) {
+  if (e.quelle === 'github') {
+    return Number.isFinite(e.gemeldetAm) && Number.isFinite(e.ablauf) ? `von GitHub gemeldet ${tagUndZeit(e.gemeldetAm)}` : 'Quelle: Antwortkopf der Startprüfung bei GitHub';
+  }
+
+  if (!Number.isFinite(e.eingetragenAm)) {
+    return 'Quelle: fristen.json (manuell)';
+  }
+
+  return `manuell eingetragen am ${nurTag(e.eingetragenAm)}, nicht von der Zentrale geprüft${e.pruefen ? `; Eintrag vom ${nurTag(e.eingetragenAm)}, bitte prüfen` : ''}`;
+}
+
+// Ohne Fristenmodell (etwa eine Seite aus einem frueheren Stand): alle drei Zugaenge als unbekannt, nie als ok.
+function fristEintraege(fristen) {
+  if (fristen && Array.isArray(fristen.eintraege) && fristen.eintraege.length === ZUGAENGE.length) {
+    return fristen.eintraege;
+  }
+
+  return ZUGAENGE.map(z => ({ ...z, stufe: 'unbekannt', restMs: null, grund: 'nicht ermittelt' }));
+}
+
+function fristenBereich(fristen, erzeugt) {
+  // Farbklassen statt Stufennamen, damit kein Stufenwort (etwa "abgelaufen") im Quelltext einer Seite steht.
+  const farbe = e => (ROT.includes(e.stufe) ? 'frist-rot' : e.stufe === 'hinweis' ? 'frist-gelb' : e.stufe === 'ok' ? 'frist-ok' : 'frist-unbekannt');
+  const zeilen = fristEintraege(fristen).map(e => `<tr class="${farbe(e)}"><td>${maskiere(e.name)}</td><td>${fristText(e)}</td>`
+    + `<td>${herkunftText(e)}</td><td>${maskiere(e.handgriff ?? '')}</td></tr>`);
+  return `<section class="fristen"><h2>0 Fristen</h2><p class="fristen-stand">Gerechnet in UTC ab der Erzeugungszeit ${uhrzeit(erzeugt)}.</p>`
+    + `<table><tr><th>Zugang</th><th>Ablauf</th><th>Herkunft</th><th>Handgriff</th></tr>${zeilen.join('')}</table></section>`;
+}
+
+function fristenBanner(fristen) {
+  const rot = fristEintraege(fristen).filter(e => ROT.includes(e.stufe));
+
+  if (rot.length === 0) {
+    return '';
+  }
+
+  return `<div class="banner">${rot.map(e => `<p><strong>${maskiere(e.name)}:</strong> ${fristText(e)}. ${maskiere(e.handgriff ?? '')}</p>`).join('')}</div>`;
+}
+
 const STIL = 'body{font-family:system-ui,sans-serif;margin:16px;color:#111;background:#fff}h1{font-size:1.4em}'
   + 'section{border:1px solid #ccc;border-radius:6px;padding:8px 12px;margin:12px 0}section.veraltet{background:#eee;color:#666}'
   + 'section.fehlgeschlagen{border-color:#b00}.fehler{color:#b00}.hinweis{font-style:italic}.stand{color:#555}'
   + 'table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;vertical-align:top}'
+  + '.banner{border:2px solid #b00;background:#fde2e2;color:#600;border-radius:6px;padding:4px 12px;margin:12px 0}'
+  + 'tr.frist-gelb{background:#fff3c4}tr.frist-rot{background:#fde2e2;color:#600}'
   + '@media (max-width:700px){table,tr,td,th{display:block}th{display:none}tr{border-bottom:2px solid #ccc;padding:4px 0}}';
 
 // Kopf: was diese Datei ist. Ohne Schleife: Momentaufnahme, aktualisiert sich nicht. Mit Schleife: Neuladen und die
@@ -280,12 +371,60 @@ export function seite(modell, jetzt, { schleife = false, beendet = null } = {}) 
     schleife === true && !beendet ? '<meta http-equiv="refresh" content="60">' : '',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     `<title>Zentrale (Momentaufnahme ${uhrzeit(modell.erzeugt)})</title><style>${STIL}</style></head><body>`,
-    `<h1>Zentrale Agentensystem</h1>${momentaufnahme(modell, schleife === true, beendet)}${uebersicht}`,
+    `<h1>Zentrale Agentensystem</h1>${fristenBanner(modell.fristen)}${momentaufnahme(modell, schleife === true, beendet)}${uebersicht}`,
+    fristenBereich(modell.fristen, modell.erzeugt),
     rahmen('1 Offene Aufträge', b.auftraege, jetzt, () => auftraege(b.auftraege)),
     rahmen('2 Agentenläufe', b.laeufe, jetzt, () => laeufe(b.laeufe)),
     rahmen('3 Meine Freigaben', b.freigaben, jetzt, () => freigaben(b.freigaben, jetzt)),
     rahmen('4 Kosten', b.kosten, jetzt, () => kosten(b.kosten)),
     rahmen('4 Laufende Sitzungen', b.sitzungen, jetzt, () => sitzungen(b.sitzungen)),
+    '</body></html>\n',
+  ].join('');
+}
+
+// B1.3: Notseite ohne GitHub-Daten und ohne Neuladen. Ersetzt die alte Seite, damit keine veralteten Werte stehen bleiben.
+// art 'abgelehnt' (401 der Startpruefung): nie pauschal "abgelaufen", sondern je nach letzter Meldung
+//   (a) wahrscheinlich abgelaufen, (b) abgelehnt obwohl laut letzter Meldung gueltig, (c) Ablauf unbekannt.
+// art 'token-datei': Token-Datei fehlt oder ist ungueltig (Grund aus token.mjs).
+// art 'start': anderer Fehler der Startpruefung (403, 429, 5xx, Zeitlimit, Netzfehler); kein Token-Fehler.
+export function notseite({ erzeugt, art, grund: roh, letzteMeldung = null }) {
+  const l = letzteMeldung && Number.isFinite(letzteMeldung.ablauf) && Number.isFinite(letzteMeldung.gemeldetAm) ? letzteMeldung : null;
+  // Die festen Gruende aus token.mjs nennen Token-Praefixe wie "(gho_)". In dieser Schreibweise wuerde der
+  // Geheimnis-Filter die Notseite verwerfen und die alte Seite stehen lassen; deshalb "Praefix gho". Der Filter bleibt
+  // unveraendert fuer alles andere.
+  const grund = typeof roh === 'string' ? roh.replace(/\b(gho|ghp|ghs|ghu|github_pat)_/g, 'Präfix $1') : roh;
+  const meldung = l ? `laut letzter Meldung von GitHub ${tagUndZeit(l.gemeldetAm)}` : '';
+  const leseHandgriff = ZUGAENGE[0].handgriff;
+  let text;
+  let handgriff;
+
+  if (art === 'abgelehnt') {
+    if (l && l.ablauf <= erzeugt) {
+      text = `Das Lese-Token wird von GitHub abgelehnt (401). Es ist wahrscheinlich abgelaufen am ${fristDatumText(l.ablauf, false)} (${meldung}).`;
+    } else if (l) {
+      text = `Das Lese-Token wird von GitHub abgelehnt (401), obwohl es ${meldung} bis ${fristDatumText(l.ablauf, false)} gültig ist. Wurde es widerrufen oder geändert?`;
+    } else {
+      text = 'Das Lese-Token wird von GitHub abgelehnt (401). Ablauf unbekannt.';
+    }
+
+    handgriff = leseHandgriff;
+  } else if (art === 'token-datei') {
+    text = `Das Lese-Token kann nicht geladen werden: ${maskiere(grund ?? 'unbekannter Grund')}.${l ? ` Letzte Meldung von GitHub (${tagUndZeit(l.gemeldetAm)}): Ablauf ${fristDatumText(l.ablauf, false)}.` : ''}`;
+    handgriff = `Token-Datei der Zentrale prüfen. Fehlt sie oder ist das Token ungültig: ${leseHandgriff}`;
+  } else {
+    text = `Die Startprüfung bei GitHub ist fehlgeschlagen: ${maskiere(grund ?? 'unbekannter Grund')}. Das ist keine Ablehnung der Anmeldung (401).`;
+    handgriff = 'Später erneut starten. Bei „keine Berechtigung (403)“ die Rechte des Lese-Tokens prüfen, bei „Rate-Limit erschöpft“ warten.';
+  }
+
+  return [
+    '<!doctype html><html lang="de"><head><meta charset="utf-8">',
+    `<meta http-equiv="Content-Security-Policy" content="${CSP}">`,
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    `<title>Zentrale (Notseite ${uhrzeit(erzeugt)})</title><style>${STIL}</style></head><body>`,
+    '<h1>Zentrale Agentensystem</h1>',
+    `<p class="momentaufnahme"><strong>Notseite: erzeugt ${tagUndZeit(erzeugt)}.</strong> Es werden keine GitHub-Daten angezeigt, die vorherige Seite ist ersetzt. `
+      + 'Die Seite erneuert sich nicht von selbst.</p>',
+    `<div class="banner"><p>${text}</p><p>Handgriff: ${maskiere(handgriff)}</p></div>`,
     '</body></html>\n',
   ].join('');
 }

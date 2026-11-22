@@ -77,20 +77,27 @@ test('Token: Git-Pruefung bis zur Wurzel, Muss-Treffer und Gegenprobe', () => {
   assert.equal(imGitArbeitsbaum(tief, { existsSync: () => false }), false);
 });
 
-test('Token: bei jedem Fehler Exitcode 1, keine Seite, kein Netz, kein Rueckfall', async () => {
+test('Token: bei jedem Fehler Exitcode 1, nur eine Notseite, kein Netz, kein Rueckfall', async () => {
   for (const grund of ['Token fehlt', 'falscher Typ: gh-Anmeldung (gho_)']) {
     const ausgaben = [];
     let leserGebaut = false;
-    let geschrieben = false;
+    const geschrieben = new Map();
     const code = await main([], {
       tokenLaden: () => ({ ok: false, grund }),
       leserBauen: () => { leserGebaut = true; return {}; },
       ausgabe: t => ausgaben.push(t),
-      fsImpl: { writeFileSync: () => { geschrieben = true; }, renameSync: () => { geschrieben = true; }, mkdirSync: () => {}, existsSync: () => false, readFileSync: () => '{}' },
+      ordner: 'Z',
+      fsImpl: { writeFileSync: (p, inhalt) => { geschrieben.set(p, inhalt); }, renameSync: (a, b) => { geschrieben.set(b, geschrieben.get(a)); geschrieben.delete(a); }, mkdirSync: () => {}, existsSync: () => false, readFileSync: () => '{}' },
     });
     assert.equal(code, 1);
     assert.equal(leserGebaut, false);
-    assert.equal(geschrieben, false);
-    assert.deepEqual(ausgaben, [`Abbruch: ${grund}. Keine Seite geschrieben.`]);
+    // B1.3 (E2): die alte Seite darf nicht aktuell wirken. Geschrieben wird nur die Notseite mit dem Grund, ohne Neuladen.
+    assert.deepEqual([...geschrieben.keys()], [join('Z', 'zentrale.html')]);
+    const html = geschrieben.get(join('Z', 'zentrale.html'));
+    // Token-Praefixe stehen entschaerft da ("Praefix gho"), sonst wuerde der Geheimnis-Filter die Notseite verwerfen.
+    assert.ok(html.includes(`Das Lese-Token kann nicht geladen werden: ${grund.replace('(gho_)', '(Präfix gho)')}.`), html);
+    assert.ok(!html.includes('gho_'));
+    assert.ok(!/http-equiv="refresh"/.test(html) && !/<script/i.test(html));
+    assert.deepEqual(ausgaben, [`Abbruch: ${grund}. Notseite geschrieben.`]);
   }
 });

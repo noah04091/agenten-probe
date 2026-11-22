@@ -9,6 +9,11 @@
 // Logs: GitHub antwortet auf /actions/jobs/{id}/logs mit 302. Geladen wird nur ein HTTPS-Ziel auf
 // productionresultssa<n>.blob.core.windows.net, ohne Authorization-Kopf und ohne weitere Weiterleitung. Alles andere
 // ist "unbekannt". Der Token-Wert erscheint nie in einem Ergebnis oder einer Meldung.
+//
+// B1.3: Nur fuer die Startpruefung (holeJson mit { start: true }) traegt das Ergebnis den HTTP-Status (status) und bei
+// 200 das Ablaufdatum aus dem Antwortkopf github-authentication-token-expiration (tokenAblauf, Millisekunden oder
+// null). Der Kopf wird streng gelesen: genau "JJJJ-MM-TT hh:mm:ss UTC" mit gueltigem Datum, sonst null. Der Rohwert
+// verlaesst diese Datei nie.
 
 export const BASIS = 'https://api.github.com';
 export const ZEITLIMIT_MS = 15_000;
@@ -20,6 +25,26 @@ const PFAD = /^\/[A-Za-z0-9_.\/-]{1,300}(\?[A-Za-z0-9_.=&%-]{0,300})?$/;
 const LOG_HOST = /^productionresultssa\d{1,3}\.blob\.core\.windows\.net$/;
 
 const unbekannt = grund => ({ klasse: 'unbekannt', grund });
+const ABLAUF_KOPF = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) UTC$/;
+
+// Ablaufkopf zu Millisekunden oder null. Ungueltige Kalenderdaten (etwa 31.02.) und jede andere Form ergeben null.
+export function ablaufAusKopf(wert) {
+  if (typeof wert !== 'string' || wert.length !== 23) {
+    return null;
+  }
+
+  const m = ABLAUF_KOPF.exec(wert);
+
+  if (!m) {
+    return null;
+  }
+
+  const [j, mo, t, h, mi, s] = m.slice(1).map(Number);
+  const ms = Date.UTC(j, mo - 1, t, h, mi, s);
+  const d = new Date(ms);
+  const gleich = d.getUTCFullYear() === j && d.getUTCMonth() === mo - 1 && d.getUTCDate() === t && d.getUTCHours() === h && d.getUTCMinutes() === mi && d.getUTCSeconds() === s;
+  return gleich && j >= 2000 && j <= 2199 ? ms : null;
+}
 
 function grundAusStatus(res) {
   if (res.status === 401) {
@@ -73,13 +98,24 @@ export function erzeugeLeser({ token, fetchImpl = globalThis.fetch, zeitlimitMs 
     }
   }
 
-  async function holeJson(pfad) {
+  async function holeJson(pfad, { start = false } = {}) {
     const { res, fehler } = await abruf(pfad);
 
     if (fehler) {
       return fehler;
     }
 
+    const r = await auswerten(res);
+
+    if (!start) {
+      return r;
+    }
+
+    // Startpruefung: Status immer, Ablaufdatum nur aus einer erfolgreichen Antwort.
+    return { ...r, status: res.status, tokenAblauf: r.klasse === 'ok' ? ablaufAusKopf(res.headers.get('github-authentication-token-expiration')) : null };
+  }
+
+  async function auswerten(res) {
     try {
       if (res.status === 200) {
         const t = await begrenzterText(res, GRENZE_JSON);
