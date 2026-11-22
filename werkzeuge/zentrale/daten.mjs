@@ -205,24 +205,27 @@ export function monat(ms) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-// Kosten eines Laufs aus Job 1: { kosten, runden, offen }. offen heisst: nicht belegt, ob und wie viel Claude
+// Kosten eines Laufs aus Job 1: { kosten, runden, offen, grund }. offen heisst: nicht belegt, ob und wie viel Claude
 // gekostet hat. "Keine Kosten" (kosten null, offen false) nur mit Beleg: Job 1 uebersprungen; Job 1 in der
 // vollstaendigen Jobliste eines abgeschlossenen Laufs nie gestartet; oder Job-1-Log gelesen, ohne Kostenzeile, mit
 // einem Code aus CLAUDE_NICHT_GESTARTET. auszug: Ergebnis von logAuszug, null bei gescheitertem Abruf.
+// B1.1a, grund bei offen: 'abruf' (Job 1 unbekannt, weil die Jobliste fehlt oder unvollstaendig ist, oder das Log nicht
+// ladbar war) oder 'beleg' (alles geladen, aber kein Kostenbeleg: Log ohne Kostenzeile, Job 1 oder Lauf noch nicht
+// abgeschlossen). Bei belegten Werten ist grund null. Wartende oder laufende Jobs gelten nie als kostenfrei.
 export function kostenAusJob1(lauf, job1, auszug) {
-  const offen = { kosten: null, runden: null, offen: true };
-  const keine = { kosten: null, runden: null, offen: false };
+  const offen = grund => ({ kosten: null, runden: null, offen: true, grund });
+  const keine = { kosten: null, runden: null, offen: false, grund: null };
 
   if (!istObjekt(job1)) {
-    return offen;
+    return offen('abruf');
   }
 
   if (job1.status === 'nicht-gestartet') {
-    return istObjekt(lauf) && lauf.status === 'completed' ? keine : offen;
+    return istObjekt(lauf) && lauf.status === 'completed' ? keine : offen('beleg');
   }
 
   if (job1.status !== 'completed') {
-    return offen;
+    return offen('beleg');
   }
 
   if (job1.conclusion === 'skipped') {
@@ -230,28 +233,35 @@ export function kostenAusJob1(lauf, job1, auszug) {
   }
 
   if (!istObjekt(auszug)) {
-    return offen;
+    return offen('abruf');
   }
 
   if (Number.isFinite(auszug.kosten)) {
-    return { kosten: auszug.kosten, runden: Number.isInteger(auszug.runden) ? auszug.runden : null, offen: false };
+    return { kosten: auszug.kosten, runden: Number.isInteger(auszug.runden) ? auszug.runden : null, offen: false, grund: null };
   }
 
-  return CLAUDE_NICHT_GESTARTET.includes(auszug.code) ? keine : offen;
+  return CLAUDE_NICHT_GESTARTET.includes(auszug.code) ? keine : offen('beleg');
 }
 
 // Monatssumme (UTC) aus den Laeufen. vollstaendig nur, wenn die Laufliste vollstaendig ist, jeder Lauf eine
 // Startzeit hat und fuer jeden Lauf des Monats belegt ist, ob er Kosten hatte (kostenOffen === false).
+// B1.1a: drei ueberschneidungsfreie Zahlen fuer die Laeufe des Monats: mitKosten (Kostenwert belegt),
+// belegtOhneKosten (kostenOffen === false, kein Kostenwert) und kostenUnbekannt (alle uebrigen). Von den unbekannten
+// zaehlt ohneBeleg die mit grund 'beleg'; abrufOffen ist true, wenn ein Lauf aus einem anderen Grund offen ist
+// (Abruf, fehlender Grund) oder ohne Startzeit dasteht. Nur abrufOffen und eine unvollstaendige Laufliste sind
+// Abruffehler; fehlende Belege machen die Summe unvollstaendig, aber nicht zum Abruffehler.
 export function monatsKosten(laeufe, jetzt, listeVollstaendig) {
   const m = monat(jetzt);
   let summe = 0;
   let mitKosten = 0;
-  let ohneKosten = 0;
-  let offen = false;
+  let belegtOhneKosten = 0;
+  let kostenUnbekannt = 0;
+  let ohneBeleg = 0;
+  let abrufOffen = false;
 
   for (const l of laeufe) {
     if (!Number.isFinite(l.start)) {
-      offen = true;
+      abrufOffen = true;
       continue;
     }
 
@@ -262,14 +272,21 @@ export function monatsKosten(laeufe, jetzt, listeVollstaendig) {
     if (Number.isFinite(l.kosten)) {
       summe += l.kosten;
       mitKosten += 1;
+    } else if (l.kostenOffen === false) {
+      belegtOhneKosten += 1;
     } else {
-      ohneKosten += 1;
+      kostenUnbekannt += 1;
 
-      if (l.kostenOffen !== false) {
-        offen = true;
+      if (l.kostenGrund === 'beleg') {
+        ohneBeleg += 1;
+      } else {
+        abrufOffen = true;
       }
     }
   }
 
-  return { monat: m, summe, mitKosten, ohneKosten, vollstaendig: listeVollstaendig === true && !offen };
+  return {
+    monat: m, summe, mitKosten, belegtOhneKosten, kostenUnbekannt, ohneBeleg, abrufOffen,
+    vollstaendig: listeVollstaendig === true && !abrufOffen && kostenUnbekannt === 0,
+  };
 }

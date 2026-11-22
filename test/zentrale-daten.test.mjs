@@ -15,6 +15,7 @@ import {
 import {
   KOSTEN_TOLERANZ, MONAT_SOLL, REFERENZ_JETZT, SOLL, echtprobe, historischerAbruf, referenzLeser, unbelegteLaeufe, vergleicheLauf, vergleicheMonat,
 } from '../werkzeuge/zentrale/echtprobe.mjs';
+import { seite } from '../werkzeuge/zentrale/darstellung.mjs';
 import { erzeugeLeser } from '../werkzeuge/zentrale/github-lesen.mjs';
 import { durchlauf, main, sammle, schleifeBeenden, zusammenfuehren } from '../werkzeuge/zentrale/zentrale.mjs';
 
@@ -173,8 +174,11 @@ test('Ablauf: Laeufe Live 2, NF2, NF3 und eine wartende Freigabe wie in der Abna
   assert.deepEqual(b.freigaben.eintraege, [{ laufId: 44900000001, url: 'https://github.com/noah04091/agenten-probe/actions/runs/44900000001', environment: 'claude-bot', job: 1, restMinuten: 40 }]);
   // Monatssumme: genau die Kostenzeilen der Laeufe im Monat. Der wartende Lauf hat noch keine belegten Kosten (Job 1
   // wartet), die Summe ist deshalb nur "mindestens". NF3 hat belegt keine Kosten (Code vor dem Claude-Start).
-  assert.deepEqual({ summe: b.kosten.summe, mitKosten: b.kosten.mitKosten, ohneKosten: b.kosten.ohneKosten, vollstaendig: b.kosten.vollstaendig, monat: b.kosten.monat },
-    { summe: 0.047427800000000006 + 0.026869399999999998, mitKosten: 2, ohneKosten: 2, vollstaendig: false, monat: '2026-11' });
+  // B1.1a: drei Zahlen; der wartende Lauf ist "ohne Kostenbeleg", kein Abruffehler.
+  assert.deepEqual({ summe: b.kosten.summe, mitKosten: b.kosten.mitKosten, belegtOhneKosten: b.kosten.belegtOhneKosten, kostenUnbekannt: b.kosten.kostenUnbekannt,
+    ohneBeleg: b.kosten.ohneBeleg, abrufOffen: b.kosten.abrufOffen, vollstaendig: b.kosten.vollstaendig, monat: b.kosten.monat },
+  { summe: 0.047427800000000006 + 0.026869399999999998, mitKosten: 2, belegtOhneKosten: 1, kostenUnbekannt: 1, ohneBeleg: 1, abrufOffen: false, vollstaendig: false, monat: '2026-11' });
+  assert.equal(b.kosten.teilFehler, null, 'wartender Lauf ist kein Abruffehler');
   assert.equal(l[44900000001].kostenOffen, true);
   assert.equal(l[44826212314].kostenOffen, false);
   assert.equal(l[44765669207].runden, 6);
@@ -233,7 +237,7 @@ test('K1: Kosten nur mit Beleg; gescheitertes Log oder Log ohne Kostenzeile und 
   // Einheiten: jeder Zweig von kostenAusJob1.
   const fertig = { status: 'completed' };
   const job = (status, conclusion = null) => ({ id: 1, status, conclusion });
-  assert.deepEqual(kostenAusJob1(fertig, null, undefined), { kosten: null, runden: null, offen: true }, 'Job 1 unbekannt');
+  assert.deepEqual(kostenAusJob1(fertig, null, undefined), { kosten: null, runden: null, offen: true, grund: 'abruf' }, 'Job 1 unbekannt');
   assert.equal(kostenAusJob1({ status: 'in_progress' }, job('nicht-gestartet'), undefined).offen, true, 'Lauf laeuft noch');
   assert.equal(kostenAusJob1(fertig, job('nicht-gestartet'), undefined).offen, false, 'abgeschlossen, Job 1 nie gestartet');
   assert.equal(kostenAusJob1(fertig, job('waiting'), undefined).offen, true, 'wartet');
@@ -245,7 +249,7 @@ test('K1: Kosten nur mit Beleg; gescheitertes Log oder Log ohne Kostenzeile und 
   for (const c of CLAUDE_NICHT_GESTARTET) {
     assert.equal(kostenAusJob1(fertig, job('completed', 'failure'), { code: c, runden: null, kosten: null }).offen, false, c);
   }
-  assert.deepEqual(kostenAusJob1(fertig, job('completed', 'success'), { code: null, runden: 6, kosten: 0.04 }), { kosten: 0.04, runden: 6, offen: false });
+  assert.deepEqual(kostenAusJob1(fertig, job('completed', 'success'), { code: null, runden: 6, kosten: 0.04 }), { kosten: 0.04, runden: 6, offen: false, grund: null });
 });
 
 test('K1: PR-Liste gescheitert, unvollstaendig oder mehrdeutig: nie "kein PR"', async () => {
@@ -707,6 +711,207 @@ test('Durchlauf: Startpruefung, atomares Schreiben, Cache ohne Rohtext', async (
 test('Monatskosten: nur Laeufe im laufenden UTC-Monat', () => {
   const l = (start, kosten, kostenOffen = false) => ({ start: Date.parse(start), kosten, kostenOffen });
   const k = monatsKosten([l('2026-11-01T00:00:00Z', 0.1), l('2026-10-31T23:59:59Z', 5), l('2026-11-20T00:00:00Z', null), l('2026-11-20T00:00:00Z', null, true)], JETZT, true);
-  assert.deepEqual(k, { monat: '2026-11', summe: 0.1, mitKosten: 1, ohneKosten: 2, vollstaendig: false });
+  // Ohne kostenGrund zaehlt ein offener Lauf vorsichtig als Abruffehler (abrufOffen).
+  assert.deepEqual(k, { monat: '2026-11', summe: 0.1, mitKosten: 1, belegtOhneKosten: 1, kostenUnbekannt: 1, ohneBeleg: 0, abrufOffen: true, vollstaendig: false });
   assert.equal(monatsKosten([], JETZT, false).vollstaendig, false);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// B1.1a: eingefrorener November 2026 (Stand 22.11.2026, 19 Laeufe aus Issue-Ereignissen). Die Jobzustaende folgen den
+// echten Laeufen; Kosten und Logzeilen sind nachgestellt. Live 2, NF2 und NF3 kommen aus den Fixtures. Erwartet sind
+// 7 Laeufe mit Kosten, 11 belegt ohne Kosten und 1 mit unbekannten Kosten (44620884909, Log ohne Beleg).
+const S = 'success';
+const F = 'failure';
+const K = 'skipped';
+const NOV22 = Object.freeze([
+  { id: 45061471286, start: '2026-11-22T19:33:56Z', jobs: [S, S, S, S], logs: { 1: 'Claude beendet: Runden 3, Kosten 0.011 USD' } },
+  { id: 45061278924, start: '2026-11-22T19:31:58Z', jobs: [K, K, K, K] },
+  { id: 44826212314, fixture: true },
+  { id: 44793828526, fixture: true },
+  { id: 44793200931, start: '2026-11-20T18:29:12Z', jobs: [K, K, K, K] },
+  { id: 44788592290, start: '2026-11-20T18:00:05Z', jobs: [S, S, S, S], logs: { 1: 'Claude beendet: Runden 4, Kosten 0.012 USD' } },
+  { id: 44788378732, start: '2026-11-20T17:58:42Z', jobs: [K, K, K, K] },
+  { id: 44765669207, fixture: true },
+  { id: 44620884909, start: '2026-11-19T21:39:00Z', jobs: [S, F, K, K], logs: { 1: 'A6-CLAUDE aufruf-fehlgeschlagen' } },
+  { id: 44620481483, start: '2026-11-19T21:36:34Z', jobs: [K, K, K, K] },
+  { id: 44536520447, start: '2026-11-19T13:44:52Z', jobs: [S, S, S, S], logs: { 1: 'Claude beendet: Runden 5, Kosten 0.013 USD' } },
+  { id: 44509846928, start: '2026-11-19T10:53:41Z', jobs: [S, S, F, K], logs: { 1: 'Claude beendet: Runden 6, Kosten 0.014 USD', 2: 'A6-FEHLER abnahme-git-struktur' } },
+  { id: 44509400479, start: '2026-11-19T10:50:44Z', jobs: [K, K, K, K] },
+  { id: 44409459526, start: '2026-11-18T22:13:25Z', jobs: [S, F, K, K], logs: { 1: 'Claude beendet: Runden 7, Kosten 0.015 USD' } },
+  { id: 44408808756, start: '2026-11-18T22:09:32Z', jobs: [K, K, K, K] },
+  { id: 44271380015, start: '2026-11-18T08:56:55Z', jobs: [F, K, K, K], logs: { 0: 'A6-FEHLER auftrag-abnahme' } },
+  { id: 44270231335, start: '2026-11-18T08:48:57Z', jobs: [S, K, K, K] },
+  { id: 44182706381, start: '2026-11-17T21:43:04Z', jobs: [F, K, K, K], logs: { 0: 'A6-FEHLER transport-token' } },
+  { id: 44182660173, start: '2026-11-17T21:42:47Z', jobs: [K, K, K, K] },
+]);
+const NOV22_JETZT = Date.parse('2026-11-22T20:00:00Z');
+
+// Ersetzt die Issue-Laufliste durch die eingefrorenen Laeufe. mehr: zusaetzliche Laeufe; ohne: Laeufe weglassen;
+// logs: Antwort fuer einzelne Job-Logs ersetzen (Schluessel Job-ID); gesamt: total_count ueberschreiben.
+function november22({ mehr = [], ohne = [], logs = {}, gesamt = null } = {}) {
+  const liste = [...NOV22, ...mehr].filter(s => !ohne.includes(s.id));
+  const fix = Object.fromEntries(api('runs').workflow_runs.map(w => [w.id, w]));
+  const synth = liste.filter(s => !s.fixture);
+  return (p, u) => {
+    if (p === RUNS && u.searchParams.get('event') === 'issues') {
+      const w = liste.map(s => (s.fixture ? fix[s.id] : { id: s.id, status: 'completed', conclusion: s.jobs.includes(F) ? F : S, created_at: s.start,
+        display_title: `Synth ${s.id}`, html_url: `https://github.com/noah04091/agenten-probe/actions/runs/${s.id}` }));
+      return antwort(200, { total_count: gesamt ?? w.length, workflow_runs: w });
+    }
+
+    let m = /\/actions\/runs\/(\d+)\/jobs$/.exec(p);
+    const s1 = m ? synth.find(x => x.id === Number(m[1])) : undefined;
+
+    if (s1) {
+      return antwort(200, { total_count: 4, jobs: s1.jobs.map((k, n) => ({ id: s1.id * 10 + n, name: `Job ${n} synth`, status: 'completed', conclusion: k })) });
+    }
+
+    m = /^\/log\/(\d+)$/.exec(p);
+
+    if (m && Object.hasOwn(logs, m[1])) {
+      return logs[m[1]]();
+    }
+
+    const s2 = m ? synth.find(x => x.id === Math.floor(Number(m[1]) / 10)) : undefined;
+    const zeile = s2?.logs?.[Number(m?.[1]) % 10];
+    return s2 ? antwort(200, zeile ? `2026-11-17T00:00:00.0000000Z ${zeile}\n` : '') : null;
+  };
+}
+const nov22 = async (opts, cache = {}) => {
+  const g = github(november22(opts));
+  const r = await sammle({ leser: erzeugeLeser({ token: TOKEN, fetchImpl: g.f }), jetzt: NOV22_JETZT, cache, sitzungen: keineSitzungen });
+  return { ...r, aufrufe: g.aufrufe };
+};
+const nov22Mit = async stoerung => {
+  const g = github(beide(stoerung, november22()));
+  return sammle({ leser: erzeugeLeser({ token: TOKEN, fetchImpl: g.f }), jetzt: NOV22_JETZT, cache: {}, sitzungen: keineSitzungen });
+};
+const kostenSektion = html => /<section class="[a-z]+"><h2>4 Kosten<\/h2>.*?<\/section>/.exec(html)[0];
+const NOV22_SUMME = 0.011 + 0.012 + 0.013 + 0.014 + 0.015 + 0.047427800000000006 + 0.026869399999999998;
+
+test('B1.1a P3: eingefrorener November (22.11.): 7 mit Kosten, 11 belegt ohne Kosten, 1 unbekannt', async () => {
+  const { modell } = await nov22();
+  const k = modell.bereiche.kosten;
+  assert.equal(modell.bereiche.laeufe.eintraege.length, 19, 'Muss-Treffer: alle 19 Laeufe geladen');
+  assert.equal(modell.bereiche.laeufe.unvollstaendig, false);
+  assert.deepEqual([k.mitKosten, k.belegtOhneKosten, k.kostenUnbekannt], [7, 11, 1]);
+  assert.equal(k.mitKosten + k.belegtOhneKosten + k.kostenUnbekannt, 19, 'ueberschneidungsfrei und vollstaendig gezaehlt');
+  assert.ok(Math.abs(k.summe - NOV22_SUMME) < 1e-12, String(k.summe));
+  assert.deepEqual([k.ohneBeleg, k.abrufOffen, k.vollstaendig, k.teilFehler], [1, false, false, null]);
+  assert.deepEqual(modell.bereiche.laeufe.eintraege.filter(e => e.kostenOffen).map(e => [e.id, e.kostenGrund]), [[44620884909, 'beleg']]);
+
+  // Die Seite wie beim echten Start erwartet.
+  const html = seite(modell, NOV22_JETZT);
+  const ks = kostenSektion(html);
+  assert.ok(ks.includes('Läufe mit Kosten: 7, belegt ohne Kosten: 11, Kosten unbekannt: 1'), ks);
+  assert.ok(ks.includes('1 Lauf ohne Kostenbeleg, Monatssumme unvollständig.'));
+  assert.ok(ks.includes('mindestens 0,'));
+  assert.ok(!ks.includes('Abruf fehlgeschlagen'), 'Kostenbereich ohne Abruffehler');
+  assert.ok(html.includes('<td>abnahme-git-struktur (keine Beschreibung hinterlegt)</td>'), 'Lauf 44509846928');
+  assert.ok(html.includes('<td>transport-token (keine Beschreibung hinterlegt)</td>'), 'Lauf 44182706381');
+
+  // Die Zahlen entstehen aus den Daten, nicht fest: ein weiterer Kostenlauf, ein weiterer uebersprungener und ein
+  // weiterer ohne Beleg verschieben genau die passende Zahl.
+  const plus = await nov22({ mehr: [
+    { id: 45100000001, start: '2026-11-22T19:40:00Z', jobs: [S, S, S, S], logs: { 1: 'Claude beendet: Runden 1, Kosten 0.001 USD' } },
+    { id: 45100000002, start: '2026-11-22T19:41:00Z', jobs: [K, K, K, K] },
+    { id: 45100000003, start: '2026-11-22T19:42:00Z', jobs: [S, F, K, K], logs: { 1: 'irgendetwas' } },
+  ] });
+  const kp = plus.modell.bereiche.kosten;
+  assert.deepEqual([kp.mitKosten, kp.belegtOhneKosten, kp.kostenUnbekannt, kp.ohneBeleg], [8, 12, 2, 2]);
+  assert.ok(kostenSektion(seite(plus.modell, NOV22_JETZT)).includes('2 Läufe ohne Kostenbeleg'));
+  const ohne = (await nov22({ ohne: [44620884909, 44409459526] })).modell.bereiche.kosten;
+  assert.deepEqual([ohne.mitKosten, ohne.belegtOhneKosten, ohne.kostenUnbekannt, ohne.vollstaendig, ohne.teilFehler], [6, 11, 0, true, null]);
+  // Ein Lauf vom Oktober zaehlt nicht mit.
+  const okt = (await nov22({ mehr: [{ id: 44000000001, start: '2026-10-31T23:59:59Z', jobs: [S, S, S, S], logs: { 1: 'Claude beendet: Runden 1, Kosten 5 USD' } }] })).modell.bereiche.kosten;
+  assert.deepEqual([okt.mitKosten, okt.belegtOhneKosten, okt.kostenUnbekannt], [7, 11, 1]);
+});
+
+test('B1.1a P2: Log ohne Beleg ist kein Abruffehler; gescheiterter Abruf und unvollstaendige Laufliste bleiben einer', async () => {
+  // Log gelesen, ohne Beleg: kein Teilfehler im Kostenbereich, Summe unvollstaendig (siehe P3).
+  let r = await nov22();
+  assert.equal(r.modell.bereiche.kosten.teilFehler, null);
+  assert.equal(r.modell.bereiche.kosten.vollstaendig, false);
+
+  // Log von Job 1 desselben Laufs nicht ladbar: Abruffehler, kein Hinweis ohne Beleg.
+  r = await nov22({ logs: { 446208849091: () => antwort(500, '') } });
+  let k = r.modell.bereiche.kosten;
+  assert.equal(eintrag(r, 44620884909).kostenGrund, 'abruf');
+  assert.deepEqual([k.kostenUnbekannt, k.ohneBeleg, k.abrufOffen, k.vollstaendig], [1, 0, true, false]);
+  assert.ok(Number.isFinite(k.teilFehler));
+  const ks = kostenSektion(seite(r.modell, NOV22_JETZT));
+  assert.ok(ks.includes('Abruf fehlgeschlagen um 20:00 UTC (teilweise)') && !ks.includes('ohne Kostenbeleg') && ks.includes('mindestens'));
+
+  // Log eines Kostenlaufs nicht ladbar: aus "mit Kosten" wird "unbekannt", Abruffehler.
+  r = await nov22({ logs: { 445365204471: () => antwort(500, '') } });
+  k = r.modell.bereiche.kosten;
+  assert.deepEqual([k.mitKosten, k.kostenUnbekannt, k.ohneBeleg, k.abrufOffen], [6, 2, 1, true]);
+  assert.ok(Number.isFinite(k.teilFehler));
+
+  // Jobliste eines Laufs gescheitert: Job 1 unbekannt, Abruffehler.
+  r = await nov22Mit(nur(`${P}/actions/runs/44536520447/jobs`, () => antwort(500, {})));
+  assert.equal(eintrag(r, 44536520447).kostenGrund, 'abruf');
+  assert.ok(Number.isFinite(r.modell.bereiche.kosten.teilFehler));
+  // Jobliste unvollstaendig ohne Job 1: ebenfalls Abruffehler.
+  r = await nov22Mit(nur(`${P}/actions/runs/44536520447/jobs`, () => antwort(200, { total_count: 4, jobs: [{ id: 1, name: 'Job 0 synth', status: 'completed', conclusion: S }] })));
+  assert.equal(eintrag(r, 44536520447).kostenGrund, 'abruf');
+  assert.ok(Number.isFinite(r.modell.bereiche.kosten.teilFehler));
+
+  // Laufliste unvollstaendig (total_count groesser), jeder geladene Lauf belegt: Abruffehler allein aus der Liste.
+  r = await nov22({ ohne: [44620884909], gesamt: 250 });
+  assert.equal(r.modell.bereiche.laeufe.unvollstaendig, true);
+  assert.equal(r.modell.bereiche.kosten.kostenUnbekannt, 0, 'Muss-Treffer: kein offener Lauf');
+  assert.ok(Number.isFinite(r.modell.bereiche.kosten.teilFehler));
+  assert.equal(r.modell.bereiche.kosten.vollstaendig, false);
+  // Gegenprobe: dieselbe Liste vollstaendig ist belegt vollstaendig, ohne Abruffehler.
+  r = await nov22({ ohne: [44620884909] });
+  assert.deepEqual([r.modell.bereiche.kosten.vollstaendig, r.modell.bereiche.kosten.teilFehler], [true, null]);
+});
+
+test('B1.1a P2: Fehler anderer Bereiche loesen keinen Kosten-Abruffehler aus; wartende Jobs sind nie kostenfrei', async () => {
+  // Wartender Lauf (Fixture 44900000001): Kosten offen mit Grund "beleg", nie "keine".
+  let r = await lauf();
+  const w = eintrag(r, 44900000001);
+  assert.deepEqual([w.kostenOffen, w.kostenGrund, w.kosten], [true, 'beleg', null]);
+  assert.equal(r.modell.bereiche.kosten.belegtOhneKosten, 1, 'nur NF3, nicht der wartende Lauf');
+  // Auch ein noch laufender Lauf ohne gestarteten Job 1 oder ein Job 1 in der Warteschlange gilt nicht als kostenfrei.
+  assert.deepEqual(kostenAusJob1({ status: 'in_progress' }, { id: null, status: 'nicht-gestartet', conclusion: null }, undefined), { kosten: null, runden: null, offen: true, grund: 'beleg' });
+  assert.deepEqual(kostenAusJob1({ status: 'completed' }, { id: 1, status: 'queued', conclusion: null }, undefined), { kosten: null, runden: null, offen: true, grund: 'beleg' });
+  assert.deepEqual(kostenAusJob1({ status: 'completed' }, { id: 1, status: 'completed', conclusion: 'failure' }, null), { kosten: null, runden: null, offen: true, grund: 'abruf' });
+  assert.deepEqual(kostenAusJob1({ status: 'completed' }, { id: 1, status: 'completed', conclusion: 'failure' }, { code: 'abnahme-exitcode', runden: null, kosten: null }).grund, 'beleg');
+
+  // Je ein Fehler in einem anderen Bereich: Laeufe-Bereich mit Teilfehler, Kostenbereich ohne.
+  const andere = [
+    ['PR-Liste', nur(`${P}/pulls`, () => antwort(500, {}))],
+    ['Generalprobe', (p, u) => (p === RUNS && u.searchParams.get('event') === 'pull_request' ? antwort(500, {}) : null)],
+    ['Checks', p => (p.endsWith('/check-runs') ? antwort(403, { message: 'Resource not accessible by personal access token' }) : null)],
+    ['Environments', p => (p.endsWith('/pending_deployments') ? antwort(500, {}) : null)],
+    ['Log Job 2', nur('/log/136489652497', () => antwort(500, ''))],
+    ['Issue-Ereignisse', nur(`${P}/issues/79/events`, () => antwort(500, {}))],
+  ];
+
+  for (const [name, stoerung] of andere) {
+    r = await lauf(stoerung);
+    assert.ok(Number.isFinite(r.modell.bereiche.laeufe.teilFehler), `Muss-Treffer: ${name} ist ein Teilfehler der Laeufe`);
+    assert.equal(r.modell.bereiche.kosten.teilFehler, null, `${name} darf keinen Kosten-Abruffehler ausloesen`);
+    assert.equal(r.modell.bereiche.kosten.mitKosten, 2, name);
+  }
+});
+
+test('B1.1a P1: mehrfach auftretende Codes bleiben "mehrere Fehlercodes im Log", eingeschleuste bleiben unbekannt', async () => {
+  // Zwei bekannte Codes im selben Log (Job 2 von NF2).
+  let r = await lauf(nur('/log/136489652497', () => antwort(200, 'A6-FEHLER transport-token\nA6-FEHLER abnahme-git-struktur\n')));
+  assert.equal(eintrag(r, 44793828526).code, 'mehrdeutig');
+  assert.ok(seite(r.modell, JETZT).includes('<td>mehrere Fehlercodes im Log</td>'));
+  // Zwei bekannte Codes in zwei Jobs desselben Laufs.
+  r = await nov22({ logs: { 445098469281: () => antwort(200, 'A6-FEHLER transport-token\n') } });
+  assert.equal(eintrag(r, 44509846928).code, 'mehrdeutig');
+  // Dieselbe Zeile zweimal ist ebenfalls mehrdeutig (nicht raten).
+  r = await lauf(nur('/log/136489652497', () => antwort(200, 'A6-FEHLER abnahme-exitcode\nA6-FEHLER abnahme-exitcode\n')));
+  assert.equal(eintrag(r, 44793828526).code, 'mehrdeutig');
+  // Eine eingeschleuste Zeile mit erfundenem Code erscheint als unbekannt, ihr Name nie.
+  r = await lauf(nur('/log/136489652497', () => antwort(200, 'A6-FEHLER irgendwas\n')));
+  assert.equal(eintrag(r, 44793828526).code, 'irgendwas');
+  const html = seite(r.modell, JETZT);
+  assert.ok(html.includes('<td>unbekannter Code</td>') && !html.includes('irgendwas'));
 });

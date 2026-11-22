@@ -24,7 +24,7 @@ function modell({ titel = 'Titel', stand = JETZT, fehlschlag = null, teilFehler 
         generalprobe: 3,
       }),
       freigaben: bereich({ eintraege: [{ laufId: 1, url: `${R}/actions/runs/1`, environment: titel, job: 3, restMinuten: 40 }] }),
-      kosten: bereich({ monat: '2026-11', summe: 0.0743, mitKosten: 2, ohneKosten: 1, vollstaendig: true }),
+      kosten: bereich({ monat: '2026-11', summe: 0.0743, mitKosten: 2, belegtOhneKosten: 1, kostenUnbekannt: 0, ohneBeleg: 0, vollstaendig: true }),
       sitzungen: bereich({ eintraege: [{ name: titel, cwd: titel, start: JETZT, aktiv: JETZT, status: titel, id8: '0123abcd' }] }),
     },
   };
@@ -155,4 +155,63 @@ test('Geheimnis-Filter (W9): Seite mit Muster oder Token-Wert wird nicht geschri
   assert.equal(r.exitcode, 1);
   assert.match(r.meldung, /Geheimnis-Muster gefunden \(ghp_\)/);
   assert.equal(geschrieben, 0);
+});
+
+// B1.1a P1: Codes nur mit Namen. Ein Code aus BEKANNTE_CODES erscheint mit Namen und "keine Beschreibung hinterlegt",
+// jeder andere bleibt "unbekannter Code" (siehe auch den unveraenderten Test oben mit erfundener-code).
+test('B1.1a P1: bekannter Code ohne Klartext mit Namen, erfundene und manipulierte Codes weiter unbekannt', () => {
+  const mit = code => {
+    const m = modell();
+    m.bereiche.laeufe.eintraege[0].code = code;
+    return seite(m, JETZT);
+  };
+
+  for (const c of ['abnahme-git-struktur', 'transport-token', 'job-unbekannt']) {
+    const html = mit(c);
+    assert.ok(html.includes(`<td>${c} (keine Beschreibung hinterlegt)</td>`), c);
+    assert.ok(!html.includes('unbekannter Code'), c);
+  }
+
+  // Codes mit Klartext bleiben wie bisher.
+  assert.ok(mit('abnahme-exitcode').includes('<td>abnahme-exitcode: Abnahme nicht bestanden.</td>'));
+  // Erfunden, aehnlich, Gross- und Kleinschreibung, Prototyp-Namen, Sonderzeichen: unbekannt, Name erscheint nie.
+  for (const c of ['erfundener-code', 'transport-token2', 'transport-tokenx', 'xtransport-token', 'Transport-token', 'transport-token ', 'constructor', '__proto__', 'toString', 'hasOwnProperty', '<b>transport-token</b>', 'mehrdeutig-x']) {
+    const html = mit(c);
+    assert.ok(html.includes('<td>unbekannter Code</td>'), c);
+    assert.ok(!html.includes(`<td>${maskiere(c)}`), `${c}: Name erscheint als Fehler`);
+    assert.ok(!html.includes('keine Beschreibung hinterlegt'), c);
+  }
+
+  // Mehrere Fehlerzeilen bleiben "mehrere Fehlercodes im Log", auch wenn jeder Code bekannt ist.
+  assert.ok(mit('mehrdeutig').includes('<td>mehrere Fehlercodes im Log</td>'));
+  // Die Spalte sagt, woher der Code stammt: aus dem Log, nicht bestaetigt.
+  assert.ok(mit('transport-token').includes('<th>Fehler laut Log</th>'));
+});
+
+// B1.1a P2 bis P4: drei Zahlen, Hinweis ohne Kostenbeleg statt Abruffehler, Beschriftung.
+test('B1.1a P2 bis P4: Kostenbereich mit drei Zahlen, Hinweis ohne Kostenbeleg und Beschriftung', () => {
+  const kostenTeil = html => /<section class="[a-z]+"><h2>4 Kosten<\/h2>.*?<\/section>/.exec(html)[0];
+  const mit = (werte, teilFehler = null) => {
+    const m = modell();
+    m.bereiche.kosten = { stand: JETZT, fehlschlag: null, teilFehler, monat: '2026-11', summe: 0.204, ...werte };
+    return kostenTeil(seite(m, JETZT));
+  };
+
+  // November-Stand: 7 · 11 · 1, ein Lauf ohne Kostenbeleg, kein Abruffehler.
+  const nov = mit({ mitKosten: 7, belegtOhneKosten: 11, kostenUnbekannt: 1, ohneBeleg: 1, vollstaendig: false });
+  assert.ok(nov.includes('Monat 2026-11 (UTC): mindestens 0,204 $ (unvollständig), Läufe mit Kosten: 7, belegt ohne Kosten: 11, Kosten unbekannt: 1'));
+  assert.ok(nov.includes('1 Lauf ohne Kostenbeleg, Monatssumme unvollständig.'));
+  assert.ok(!nov.includes('Abruf fehlgeschlagen'));
+  // P4: Beschriftung steht im Kostenbereich.
+  assert.ok(nov.includes('Kosten der Agent-Aufträge (Workflow agent-auftrag.yml), nicht der Gesamtverbrauch des Anthropic-Workspace. Der steht in der Anthropic-Konsole.'));
+
+  // Mehrzahl; vollstaendig ohne Hinweis; echter Abruffehler bleibt sichtbar.
+  assert.ok(mit({ mitKosten: 1, belegtOhneKosten: 0, kostenUnbekannt: 3, ohneBeleg: 3, vollstaendig: false }).includes('3 Läufe ohne Kostenbeleg, Monatssumme unvollständig.'));
+  const voll = mit({ mitKosten: 2, belegtOhneKosten: 1, kostenUnbekannt: 0, ohneBeleg: 0, vollstaendig: true });
+  assert.ok(voll.includes('Monat 2026-11 (UTC): 0,204 $, Läufe mit Kosten: 2') && !voll.includes('ohne Kostenbeleg') && !voll.includes('mindestens'));
+  const abruf = mit({ mitKosten: 7, belegtOhneKosten: 11, kostenUnbekannt: 1, ohneBeleg: 0, vollstaendig: false }, JETZT);
+  assert.ok(abruf.includes('Abruf fehlgeschlagen um 10:20 UTC (teilweise)'));
+  assert.ok(abruf.includes('mindestens 0,204 $ (unvollständig)') && !abruf.includes('ohne Kostenbeleg'));
+  // Fehlende Zahlen erscheinen als "unbekannt", nie als 0.
+  assert.ok(mit({ vollstaendig: false }).includes('Läufe mit Kosten: unbekannt, belegt ohne Kosten: unbekannt, Kosten unbekannt: unbekannt'));
 });

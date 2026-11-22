@@ -61,6 +61,17 @@ Fehlen dem Token Rechte, steht im betroffenen Bereich „keine Berechtigung (403
   (`auftrag-label-start-fehlt`, `auftrag-freigabe-entzogen`) ohne Kostenzeile. Sonst, auch bei wartendem oder laufendem
   Job 1, steht „unbekannt“ da. Vollständig ist die Summe nur, wenn die Laufliste vollständig ist und jeder Lauf des
   Monats einen Beleg hat; sonst steht „mindestens … (unvollständig)“ da.
+  Der Bereich nennt drei Zahlen, die sich nicht überschneiden: „mit Kosten“, „belegt ohne Kosten“ und „Kosten
+  unbekannt“. Ein Lauf ohne Kostenbeleg (Log gelesen, aber keine Kostenzeile; Job noch nicht abgeschlossen) ist kein
+  Abruffehler: Er steht als Hinweis „n Lauf/Läufe ohne Kostenbeleg, Monatssumme unvollständig“ da. „Abruf
+  fehlgeschlagen (teilweise)“ zeigt der Kostenbereich nur bei einer unvollständigen Laufliste oder wenn Jobliste oder
+  Job-1-Log eines Laufs nicht geladen werden konnten, nie wegen Fehlern anderer Bereiche. Gemeint sind nur die Kosten
+  der Agent-Aufträge (Workflow `agent-auftrag.yml`), nicht der Gesamtverbrauch des Anthropic-Workspace; der steht in
+  der Anthropic-Konsole.
+- **Fehlercodes:** Codes mit Klartext stehen mit Text da. Codes, die nur dem Namen nach aus der Pipeline bekannt sind
+  (`BEKANNTE_CODES` in `fehlercodes.mjs`), stehen als „`<code>` (keine Beschreibung hinterlegt)“ da. Jeder andere Code
+  bleibt „unbekannter Code“, sein Name erscheint nie. Mehrere Fehlerzeilen ergeben „mehrere Fehlercodes im Log“. Die
+  Spalte heißt „Fehler laut Log“: Ein Treffer ist ein Protokolleintrag, kein bestätigter Befund.
 - **Unsichere Zuordnungen:** Jobs aus einer unvollständigen Jobliste, PRs aus einer gescheiterten oder unvollständigen
   PR-Liste und Issues aus einer unvollständigen Issue-Liste stehen als „unbekannt“ da. Mehrere passende PRs: „mehrere
   passende PRs“. Eine unvollständige Check-Liste zeigt jeden Pflichtcheck als „unbekannt (Liste unvollständig)“.
