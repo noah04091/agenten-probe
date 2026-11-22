@@ -201,7 +201,7 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
 
       eintraege.push({
         id: l.id, url: l.url, start: l.start, issue: issue ? { nummer: issue.nummer, url: issue.url } : null, jobs,
-        code: codes.length === 0 ? null : codes.length === 1 ? codes[0] : 'mehrdeutig', kosten: k1.kosten, runden: k1.runden, pr, kostenOffen: k1.offen,
+        code: codes.length === 0 ? null : codes.length === 1 ? codes[0] : 'mehrdeutig', kosten: k1.kosten, runden: k1.runden, pr, kostenOffen: k1.offen, kostenGrund: k1.grund,
       });
     }
 
@@ -209,7 +209,10 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
     const summe = monatsKosten(eintraege, jetzt, runs.vollstaendig === true);
     b.laeufe = { stand: jetzt, fehlschlag: null, teilFehler: stempel, eintraege, generalprobe, unvollstaendig: runs.vollstaendig !== true, kandidatenUnvollstaendig: !kandidatenVollstaendig };
     b.freigaben = { stand: jetzt, fehlschlag: null, teilFehler: stempel, eintraege: freigaben };
-    b.kosten = { stand: jetzt, fehlschlag: null, teilFehler: summe.vollstaendig ? null : jetzt, ...summe };
+    // B1.1a: Abruffehler im Kostenbereich nur bei unvollstaendiger Laufliste oder einem Lauf, dessen Kosten wegen eines
+    // gescheiterten Abrufs (Jobliste, Job-1-Log, Startzeit) offen sind. Ein fehlender Beleg ist kein Abruffehler. Fehler
+    // anderer Bereiche (teil: PR-Zuordnung, Generalprobe, Checks, Freigaben) wirken hier bewusst nicht.
+    b.kosten = { stand: jetzt, fehlschlag: null, teilFehler: runs.vollstaendig !== true || summe.abrufOffen ? jetzt : null, ...summe };
   }
 
   // --- Bereich 4: Sitzungen -------------------------------------------------------------------------------------

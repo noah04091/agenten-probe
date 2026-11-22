@@ -2,7 +2,7 @@
 //   W1  nur github-lesen.mjs ruft fetch, Methode fest GET, keine schreibende Methode
 //   W2  kein Kindprozess, kein gh, keine Umgebungsvariable mit Token, kein Credential-Helper
 //   W10 jeder Zentrale-Test ersetzt fetch durch eine Attrappe, die bei echtem Aufruf wirft
-//   W11 jeder Code in fehlercodes.mjs steht woertlich in scripts/ oder .github/agent/
+//   W11 jeder Code in fehlercodes.mjs (beide Listen) steht woertlich in ausfuehrbarem Code in scripts/ oder .github/agent/
 // Dazu: werkzeuge/zentrale/ enthaelt genau die vereinbarten Dateien, keine Links.
 globalThis.fetch = () => { throw new Error('W10: Netz in Zentrale-Tests verboten'); };
 
@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { FEHLERCODES } from '../werkzeuge/zentrale/fehlercodes.mjs';
+import { BEKANNTE_CODES, FEHLERCODES } from '../werkzeuge/zentrale/fehlercodes.mjs';
 import { erzeugeLeser } from '../werkzeuge/zentrale/github-lesen.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -91,14 +91,22 @@ test('W10: jeder Zentrale-Test ersetzt fetch durch eine werfende Attrappe, und s
   assert.deepEqual(r, { klasse: 'unbekannt', grund: 'Netzfehler' });
 });
 
-test('W11: jeder Code in fehlercodes.mjs steht woertlich in scripts/ oder .github/agent/', () => {
+// Ausfuehrbarer Code: Blockkommentare, ganze Kommentarzeilen (// und bei Shell #) und angehaengte " // ..." entfernt.
+function ausfuehrbar(text, shell = false) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').split('\n')
+    .filter(z => !/^\s*\/\//.test(z) && !(shell && /^\s*#/.test(z)))
+    .map(z => z.replace(/\s\/\/\s.*$/, ''))
+    .join('\n');
+}
+
+test('W11: jeder Code in fehlercodes.mjs (beide Listen) steht woertlich in ausfuehrbarem Code unter scripts/ oder .github/agent/', () => {
   const texte = [];
   const geh = dir => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       if (e.isDirectory()) {
         if (e.name !== 'node_modules') geh(join(dir, e.name));
       } else if (/\.(mjs|js|sh|json)$/.test(e.name)) {
-        texte.push(readFileSync(join(dir, e.name), 'utf8'));
+        texte.push(ausfuehrbar(readFileSync(join(dir, e.name), 'utf8'), e.name.endsWith('.sh')));
       }
     }
   };
@@ -108,10 +116,28 @@ test('W11: jeder Code in fehlercodes.mjs steht woertlich in scripts/ oder .githu
   const alles = texte.join('\n');
   const codes = Object.keys(FEHLERCODES);
   assert.ok(codes.length >= 20);
+  assert.ok(BEKANNTE_CODES.length >= 300, 'Muss-Treffer: Namensliste vorhanden');
 
-  for (const c of codes) {
-    assert.ok(alles.includes(`'${c}'`), `Code ${c} kommt in scripts/ und .github/agent/ nicht vor`);
+  for (const c of [...codes, ...BEKANNTE_CODES]) {
+    assert.ok(alles.includes(`'${c}'`), `Code ${c} kommt in ausfuehrbarem Code unter scripts/ und .github/agent/ nicht vor`);
   }
 
+  // Form wie im Log lesbar, ohne Doppel, sortiert, keine Ueberschneidung mit den Klartext-Codes, nie das Sonderwort.
+  assert.ok(BEKANNTE_CODES.every(c => /^[a-z0-9-]{1,60}$/.test(c)), 'Form');
+  assert.deepEqual([...BEKANNTE_CODES], [...new Set(BEKANNTE_CODES)].sort(), 'doppelt oder unsortiert');
+  assert.ok(BEKANNTE_CODES.every(c => !Object.hasOwn(FEHLERCODES, c)), 'Ueberschneidung mit FEHLERCODES');
+  assert.ok(!BEKANNTE_CODES.includes('mehrdeutig') && !Object.hasOwn(FEHLERCODES, 'mehrdeutig'), 'Sonderwort mehrdeutig');
+  assert.ok(Object.isFrozen(BEKANNTE_CODES) && Object.isFrozen(FEHLERCODES));
+
   assert.ok(!alles.includes("'gibt-es-nicht-zentrale'"), 'Gegenprobe');
+  // Gegenprobe: ein Code nur im Kommentar zaehlt nicht; Code daneben bleibt.
+  const probe = ausfuehrbar("// fail('nur-kommentar')\nconst a = 'echt-code'; // 'angehaengt-kommentar'\n/* 'block-kommentar' */\n  * 'stern-zeile'");
+  assert.ok(probe.includes("'echt-code'"), 'Muss-Treffer: Code bleibt');
+  for (const k of ['nur-kommentar', 'angehaengt-kommentar', 'block-kommentar']) {
+    assert.ok(!probe.includes(`'${k}'`), k);
+  }
+  assert.ok(!ausfuehrbar("# 'shell-kommentar'\nX='shell-code'", true).includes("'shell-kommentar'"));
+  // Muss-Treffer: ein Kommentar in scripts/ mit Codewort wird tatsaechlich entfernt.
+  assert.ok(readFileSync(join(ROOT, 'scripts', 'agent-code-integritaet.mjs'), 'utf8').includes('A6-FEHLER integritaet-<code>'));
+  assert.ok(!alles.includes('A6-FEHLER integritaet-<code>'));
 });

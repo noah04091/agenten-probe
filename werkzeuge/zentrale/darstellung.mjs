@@ -8,7 +8,7 @@
 // Schleifenbetrieb; dann nennt sie die Zeit, bis zu der die naechste Erzeugung faellig ist. Eine Seite nach dem Ende
 // der Schleife traegt kein Neuladen mehr und sagt, dass die Schleife beendet ist.
 
-import { klartext } from './fehlercodes.mjs';
+import { klartext, nurName } from './fehlercodes.mjs';
 
 export const VERALTET_MS = 10 * 60 * 1000;
 // Schleifenbetrieb: neue Datei alle 120 Sekunden; faellig ist die naechste spaetestens eine Minute danach.
@@ -143,7 +143,13 @@ function fehlerText(code) {
   }
 
   const k = klartext(code);
-  return k === null ? 'unbekannter Code' : `${maskiere(code)}: ${maskiere(k)}`;
+
+  if (k !== null) {
+    return `${maskiere(code)}: ${maskiere(k)}`;
+  }
+
+  // B1.1a: Name aus der Pipeline bekannt, aber ohne Klartext. Alles andere bleibt "unbekannter Code".
+  return nurName(code) ? `${maskiere(code)} (keine Beschreibung hinterlegt)` : 'unbekannter Code';
 }
 
 function prText(pr) {
@@ -177,7 +183,7 @@ function laeufe(b) {
       + `<td>${l.issue ? link(l.issue.url, `#${l.issue.nummer}`) : 'Issue unbekannt'}</td><td>${datumZeit(l.start)}</td>`
       + `${[0, 1, 2, 3].map(n => `<td>${jobText(l.jobs[n])}</td>`).join('')}`
       + `<td>${fehlerText(l.code)}</td><td>${Number.isFinite(l.kosten) ? dollar(l.kosten) : l.kostenOffen ? 'unbekannt' : 'keine'}</td><td>${prText(l.pr)}</td></tr>`);
-    teile.push(`<table><tr><th>Lauf</th><th>Issue</th><th>Start</th><th>Job 0</th><th>Job 1</th><th>Job 2</th><th>Job 3</th><th>Fehler</th><th>Kosten</th><th>Draft-PR</th></tr>${zeilen.join('')}</table>`);
+    teile.push(`<table><tr><th>Lauf</th><th>Issue</th><th>Start</th><th>Job 0</th><th>Job 1</th><th>Job 2</th><th>Job 3</th><th>Fehler laut Log</th><th>Kosten</th><th>Draft-PR</th></tr>${zeilen.join('')}</table>`);
   }
 
   if (b.unvollstaendig) {
@@ -208,9 +214,26 @@ function freigaben(b, jetzt) {
   return `<table><tr><th>Lauf</th><th>Environment</th><th>Job</th><th>Frist bis 60 min nach dem Startlabel</th></tr>${zeilen.join('')}</table>${hinweis}`;
 }
 
+// B1.1a: drei ueberschneidungsfreie Zahlen. Laeufe ohne Kostenbeleg (Log gelesen oder Job noch offen) sind kein
+// Abruffehler, sie stehen als eigener Hinweis da; die Summe bleibt dann "mindestens ... (unvollstaendig)".
+export const KOSTEN_BESCHRIFTUNG = 'Kosten der Agent-Aufträge (Workflow agent-auftrag.yml), nicht der Gesamtverbrauch des '
+  + 'Anthropic-Workspace. Der steht in der Anthropic-Konsole.';
+
+function anzahl(n) {
+  return Number.isInteger(n) ? String(n) : 'unbekannt';
+}
+
 function kosten(b) {
   const summe = b.vollstaendig ? dollar(b.summe) : `mindestens ${dollar(b.summe)} (unvollständig)`;
-  return `<p>Monat ${maskiere(b.monat)} (UTC): ${summe}, Läufe mit Kosten: ${b.mitKosten}, Läufe ohne Kostenangabe: ${b.ohneKosten}</p>`;
+  const teile = [`<p class="hinweis">${KOSTEN_BESCHRIFTUNG}</p>`,
+    `<p>Monat ${maskiere(b.monat)} (UTC): ${summe}, Läufe mit Kosten: ${anzahl(b.mitKosten)}, `
+    + `belegt ohne Kosten: ${anzahl(b.belegtOhneKosten)}, Kosten unbekannt: ${anzahl(b.kostenUnbekannt)}</p>`];
+
+  if (Number.isInteger(b.ohneBeleg) && b.ohneBeleg > 0) {
+    teile.push(`<p class="hinweis">${b.ohneBeleg} ${b.ohneBeleg === 1 ? 'Lauf' : 'Läufe'} ohne Kostenbeleg, Monatssumme unvollständig.</p>`);
+  }
+
+  return teile.join('');
 }
 
 function sitzungen(b) {
