@@ -20,7 +20,11 @@ function hoch(basis, exponent) {
   return basis ** exponent;
 }
 
-module.exports = { addiere, subtrahiere, multipliziere, hoch };
+function dividiere(a, b) {
+  return a / b;
+}
+
+module.exports = { addiere, subtrahiere, multipliziere, hoch, dividiere };
 
 // T14
 // T16 a

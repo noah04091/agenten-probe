@@ -1,6 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { addiere, subtrahiere, multipliziere, hoch } = require('../src/rechne');
+const { addiere, subtrahiere, multipliziere, hoch, dividiere } = require('../src/rechne');
+
+test('dividiere entspricht a / b', () => {
+  assert.strictEqual(dividiere(10, 4), 2.5);
+  assert.strictEqual(dividiere(1, 0), Infinity);
+  assert.strictEqual(dividiere(-1, 0), -Infinity);
+  assert.strictEqual(dividiere(0, -5), -0);
+  assert.strictEqual(Number.isNaN(dividiere(0, 0)), true);
+});
 
 test('hoch entspricht basis ** exponent', () => {
   assert.strictEqual(hoch(2, 10), 1024);
