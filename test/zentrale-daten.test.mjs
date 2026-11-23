@@ -1393,6 +1393,17 @@ test('B1.3a Echt-Probe (3, 6): ungueltiger Ablauf und Geheimnisse; kein Rohwert 
   const tok = 'abcdefgh12345678TOKEN';
   assert.deepEqual(ladeSoll({ datei: SOLL_DATEI, fsImpl: sollFs(sollText('2026-12-21T21:04:30Z', '2026-11-21', { notiz: tok })), jetzt: JETZT, token: tok }),
     { ok: false, grund: 'Referenzdatei enthaelt ein Geheimnis-Muster' }, 'Tokenwert ohne Muster');
+  // Durch die Echt-Probe: der geladene Tokenwert erreicht den Filter.
+  const zeilen = [];
+  const code = await echtprobe([], {
+    tokenLaden: () => ({ ok: true, token: tok }),
+    leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: github(beide(zweig, november())).f }),
+    ausgabe: t => zeilen.push(t), jetzt: JETZT,
+    sollLaden: a => ladeSoll({ ...a, datei: SOLL_DATEI, fsImpl: sollFs(sollText('2026-12-21T21:04:30Z', '2026-11-21', { notiz: tok })) }),
+  });
+  assert.equal(code, 1);
+  assert.ok(zeilen.includes('PROBE frist-lese-token: Sollwert nicht pruefbar: Referenzdatei enthaelt ein Geheimnis-Muster ABWEICHUNG'), zeilen.join('\n'));
+  assert.ok(!zeilen.join('\n').includes(tok));
 });
 
 test('B1.3a Echt-Probe (4, 5): Zeitregeln, jeder Grenzfall einzeln', async () => {
