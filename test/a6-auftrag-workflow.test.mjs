@@ -1025,13 +1025,13 @@ const b12Zeilen = job => [
   '          set -euo pipefail',
   '          printf \'%s  %s\\n\' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }',
   '          source .github/agent/a6-funktionen.sh',
-  `          a6_bericht ${job}`,
+  job === 'sammel' ? '          a6_bericht_sammel' : `          a6_bericht ${job}`,
 ];
 const b12Schritt = job => `\n\n${b12Zeilen(job).join('\n')}`;
 const B12_MARKE = '\n# ---------------------------------------------------------------------------------------------------\n# B1.2 Job-Zusammenfassungen:';
 const B12_AUFRUF_ALT = '  docker run --rm --pull=never --network "$netz" --read-only --cap-drop ALL \\\n';
 const B12_AUFRUF_NEU = `  a6_mitschnitt ${B12_AUFRUF_ALT.slice(2)}`;
-const B12_FUNKTIONEN = Object.freeze(['a6_bericht_ordner', 'a6_mitschnitt', 'a6_bericht_warnung', 'a6_bericht_ziel', 'a6_bericht_kosten', 'a6_bericht']);
+const B12_FUNKTIONEN = Object.freeze(['a6_bericht_eigen', 'a6_bericht_ordner', 'a6_mitschnitt', 'a6_bericht_warnung', 'a6_bericht_ziel', 'a6_bericht_kosten', 'a6_bericht', 'a6_bericht_sammel']);
 const B12_GRUENDE = Object.freeze(['job-ungueltig', 'ziel-ungueltig', 'funktionen-hash', 'image', 'start', 'pruefung', 'integritaet', 'nicht-geschrieben']);
 const anker = (wf, name) => {
   const m = [...wf.matchAll(new RegExp(`^ {2}${name}: ([0-9a-f]{64})$`, 'gm'))];
@@ -1175,7 +1175,8 @@ function pruefeBerichtsschritte(wf) {
   }
 
   assert.equal((wf.match(/continue-on-error/g) ?? []).length, B12_JOBS.length, 'continue-on-error ausserhalb der Berichtsschritte');
-  assert.equal((wf.match(/\ba6_bericht\b/g) ?? []).length, B12_JOBS.length);
+  assert.equal((wf.match(/\ba6_bericht\b/g) ?? []).length, B12_JOBS.length - 1);
+  assert.equal((wf.match(/\ba6_bericht_sammel\b/g) ?? []).length, 1);
 
   // K8: kein Artefaktpfad enthaelt a6-bericht.
   const pfade = [...wf.matchAll(/^ {10}path: (.+)$/gm)].map(m => m[1]);
@@ -1212,12 +1213,21 @@ test('B1.2 T14 und T23 statisch: a6_bericht nur ohne Netz, drei feste Einhaengun
   ]);
   assert.ok(b.includes('local job="${1:-}" ziel="${GITHUB_STEP_SUMMARY:-}" basis="$RUNNER_TEMP/a6-bericht"'));
   assert.ok(!/src=\$RUNNER_TEMP[,"]/.test(b) && !b.includes('src=$RUNNER_TEMP,dst'), 'ganz RUNNER_TEMP eingehaengt');
-  assert.deepEqual([...b.matchAll(/--env \S+/g)].map(m => m[0]), ['--env A6_BERICHT_JOB', '--env A6_JOB_STATUS)', '--env "A6_ERGEBNIS_$name")', '--env PATH=/usr/local/bin:/usr/bin:/bin']);
+  assert.deepEqual([...b.matchAll(/--env \S+/g)].map(m => m[0]), ['--env A6_BERICHT_JOB', '--env A6_JOB_STATUS)', '--env PATH=/usr/local/bin:/usr/bin:/bin']);
   assert.ok(!/TOKEN|ANTHROPIC|secrets|--env-file|\s-e\s|--privileged|--cap-add|docker\.sock|--network bridge|--pull=always/.test(b));
   for (const teil of ['--rm --pull=never --network none --read-only --cap-drop ALL', '--security-opt no-new-privileges', '--user "$(id -u):$(id -g)"', '"$A6_NODE_IMAGE" /bin/sh -euc']) {
     assert.ok(b.includes(teil), teil);
   }
-  assert.ok(b.includes('[[ ! "$job" =~ ^(auftrag|claude|abnahme|veroeffentlichen|sammel|probe_auftrag|probe_claude|probe_abnahme|probe_veroeffentlichen)$ ]]'));
+  assert.ok(b.includes('[[ ! "$job" =~ ^(auftrag|claude|abnahme|veroeffentlichen|probe_auftrag|probe_claude|probe_abnahme|probe_veroeffentlichen)$ ]]'));
+  // Kein Netz, nirgends im B1.2-Block: kein Laden eines Images, kein pull; fehlt das Image, nur die Warnung image.
+  const block = FN_ZIEL.slice(FN_ZIEL.indexOf(B12_MARKE));
+  assert.ok(!/a6_image_laden|docker pull|image pull|--pull=always|--network bridge|--network host/.test(block), 'Netz im B1.2-Block');
+  assert.ok(b.includes('  if ! docker image inspect "$A6_NODE_IMAGE" > /dev/null 2>&1; then\n    a6_bericht_warnung image\n    return 1\n  fi\n'));
+  // Die Sammeltabelle startet nie einen Container und ruft docker nie auf.
+  assert.ok(!/docker|--mount|--env/.test(funktion(FN_ZIEL, 'a6_bericht_sammel')));
+  // Eigentuemer ueber stat und id (wie -O); an beiden Stellen genutzt, -O selbst kommt im Block nicht mehr vor.
+  assert.ok(!/\s-O\s/.test(block));
+  assert.equal((block.match(/a6_bericht_eigen "\$(ordner|basis)"/g) ?? []).length, 2);
   // Startblock im Container wie bei a6_container: Umgebung, Node-Version, Anker, Integritaetspruefer, dann das Skript.
   const reihenfolge = ['unset NODE_VERSION YARN_VERSION', 'grep -q "^NODE_"', 'node --version', 'scripts/agent-code-integritaet.mjs | sha256sum -c --status', 'node scripts/agent-code-integritaet.mjs || exit 4', 'exec node scripts/agent-code-job-bericht.mjs'];
   const stellen = reihenfolge.map(t => b.indexOf(t));
@@ -1233,9 +1243,15 @@ test('B1.2 T14 und T23 statisch: a6_bericht nur ohne Netz, drei feste Einhaengun
   const m = funktion(FN_ZIEL, 'a6_mitschnitt');
   assert.ok(!/mktemp\s+(-[a-zA-Z]*u|--dry-run)/.test(FN_ZIEL), 'mktemp -u');
   for (const teil of ['mktemp -d "$basis/lauf.XXXXXXXX"', 'mkfifo -m 600 -- "$tmp/rohr"', '"$(stat -c %a -- "$tmp" 2> /dev/null)" != "700"', '"$echt" != "$basis_echt"/lauf.*',
-    'tee --output-error=warn "$tmp/mitschnitt" < "$tmp/rohr" >&2 2> "$tmp/tee-fehler" {schreiber}>&- &', 'wait "$leser" || tee_rc=$?', '(( groesse <= 65536 ))', 'head -c 65536']) {
+    'tee --output-error=warn "$tmp/mitschnitt" <&"$lese" >&2 2> "$tmp/tee-fehler" {schreiber}>&- {lese}<&- &', 'wait "$leser" || tee_rc=$?', '(( groesse <= 65536 ))', 'head -c 65536']) {
     assert.ok(m.includes(teil), teil);
   }
+  // K9: Schreib- und Leseende oeffnet die Elternshell selbst, beide vor tee; tee liest nie den Pfad des Rohrs;
+  // die Elternshell schliesst ihr Leseende nach dem Start von tee und vor dem Befehl.
+  const k9 = ['{ exec {schreiber}<> "$tmp/rohr"; }', '{ exec {lese}< "$tmp/rohr"; }', 'tee --output-error=warn "$tmp/mitschnitt" <&"$lese"', '  leser=$!\n  exec {lese}<&-\n', '  "$@" 2>&"$schreiber" {schreiber}>&- || rc=$?', '  exec {schreiber}>&-\n  wait "$leser"'];
+  const k9Stellen = k9.map(t => m.indexOf(t));
+  assert.ok(k9Stellen.every(x => x > 0) && [...k9Stellen].sort((x, y) => x - y).join() === k9Stellen.join(), JSON.stringify(k9Stellen));
+  assert.ok(!m.includes('< "$tmp/rohr" >&2') && (m.match(/"\$tmp\/rohr"/g) ?? []).length === 3, 'tee oeffnet das Rohr selbst');
   // Status wird erst nach wait geschrieben.
   assert.ok(m.indexOf('wait "$leser"') < m.indexOf('status=erfasst') && m.indexOf('wait "$leser"') < m.lastIndexOf('>> "$basis/status"'));
 });
@@ -1245,6 +1261,8 @@ test('B1.2 T14 und T23 statisch: a6_bericht nur ohne Netz, drei feste Einhaengun
 // ---------------------------------------------------------------------------
 
 const NUR_LINUX_B12 = process.platform === 'linux' ? false : 'braucht bash, mkfifo, GNU tee und /proc unter Linux; laeuft in CI';
+// Offene Deskriptoren der Shell, die in einen Berichtsordner zeigen (Rohr, Mitschnitt, Status).
+const B12_FDS = String.raw`for f in /proc/$$/fd/*; do l="$(readlink "$f" 2> /dev/null)" || continue; [[ "$l" == *a6-bericht* ]] && printf "%s\n" "$l"; done > "$RUNNER_TEMP/fds"`;
 // Fester Pfad, damit ein eingeschraenkter PATH im Test (ohne docker) bash selbst nicht verliert.
 const B12_BASH = NUR_LINUX_B12 ? 'bash' : spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
@@ -1365,18 +1383,21 @@ test('B1.2 T12: a6_container alt gegen neu mit Ersatz-docker: stdout, stderr und
 
     // Nach der Rueckkehr laeuft kein tee mehr: keine Kindprozesse der Shell, keine Hintergrundjobs.
     const err = join(dir, 'stderr-eine');
-    const nachher = 'jobs -p > "$RUNNER_TEMP/jobs"\nfor p in /proc/[0-9]*; do f=(); read -r -a f < "$p/stat" 2> /dev/null || continue; [[ "${f[3]:-}" == "$$" ]] && printf "%s\\n" "${f[1]}"; done > "$RUNNER_TEMP/kinder"';
+    const nachher = `jobs -p > "$RUNNER_TEMP/jobs"\nfor p in /proc/[0-9]*; do f=(); read -r -a f < "$p/stat" 2> /dev/null || continue; [[ "\${f[3]:-}" == "$$" ]] && printf "%s\\n" "\${f[1]}"; done > "$RUNNER_TEMP/kinder"\n${B12_FDS}`;
     const rt = join(dir, 'prozesse');
     const r = b12Container(FN_ZIEL_PFAD, dir, rt, { extra: { B12_STDERR: err, B12_RC: '1' }, nachher });
     assert.equal(r.status, 1);
     assert.equal(readFileSync(join(rt, 'jobs'), 'utf8'), '');
     assert.equal(readFileSync(join(rt, 'kinder'), 'utf8'), '');
+    // K9: die Elternshell haelt weder Schreib- noch Leseende des Rohrs offen.
+    assert.equal(readFileSync(join(rt, 'fds'), 'utf8'), '');
     // Gegenprobe der Messung: ein absichtlich nicht abgewarteter Hintergrundprozess wird gefunden (vor seinem exec
     // heisst er noch bash, danach sleep) und erscheint auch in jobs -p.
-    const g = b12Container(FN_ZIEL_PFAD, dir, join(dir, 'gegenprobe'), { extra: { B12_RC: '0' }, nachher: `sleep 5 &\n${nachher}\nkill %1` });
+    const g = b12Container(FN_ZIEL_PFAD, dir, join(dir, 'gegenprobe'), { extra: { B12_RC: '0' }, nachher: `sleep 5 &\nexec {g}< "$RUNNER_TEMP/a6-bericht/status"\n${nachher}\nkill %1` });
     assert.equal(g.status, 0);
     assert.match(readFileSync(join(dir, 'gegenprobe', 'kinder'), 'utf8'), /^\((sleep|bash)\)\n$/);
     assert.match(readFileSync(join(dir, 'gegenprobe', 'jobs'), 'utf8'), /^[0-9]+\n$/);
+    assert.equal(readFileSync(join(dir, 'gegenprobe', 'fds'), 'utf8'), `${join(dir, 'gegenprobe', 'a6-bericht', 'status')}\n`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1399,6 +1420,8 @@ test('B1.2 T23: privates Verzeichnis mit Modus 700, Rohr mit Modus 600, danach a
 });
 
 // Erfassungsfehler (T19, T24, K8, K9): der Einstieg bleibt byte-gleich, nie "erfasst", kein Haengen.
+const B12_ANDERER_NUTZER = 'id() { if [[ "${1:-}" == "-u" ]]; then echo 4242; else command id "$@"; fi; }';
+const B12_TEE_SPAET = 'tee() { if [[ "$*" == *mitschnitt* ]]; then sleep 1; fi; command tee "$@"; }';
 const B12_STOERUNGEN = Object.freeze({
   mkdir_scheitert: { vorbereiten: rt => chmodSync(rt, 0o555), status: null },
   ordner_schreibgeschuetzt: { vorbereiten: rt => { mkdirSync(join(rt, 'a6-bericht')); chmodSync(join(rt, 'a6-bericht'), 0o555); }, status: null },
@@ -1414,6 +1437,14 @@ const B12_STOERUNGEN = Object.freeze({
   tee_fehlt: { vorspann: 'tee() { return 127; }', status: 'unvollstaendig\n' },
   // tee meldet etwas, endet aber mit 0: die Meldung geht nach tee-fehler, nie ins Log, und der Status ist nicht erfasst.
   tee_warnt: { vorspann: 'tee() { echo "tee: warnung" >&2; command tee "$@"; }', status: 'unvollstaendig\n' },
+  // Der Berichtsordner gehoert einem anderen Nutzer als dem ausfuehrenden (die Shell gibt sich als Nutzer 4242
+  // aus; ohne Rechte laesst sich kein fremder Eigentuemer anlegen). Er ist beschreibbar, wird aber nie benutzt.
+  fremder_eigentuemer: { vorbereiten: rt => mkdirSync(join(rt, 'a6-bericht')), vorspann: B12_ANDERER_NUTZER, status: null, leer: true },
+  // Gegenprobe zur Messung: derselbe Ersatz fuer id mit dem eigenen Nutzer laesst die Erfassung zu.
+  eigener_eigentuemer: { vorbereiten: rt => mkdirSync(join(rt, 'a6-bericht')), vorspann: 'id() { command id "$@"; }', status: 'erfasst\n', fehler: 'A6-FEHLER abnahme-exitcode\n' },
+  // K9-Wettlauf: tee kommt erst eine Sekunde nach dem Ende des Ersatz-docker zum Lesen, auch ueber den Rohrpuffer hinaus.
+  leser_verzoegert: { vorspann: B12_TEE_SPAET, status: 'erfasst\n', fehler: 'A6-FEHLER abnahme-exitcode\n' },
+  leser_verzoegert_gross: { vorspann: B12_TEE_SPAET, stderr: Buffer.concat([Buffer.from('A6-FEHLER abnahme-exitcode\n'), Buffer.alloc(200 * 1024, 'z'), Buffer.from('\nende\n')]), status: 'unvollstaendig\n', fehler: 'A6-FEHLER abnahme-exitcode\n' },
   ueber_64kb: { stderr: Buffer.concat([Buffer.from('A6-FEHLER abnahme-exitcode\n'), Buffer.alloc(70 * 1024, 'y'), Buffer.from('\n')]), status: 'unvollstaendig\n', fehler: 'A6-FEHLER abnahme-exitcode\n' },
   genau_64kb: { stderr: Buffer.concat([Buffer.from('A6-FEHLER abnahme-exitcode\n'), Buffer.alloc(65536 - 28, 'y'), Buffer.from('\n')]), status: 'erfasst\n', fehler: 'A6-FEHLER abnahme-exitcode\n' },
 });
@@ -1452,6 +1483,7 @@ test('B1.2 T19, T24, K8: Erfassungsfehler lassen Ausgabe und Exitcode byte-gleic
         if (f.fremdLeer) assert.deepEqual(readdirSync(join(dir, `${name}-${rc}`, 'fremd')), [], `${name}: durch den Link geschrieben`);
         // Ein Pfad ausserhalb des Berichtsordners wird nie geloescht, auch wenn mktemp ihn liefert.
         if (f.bleibt) assert.ok(existsSync(join(rtNeu, f.bleibt)), `${name}: fremder Pfad geloescht`);
+        if (f.leer) assert.deepEqual(readdirSync(basis), [], `${name}: fremder Ordner benutzt`);
         if (existsSync(basis) && statSync(basis).isDirectory() && !f.fremdLeer) assert.deepEqual(b12Rest(rtNeu), [], `${name}: Reste`);
       }
     }
@@ -1557,7 +1589,7 @@ test('B1.2 T21: ein abgebrochener Aufruf wird im Bericht nie als erfasst gezeigt
 });
 
 // a6_bericht mit Ersatz-docker: Ziel unter RUNNER_TEMP/_runner_file_commands wie auf dem Runner.
-function b12Bericht(job, { ziel, vorbereiten, extra = {}, rt: rtArg, lesen } = {}) {
+function b12Bericht(job, { ziel, vorbereiten, extra = {}, rt: rtArg, lesen, vorspann = '', befehl = 'a6_bericht "$2"' } = {}) {
   const dir = b12Ordner();
 
   try {
@@ -1571,7 +1603,7 @@ function b12Bericht(job, { ziel, vorbereiten, extra = {}, rt: rtArg, lesen } = {
     vorbereiten?.(rt, dir);
     const env = b12Env(dir, rt, { B12_ARGV: argv, GITHUB_STEP_SUMMARY: zielPfad, A6_JOB_STATUS: 'success', ANTHROPIC_API_KEY: 'sk-ant-geheim', A6_APP_TOKEN: 'ghs_geheim', GITHUB_TOKEN: 'ghp_geheim', ...extra });
     if (zielPfad === null) delete env.GITHUB_STEP_SUMMARY;
-    const r = spawnSync('bash', ['--noprofile', '--norc', '-c', 'set -euo pipefail\nsource "$1"\nrc=0\na6_bericht "$2" || rc=$?\nexit "$rc"', 'b12', FN_ZIEL_PFAD, job], { env, encoding: 'utf8', timeout: 30_000 });
+    const r = spawnSync('bash', ['--noprofile', '--norc', '-c', `set -euo pipefail\nsource "$1"\n${vorspann}\nrc=0\n${befehl} || rc=$?\nexit "$rc"`, 'b12', FN_ZIEL_PFAD, job], { env, encoding: 'utf8', timeout: 30_000 });
     assert.equal(r.error, undefined);
     const aufrufe = readdirSync(argv).sort((a, b) => Number(a) - Number(b)).map(n => readFileSync(join(argv, n), 'utf8').split('\0').slice(0, -1));
     return { status: r.status, stdout: r.stdout, stderr: r.stderr, aufrufe, inhalt: existsSync(standard) ? readFileSync(standard, 'utf8') : null, rt, dir, gelesen: lesen?.(rt, dir) };
@@ -1584,7 +1616,7 @@ const laeufe = r => r.aufrufe.filter(a => a[0] === 'run');
 const b12Optionen = (a, name) => a.flatMap((x, i) => (x === name ? [a[i + 1]] : []));
 
 test('B1.2 T14: a6_bericht startet genau einen Container ohne Netz mit genau drei Einhaengungen und nur den festen Umgebungsnamen', { skip: NUR_LINUX_B12 }, () => {
-  for (const job of B12_JOBS) {
+  for (const job of B12_JOBS.filter(j => j !== 'sammel')) {
     const r = b12Bericht(job, { vorbereiten: rt => mkdirSync(join(rt, 'a6-bericht')), extra: { B12_SCHREIBE: '1' } });
     assert.equal(r.status, 0, `${job}: ${r.stdout} ${r.stderr}`);
     assert.equal(r.stdout, '');
@@ -1599,21 +1631,21 @@ test('B1.2 T14: a6_bericht startet genau einen Container ohne Netz mit genau dre
       `type=bind,src=${join(r.rt, '_runner_file_commands', 'step_summary_0a1b2c3d-4e5f')},dst=/a6/zusammenfassung`,
     ]);
     assert.ok(!a.some(x => x.includes(`src=${r.rt},`)), 'ganz RUNNER_TEMP eingehaengt');
-    const namen = job === 'sammel' ? B12_ERGEBNISSE.map(([k]) => `A6_ERGEBNIS_${k}`) : [];
-    assert.deepEqual(b12Optionen(a, '--env'), ['PATH=/usr/local/bin:/usr/bin:/bin', 'A6_BERICHT_JOB', 'A6_JOB_STATUS', ...namen]);
+    assert.deepEqual(b12Optionen(a, '--env'), ['PATH=/usr/local/bin:/usr/bin:/bin', 'A6_BERICHT_JOB', 'A6_JOB_STATUS']);
     assert.ok(!a.some(x => /geheim|TOKEN|ANTHROPIC/.test(x)) && !a.includes('-e') && !a.includes('--env-file'));
     assert.deepEqual(a.slice(-3), ['a6', 'v0', 'a'.repeat(64)]);
   }
 
   // Ohne echten Berichtsordner (fehlt oder Link): nur zwei Einhaengungen, nie durch einen Link.
-  for (const [name, vorbereiten] of [['fehlt', null], ['link', (rt, dir) => { mkdirSync(join(dir, 'fremd')); symlinkSync(join(dir, 'fremd'), join(rt, 'a6-bericht')); }]]) {
-    const r = b12Bericht('abnahme', { vorbereiten });
+  for (const [name, vorbereiten, vorspann] of [['fehlt', null], ['link', (rt, dir) => { mkdirSync(join(dir, 'fremd')); symlinkSync(join(dir, 'fremd'), join(rt, 'a6-bericht')); }],
+    ['fremder_eigentuemer', rt => mkdirSync(join(rt, 'a6-bericht')), B12_ANDERER_NUTZER]]) {
+    const r = b12Bericht('abnahme', { vorbereiten, vorspann });
     assert.equal(r.status, 0, name);
     assert.deepEqual(b12Optionen(laeufe(r)[0], '--mount').map(m => m.split(',dst=')[1]), [join(r.dir, 'ws').replaceAll('\\', '/') + ',readonly', '/a6/zusammenfassung'], name);
   }
 
   // Nur feste Jobnamen: sonst A6-START bericht-job, Warnung, Rueckgabe 1, kein Container.
-  for (const job of ['', 'probe_negativ', 'probe_sammel_pruefung', 'auftrag ', 'Auftrag', 'auftrag;id', '../x', 'sammel2']) {
+  for (const job of ['', 'sammel', 'probe_negativ', 'probe_sammel_pruefung', 'auftrag ', 'Auftrag', 'auftrag;id', '../x', 'sammel2']) {
     const r = b12Bericht(job);
     assert.equal(r.status, 1, job);
     assert.equal(r.stderr, 'A6-START bericht-job\n', job);
@@ -1665,14 +1697,13 @@ test('B1.2 T22: jeder Berichtsfehler ergibt genau eine feste Warnung, nie einen 
     assert.equal(r.stdout, `::warning title=A6-BERICHT::${grund}\n`, String(rc));
   }
 
-  // Image fehlt: genau der feste Digest wird geladen; scheitert das, Warnung image und kein Container.
-  const geladen = b12Bericht('sammel', { extra: { B12_IMAGE_RC: '1', B12_PULL_RC: '0' } });
-  assert.equal(geladen.aufrufe.filter(a => a[0] === 'pull').length, 1);
-  assert.deepEqual(geladen.aufrufe.find(a => a[0] === 'pull'), ['pull', '--quiet', `node@sha256:${'0'.repeat(64)}`]);
-  const ohne = b12Bericht('sammel', { extra: { B12_IMAGE_RC: '1', B12_PULL_RC: '1' } });
-  assert.equal(ohne.status, 1);
-  assert.equal(ohne.stdout, '::warning title=A6-BERICHT::image\n');
-  assert.deepEqual(laeufe(ohne), []);
+  // Kein Netz: fehlt das Image, wird nichts geladen. Nur die Warnung image, Rueckgabe 1, kein pull, kein Container.
+  for (const job of ['auftrag', 'claude', 'probe_abnahme']) {
+    const ohne = b12Bericht(job, { extra: { B12_IMAGE_RC: '1', B12_PULL_RC: '0' } });
+    assert.equal(ohne.status, 1, job);
+    assert.equal(ohne.stdout, '::warning title=A6-BERICHT::image\n', job);
+    assert.deepEqual(ohne.aufrufe.map(x => x.slice(0, 2)), [['image', 'inspect']], job);
+  }
 
   // Unbekannter Grund wird nie durchgereicht.
   const w = spawnSync('bash', ['-c', 'source "$1"; a6_bericht_warnung "pfad/geheim"; a6_bericht_warnung start', 'b12', FN_ZIEL_PFAD], { encoding: 'utf8' });
@@ -1752,6 +1783,110 @@ test('B1.2 Runden und Kosten: genau ein result-Ereignis mit zwei Zahlen ergibt d
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+});
+
+// Sammeltabelle (Nachbesserung Punkt 3): a6_bericht_sammel ohne Container, ohne docker, ohne Netz.
+const B12_SAMMEL_TITEL = Object.freeze(['Job 0 Auftrag festlegen', 'Job 1 Claude im Container', 'Job 2 Abnahme ohne Netz', 'Job 3 Draft-PR veröffentlichen',
+  'Generalprobe Job 0', 'Generalprobe Job 1', 'Generalprobe Job 2', 'Generalprobe Job 3', 'Generalprobe Negativfälle', 'Generalprobe Sammelprüfung']);
+const b12SammelText = (pruefung, werte) => `### Bericht: agent-auftrag-sammel\n\nSammelprüfung: ${pruefung}\n\n| Job | Ergebnis |\n|---|---|\n${B12_SAMMEL_TITEL.map((t, i) => `| ${t} | ${werte[i]} |\n`).join('')}\n`;
+const b12SammelEnv = wert => Object.fromEntries(B12_ERGEBNISSE.map(([k]) => [`A6_ERGEBNIS_${k}`, wert]));
+const b12Sammel = (extra, weiter = {}) => b12Bericht('', { ...weiter, befehl: 'a6_bericht_sammel', extra: { ...b12SammelEnv('success'), ...extra } });
+
+test('B1.2 Sammeltabelle: feste Tabelle aus den zehn needs-Ergebnissen, nie docker, uebersprungen nie als Erfolg', { skip: NUR_LINUX_B12 }, () => {
+  const ok = b12Sammel({ A6_JOB_STATUS: 'success' });
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  assert.equal(ok.stdout + ok.stderr, '');
+  assert.equal(ok.inhalt, b12SammelText('bestanden', Array(10).fill('erfolgreich')));
+  assert.deepEqual(ok.aufrufe, [], 'docker im Sammelschritt aufgerufen');
+
+  for (const [wert, anzeige] of [['success', 'erfolgreich'], ['failure', 'fehlgeschlagen'], ['cancelled', 'abgebrochen'], ['skipped', 'übersprungen']]) {
+    const r = b12Sammel({ A6_JOB_STATUS: 'failure', A6_ERGEBNIS_CLAUDE: wert });
+    const werte = Array(10).fill('erfolgreich');
+    werte[1] = anzeige;
+    assert.equal(r.inhalt, b12SammelText('nicht bestanden', werte), wert);
+    assert.deepEqual(r.aufrufe, []);
+  }
+
+  const alleSkipped = b12Sammel({ A6_JOB_STATUS: 'success', ...b12SammelEnv('skipped') });
+  assert.equal(alleSkipped.inhalt, b12SammelText('bestanden', Array(10).fill('übersprungen')));
+  assert.ok(!alleSkipped.inhalt.includes('| erfolgreich |'));
+
+  for (const [status, pruefung] of [['cancelled', 'abgebrochen'], ['', 'Status unbekannt'], ['skipped', 'Status unbekannt'], ['success|x', 'Status unbekannt']]) {
+    assert.ok(b12Sammel({ A6_JOB_STATUS: status }).inhalt.includes(`Sammelprüfung: ${pruefung}\n`), status);
+  }
+});
+
+test('B1.2 Sammeltabelle: Injektionswerte erscheinen nie, werden nie ausgefuehrt und gelten nie als Erfolg', { skip: NUR_LINUX_B12 }, () => {
+  const marke = join(tmpdir(), `a6-b12-marke-${process.pid}`);
+  const boese = ['success|x', 'success ', ' success', 'SUCCESS', 'success\n| Job 0 Auftrag festlegen | erfolgreich |', '| x | erfolgreich |',
+    '[klick](https://example.invalid)', '<script>alert(1)</script>', `$(touch ${marke})`, `\`touch ${marke}\``, '${A6_ERGEBNIS_AUFTRAG}',
+    '::warning title=A6-BERICHT::x', '%0A::error::x', '‮', 'skipped\nsuccess', ''];
+
+  for (const wert of boese) {
+    const r = b12Sammel({ A6_JOB_STATUS: 'success', A6_ERGEBNIS_ABNAHME: wert });
+    assert.equal(r.status, 0, JSON.stringify(wert));
+    const werte = Array(10).fill('erfolgreich');
+    werte[2] = 'unbekannt';
+    assert.equal(r.inhalt, b12SammelText('bestanden', werte), JSON.stringify(wert));
+    assert.deepEqual(r.aufrufe, []);
+    assert.ok(!existsSync(marke), `${JSON.stringify(wert)}: ausgefuehrt`);
+  }
+
+  // Alle zehn Werte zugleich boese: genau zehnmal unbekannt, keinmal erfolgreich.
+  const alle = b12Sammel({ A6_JOB_STATUS: 'success', ...b12SammelEnv('success|x') });
+  assert.equal(alle.inhalt, b12SammelText('bestanden', Array(10).fill('unbekannt')));
+});
+
+test('B1.2 Sammeltabelle: ungueltiges Ziel und Schreibfehler ergeben dieselben festen Warnungen, nie docker', { skip: NUR_LINUX_B12 }, () => {
+  const faelle = {
+    leer: () => '',
+    fehlt: () => null,
+    link: rt => { const l = join(rt, '_runner_file_commands', 'step_summary_link'); symlinkSync(join(rt, '_runner_file_commands', 'step_summary_0a1b2c3d-4e5f'), l); return l; },
+    verzeichnis: rt => { const d = join(rt, '_runner_file_commands', 'step_summary_ordner'); mkdirSync(d); return d; },
+    ausserhalb: rt => { const d = join(rt, 'anderswo'); mkdirSync(d); writeFileSync(join(d, 'step_summary_abc'), ''); return join(d, 'step_summary_abc'); },
+    falscher_name: rt => { const q = join(rt, '_runner_file_commands', 'set_output_abc'); writeFileSync(q, ''); return q; },
+  };
+
+  for (const [name, ziel] of Object.entries(faelle)) {
+    const r = b12Sammel({ A6_JOB_STATUS: 'success' }, { ziel });
+    assert.equal(r.status, 1, name);
+    assert.equal(r.stdout, 'A6-BERICHT ziel-ungueltig\n::warning title=A6-BERICHT::ziel-ungueltig\n', name);
+    assert.equal(r.inhalt, '', name);
+    assert.deepEqual(r.aufrufe, [], name);
+  }
+
+  // Schreibfehler (Ziel schreibgeschuetzt; als root nicht herstellbar, CI und Container laufen ohne root).
+  assert.notEqual(process.getuid?.(), 0, 'Test braucht einen Nutzer ohne root');
+  const r = b12Sammel({ A6_JOB_STATUS: 'success' }, { vorbereiten: rt => chmodSync(join(rt, '_runner_file_commands', 'step_summary_0a1b2c3d-4e5f'), 0o444) });
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, '::warning title=A6-BERICHT::nicht-geschrieben\n');
+  assert.equal(r.inhalt, '');
+  assert.deepEqual(r.aufrufe, []);
+});
+
+test('B1.2 Sammeltabelle: der Workflowschritt des Sammeljobs schreibt sie ohne docker und mit dem echten Funktionsanker', { skip: NUR_LINUX_B12 }, () => {
+  const schritt = schritte(jobs(WF_ZIEL).get('sammel')).at(-1);
+  const zeilen = schritt.trimEnd().split('\n');
+  const lauf = zeilen.slice(zeilen.indexOf('        run: |') + 1).map(z => z.slice(10)).join('\n');
+  assert.ok(lauf.endsWith('a6_bericht_sammel'));
+  const dir = b12Ordner();
+
+  try {
+    mkdirSync(join(dir, 'ws', '.github', 'agent'), { recursive: true });
+    writeFileSync(join(dir, 'ws', '.github', 'agent', 'a6-funktionen.sh'), readFileSync(FN_ZIEL_PFAD));
+    const rt = join(dir, 'rt');
+    mkdirSync(join(rt, '_runner_file_commands'), { recursive: true });
+    const ziel = join(rt, '_runner_file_commands', 'step_summary_abc');
+    writeFileSync(ziel, '');
+    mkdirSync(join(dir, 'argv'));
+    const env = b12Env(dir, rt, { B12_ARGV: join(dir, 'argv'), GITHUB_STEP_SUMMARY: ziel, A6_JOB_STATUS: 'failure', A6_FUNKTIONEN_SHA256: anker(WF_ZIEL, 'A6_FUNKTIONEN_SHA256'), ...b12SammelEnv('skipped') });
+    const r = spawnSync(B12_BASH, ['--noprofile', '--norc', '-c', lauf], { cwd: join(dir, 'ws'), env, encoding: 'utf8', timeout: 30_000 });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(readFileSync(ziel, 'utf8'), b12SammelText('nicht bestanden', Array(10).fill('übersprungen')));
+    assert.deepEqual(readdirSync(join(dir, 'argv')), [], 'docker im Sammelschritt aufgerufen');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

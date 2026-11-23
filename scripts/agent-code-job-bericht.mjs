@@ -3,8 +3,7 @@
 // Aufruf nur ueber a6_bericht (.github/agent/a6-funktionen.sh) im festen Image, ohne Netz, ohne Secrets:
 //   node scripts/agent-code-job-bericht.mjs
 // ohne Argumente. Eingaben, und nur diese:
-//   - Umgebung A6_BERICHT_JOB (feste Jobnamen), A6_JOB_STATUS (job.status), fuer sammel A6_ERGEBNIS_<JOB>
-//     (needs.<job>.result);
+//   - Umgebung A6_BERICHT_JOB (feste Jobnamen) und A6_JOB_STATUS (job.status);
 //   - /a6/bericht/status, /a6/bericht/fehler und /a6/bericht/claude (je hoechstens 1 KB, gewoehnliche
 //     Datei, kein Link) sowie die Namen in /a6/bericht (liegengebliebene lauf.*-Ordner eines
 //     abgebrochenen Aufrufs, nur der Name zaehlt).
@@ -127,37 +126,16 @@ export const BEKANNTE_CODES = Object.freeze([
   "transport-tls", "transport-token", "transport-url",
 ]);
 
-// Jobnamen und ihre Ueberschrift. Die Reihenfolge der Sammeltabelle ist die von needs im Sammeljob.
+// Jobnamen und ihre Ueberschrift. Die Sammeltabelle schreibt a6_bericht_sammel ohne dieses Skript.
 export const JOBS = Object.freeze({
   auftrag: 'Job 0 Auftrag festlegen',
   claude: 'Job 1 Claude im Container',
   abnahme: 'Job 2 Abnahme ohne Netz',
   veroeffentlichen: 'Job 3 Draft-PR veröffentlichen',
-  sammel: 'agent-auftrag-sammel',
   probe_auftrag: 'Generalprobe Job 0',
   probe_claude: 'Generalprobe Job 1 mit Ersatz statt Claude',
   probe_abnahme: 'Generalprobe Job 2',
   probe_veroeffentlichen: 'Generalprobe Job 3 gegen nachgebautes GitHub',
-});
-
-export const SAMMEL_JOBS = Object.freeze([
-  ['auftrag', 'AUFTRAG', 'Job 0 Auftrag festlegen'],
-  ['claude', 'CLAUDE', 'Job 1 Claude im Container'],
-  ['abnahme', 'ABNAHME', 'Job 2 Abnahme ohne Netz'],
-  ['veroeffentlichen', 'VEROEFFENTLICHEN', 'Job 3 Draft-PR veröffentlichen'],
-  ['probe_auftrag', 'PROBE_AUFTRAG', 'Generalprobe Job 0'],
-  ['probe_claude', 'PROBE_CLAUDE', 'Generalprobe Job 1'],
-  ['probe_abnahme', 'PROBE_ABNAHME', 'Generalprobe Job 2'],
-  ['probe_veroeffentlichen', 'PROBE_VEROEFFENTLICHEN', 'Generalprobe Job 3'],
-  ['probe_negativ', 'PROBE_NEGATIV', 'Generalprobe Negativfälle'],
-  ['probe_sammel_pruefung', 'PROBE_SAMMEL', 'Generalprobe Sammelprüfung'],
-]);
-
-const ERGEBNIS_TEXT = Object.freeze({
-  success: 'erfolgreich',
-  failure: 'fehlgeschlagen',
-  cancelled: 'abgebrochen',
-  skipped: 'übersprungen',
 });
 
 export const GEHEIM_MUSTER = Object.freeze(['github_pat_', 'ghp_', 'gho_', 'ghs_', 'ghu_', 'sk-ant', '-----BEGIN', '/home/runner/']);
@@ -289,24 +267,12 @@ export function ergebnis({ job, status, eintraege, erfasst }) {
 }
 
 // Reine Funktion: fertiger Markdown-Text aus festen Bausteinen. Wirft nie; ein unbekannter Job ergibt null.
-export function bericht({ job, status, ergebnisse = {}, fehler = null, statusDatei = null, rest = false, claude = null }) {
+export function bericht({ job, status, fehler = null, statusDatei = null, rest = false, claude = null }) {
   if (typeof job !== 'string' || !Object.hasOwn(JOBS, job)) {
     return null;
   }
 
   const zeilenAus = [`### Bericht: ${JOBS[job]}`, ''];
-
-  if (job === 'sammel') {
-    const pruefung = status === 'success' ? 'bestanden' : status === 'failure' ? 'nicht bestanden' : status === 'cancelled' ? 'abgebrochen' : 'Status unbekannt';
-    zeilenAus.push(`Sammelprüfung: ${pruefung}`, '', '| Job | Ergebnis |', '|---|---|');
-
-    for (const [, schluessel, titel] of SAMMEL_JOBS) {
-      const wert = ergebnisse[schluessel];
-      zeilenAus.push(`| ${titel} | ${typeof wert === 'string' && Object.hasOwn(ERGEBNIS_TEXT, wert) ? ERGEBNIS_TEXT[wert] : 'unbekannt'} |`);
-    }
-
-    return `${zeilenAus.join('\n')}\n\n`;
-  }
 
   const erfasst = erfassung({ status: statusDatei, fehler, rest });
   const eintraege = typeof fehler === 'string' ? fehlerEintraege(fehler) : [];
@@ -434,25 +400,19 @@ function anhaengen(ziel, text) {
 export function main(env, { ordner = BERICHT_ORDNER, ziel = ZIEL } = {}) {
   try {
     const job = env.A6_BERICHT_JOB;
-    const ergebnisse = {};
-
-    for (const [, schluessel] of SAMMEL_JOBS) {
-      ergebnisse[schluessel] = env[`A6_ERGEBNIS_${schluessel}`];
-    }
-
     const eingaben = {
       statusDatei: leseEingabe(`${ordner}/status`),
       fehler: leseEingabe(`${ordner}/fehler`),
       claude: job === 'claude' ? leseEingabe(`${ordner}/claude`) : null,
       rest: restVorhanden(ordner),
     };
-    const text = bericht({ job, status: env.A6_JOB_STATUS, ergebnisse, ...eingaben });
+    const text = bericht({ job, status: env.A6_JOB_STATUS, ...eingaben });
 
     if (text === null) {
       return 1;
     }
 
-    const roh = [job, env.A6_JOB_STATUS, ...Object.values(ergebnisse), eingaben.statusDatei, eingaben.fehler, eingaben.claude];
+    const roh = [job, env.A6_JOB_STATUS, eingaben.statusDatei, eingaben.fehler, eingaben.claude];
 
     if (geheimnisTreffer(text, ...roh).length > 0) {
       return 1;

@@ -1603,7 +1603,7 @@ test('Laufzeit: ohne import.meta.main endet jeder Start mit job-umgebung-fehlt; 
 // andere Fassung und jeder andere Workflow, der auf einen Job-Einstieg verweist, bleibt rot.
 // B1.2: neuer Stand mit den Berichtsschritten. Ohne sie ist er byte-gleich mit dem bisherigen Stand
 // d5bb6eaa3d16e2bd964c2466b8c2befa343c751703d0c8961d0b7026700eb20f (Ausschneide-Probe in a6-auftrag-workflow.test.mjs).
-const A6_WORKFLOW_SHA256 = 'b2c9f023740176015a56a9f935927f6a929e7205323a4070280688c6a4191da0';
+const A6_WORKFLOW_SHA256 = '1136d41a25c18ba06fb32fcfc591b5e20a0cf52d0fcf92f65c9c872a1d38133d';
 
 test('Wache: ausser dem genehmigten agent-auftrag.yml ruft kein Workflow die Job-Einstiege auf; genau diese fuenf Einstiege, die Hilfsdatei und das Berichtsskript (B1.2), keine weitere Jobdatei', () => {
   const workflows = join(ROOT, '.github', 'workflows');

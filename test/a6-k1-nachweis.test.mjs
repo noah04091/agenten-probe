@@ -104,7 +104,7 @@ const b12Schritt = job => `\n\n${[
   '          set -euo pipefail',
   '          printf \'%s  %s\\n\' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }',
   '          source .github/agent/a6-funktionen.sh',
-  `          a6_bericht ${job}`,
+  job === 'sammel' ? '          a6_bericht_sammel' : `          a6_bericht ${job}`,
 ].join('\n')}`;
 
 function ohneBericht(text) {

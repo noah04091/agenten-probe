@@ -23,7 +23,6 @@ import {
   GEHEIM_MUSTER,
   GRENZE_BYTES,
   JOBS,
-  SAMMEL_JOBS,
   ZIEL,
   bericht,
   erfassung,
@@ -226,15 +225,14 @@ test('T5 und T6: Kosten fehlen, kaputt, negativ, NaN, ueber 1000 oder mehrdeutig
 
 test('T7: ghp_, github_pat_, sk-ant-, /home/runner/ in einer Eingabe: erscheint nicht, Zusammenfassung verworfen', () => {
   for (const geheim of ['ghp_0123456789abcdefghij', 'github_pat_11AAAA', 'sk-ant-api03-xyz', '/home/runner/work/_temp/x', 'gho_x', 'ghs_x', 'ghu_x', '-----BEGIN PRIVATE KEY-----']) {
-    for (const ort of ['fehler', 'statusDatei', 'claude', 'status', 'ergebnis']) {
+    for (const ort of ['fehler', 'statusDatei', 'claude', 'status']) {
       const { dir, ordner, ziel } = umgebung();
-      const env = { A6_BERICHT_JOB: 'claude', A6_JOB_STATUS: 'failure', A6_ERGEBNIS_AUFTRAG: 'success' };
+      const env = { A6_BERICHT_JOB: 'claude', A6_JOB_STATUS: 'failure' };
       writeFileSync(join(ordner, 'status'), ERFASST);
       if (ort === 'fehler') writeFileSync(join(ordner, 'fehler'), `A6-FEHLER abnahme-exitcode\n${geheim}\n`);
       if (ort === 'statusDatei') writeFileSync(join(ordner, 'status'), `${ERFASST}${geheim}\n`);
       if (ort === 'claude') writeFileSync(join(ordner, 'claude'), `7 ${geheim}\n`);
       if (ort === 'status') env.A6_JOB_STATUS = geheim;
-      if (ort === 'ergebnis') env.A6_ERGEBNIS_AUFTRAG = geheim;
       assert.equal(main(env, { ordner, ziel }), 1, `${ort}: ${geheim}`);
       assert.equal(readFileSync(ziel, 'utf8'), 'vorher\n', `${ort}: Zusammenfassung nicht verworfen`);
       rmSync(dir, { recursive: true, force: true });
@@ -269,11 +267,9 @@ test('T8: Injektionstext, Markdown-Link, <script> in einer Eingabe erscheinen ni
       }
     }
 
-    // Auch ueber die Umgebung (Status und Sammelergebnisse).
+    // Auch ueber die Umgebung (Status).
     const status = bericht({ job: 'auftrag', status: b, statusDatei: ERFASST });
     assert.equal(ergebnisZeile(status), '- Ergebnis: Status unbekannt');
-    const sammel = bericht({ job: 'sammel', status: b, ergebnisse: { AUFTRAG: b } });
-    assert.ok(!sammel.includes(b) && sammel.includes('| Job 0 Auftrag festlegen | unbekannt |'));
   }
 });
 
@@ -372,7 +368,7 @@ test('main: haengt genau einmal an, liest liegengebliebene lauf.-Ordner nur als 
   assert.ok(readFileSync(ziel, 'utf8').includes('- Ergebnis: fehlgeschlagen, Ursache unbekannt\n- Fehlerdaten: nicht erfasst\n- Runden und Kosten unbekannt\n'));
 
   // Unbekannter Job: kein Bericht, Exitcode 1, Ziel unberuehrt.
-  for (const job of [undefined, '', 'sammel2', 'probe_negativ', 'probe_sammel_pruefung', '__proto__', 'constructor', 'toString']) {
+  for (const job of [undefined, '', 'sammel', 'sammel2', 'probe_negativ', 'probe_sammel_pruefung', '__proto__', 'constructor', 'toString']) {
     writeFileSync(ziel, 'x');
     assert.equal(main({ A6_BERICHT_JOB: job, A6_JOB_STATUS: 'success' }, { ordner, ziel }), 1, String(job));
     assert.equal(readFileSync(ziel, 'utf8'), 'x');
@@ -396,35 +392,14 @@ test('main: schreibgeschuetztes Ziel ergibt Exitcode 1 (Bericht nicht geschriebe
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('T16: Sammeltabelle mit genau den Jobs aus needs, feste Werte, uebersprungen nie als Erfolg', () => {
-  const alle = Object.fromEntries(SAMMEL_JOBS.map(([, k]) => [k, 'success']));
-  const text = bericht({ job: 'sammel', status: 'success', ergebnisse: alle });
-  nurFesteTexte(text);
-  const tabelle = zeilen(text).filter(z => z.startsWith('| ') && !z.startsWith('| Job |'));
-  assert.equal(tabelle.length, 10);
-  assert.deepEqual(SAMMEL_JOBS.map(([n]) => n), ['auftrag', 'claude', 'abnahme', 'veroeffentlichen', 'probe_auftrag', 'probe_claude', 'probe_abnahme',
-    'probe_veroeffentlichen', 'probe_negativ', 'probe_sammel_pruefung']);
-  assert.ok(text.includes('Sammelprüfung: bestanden\n'));
-  assert.ok(!text.includes('Fehlerdaten'));
-
-  for (const [wert, anzeige] of [['success', 'erfolgreich'], ['failure', 'fehlgeschlagen'], ['cancelled', 'abgebrochen'], ['skipped', 'übersprungen'],
-    ['', 'unbekannt'], [undefined, 'unbekannt'], ['SUCCESS', 'unbekannt'], ['neutral', 'unbekannt'], ['success ', 'unbekannt']]) {
-    const t = bericht({ job: 'sammel', status: 'failure', ergebnisse: { ...alle, CLAUDE: wert } });
-    assert.ok(t.includes(`| Job 1 Claude im Container | ${anzeige} |\n`), String(wert));
-    assert.ok(t.includes('Sammelprüfung: nicht bestanden\n'));
-  }
-
-  // Uebersprungen ist nie erfolgreich, und kein Wert ausser success zeigt "erfolgreich".
-  const skipped = bericht({ job: 'sammel', status: 'success', ergebnisse: Object.fromEntries(SAMMEL_JOBS.map(([, k]) => [k, 'skipped'])) });
-  assert.ok(!skipped.includes('| erfolgreich |'));
-  assert.equal((skipped.match(/\| übersprungen \|/g) ?? []).length, 10);
-  assert.ok(bericht({ job: 'sammel', status: undefined }).includes('Sammelprüfung: Status unbekannt\n'));
-
-  // main liest genau diese zehn Umgebungsnamen.
+test('T16: das Berichtsskript kennt keinen Sammelzweig; die Sammeltabelle schreibt a6_bericht_sammel ohne Container', () => {
+  assert.ok(!Object.hasOwn(JOBS, 'sammel'));
+  assert.equal(bericht({ job: 'sammel', status: 'success' }), null);
+  const code = SKRIPT.split('\n').filter(z => !/^\s*\/\//.test(z)).join('\n');
+  assert.ok(!/sammel|SAMMEL|A6_ERGEBNIS|ergebnisse/.test(code));
   const { dir, ordner, ziel } = umgebung();
-  const env = { A6_BERICHT_JOB: 'sammel', A6_JOB_STATUS: 'success', ...Object.fromEntries(SAMMEL_JOBS.map(([, k]) => [`A6_ERGEBNIS_${k}`, 'skipped'])), A6_ERGEBNIS_PROBE_ABNAHME: 'success' };
-  assert.equal(main(env, { ordner, ziel }), 0);
-  assert.ok(readFileSync(ziel, 'utf8').includes('| Generalprobe Job 2 | erfolgreich |\n'));
+  assert.equal(main({ A6_BERICHT_JOB: 'sammel', A6_JOB_STATUS: 'success', A6_ERGEBNIS_AUFTRAG: 'success' }, { ordner, ziel }), 1);
+  assert.equal(readFileSync(ziel, 'utf8'), 'vorher\n');
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -477,7 +452,7 @@ test('T15: Berichtsskript statisch: nur node:fs, kein Netz, kein Kindprozess, ke
   assert.ok(code.includes("export function main(env, { ordner = BERICHT_ORDNER, ziel = ZIEL } = {})"));
   assert.ok(code.includes('process.exitCode = main(process.env);'));
   // Die Umgebung wird nur ueber diese Namen gelesen.
-  assert.deepEqual([...new Set([...code.matchAll(/env(?:\.([A-Z0-9_]+)|\[`([A-Z0-9_]+)\$)/g)].map(m => m[1] ?? m[2]))].sort(), ['A6_BERICHT_JOB', 'A6_ERGEBNIS_', 'A6_JOB_STATUS']);
+  assert.deepEqual([...new Set([...code.matchAll(/env(?:\.([A-Z0-9_]+)|\[`([A-Z0-9_]+)\$)/g)].map(m => m[1] ?? m[2]))].sort(), ['A6_BERICHT_JOB', 'A6_JOB_STATUS']);
 });
 
 test('T15: unbekanntes Modul ohne import.meta.main endet nie mit 0', () => {
