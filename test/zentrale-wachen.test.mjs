@@ -4,6 +4,7 @@
 //   W10 jeder Zentrale-Test ersetzt fetch durch eine Attrappe, die bei echtem Aufruf wirft
 //   W11 jeder Code in fehlercodes.mjs (beide Listen) steht woertlich in ausfuehrbarem Code in scripts/ oder .github/agent/
 //   W12 zentrale.mjs liest ausser lese-token, cache.json, fristen.json und dem Sitzungsordner keine Datei (B1.3)
+//   W13 echtprobe.mjs liest ausser dem Token (token.mjs) nur echtprobe-soll.json und schreibt keine Datei (B1.3a)
 // Dazu: werkzeuge/zentrale/ enthaelt genau die vereinbarten Dateien, keine Links.
 globalThis.fetch = () => { throw new Error('W10: Netz in Zentrale-Tests verboten'); };
 
@@ -190,5 +191,55 @@ test('W12: zentrale.mjs liest nur cache.json und fristen.json (Token und Sitzung
     assert.ok(gelesen.every(([m, p]) => ['lstatSync', 'readFileSync'].includes(m) && erlaubt.includes(p)), `${name}: ${JSON.stringify(gelesen)}`);
     // existsSync nur fuer die Sitzungsuebersicht und die Suche nach .git (Git-Arbeitsbaum-Pruefung von fristen.json).
     assert.ok(f.protokoll.filter(([m]) => m === 'existsSync').every(([, p]) => p === join('Z', 'sitzungen.html') || p.endsWith('.git')), name);
+  }
+});
+
+// B1.3a: echtprobe.mjs liest ausser dem Token (ueber token.mjs) nur echtprobe-soll.json und schreibt keine Datei.
+// Statisch im Quelltext und im Ablauf mit einer protokollierenden Attrappe (gueltig, fehlt, Git-Arbeitsbaum, ungueltig).
+test('W13: echtprobe.mjs liest nur echtprobe-soll.json und schreibt keine Datei', async () => {
+  const t = code(lies('echtprobe.mjs'));
+  const SCHREIBEN = /writeFileSync|\bwriteFile\b|renameSync|\brename\(|appendFile|mkdir|createWriteStream|copyFile|\bcp\(|cpSync|unlink|rmSync|\brm\(|rmdir|truncate|symlink|\blink\(|linkSync|chmod|chown|utimes|openSync|fs\.promises|node:fs\/promises/;
+  assert.ok(!SCHREIBEN.test(t), 'Schreibweg in echtprobe.mjs');
+  assert.ok(!/readdirSync|opendir|createReadStream|\breadFile\(|\bstatSync\(|readlinkSync|realpathSync|existsSync|\bfs\.\w+\(/.test(t), 'weitere Lesewege');
+  const lesen = [...t.matchAll(/(\w+)\.(readFileSync|lstatSync)\(([^,)]*)/g)].map(m => `${m[1]}.${m[2]}(${m[3].trim()})`);
+  assert.deepEqual(lesen.sort(), ['fsImpl.lstatSync(datei)', 'fsImpl.readFileSync(datei)']);
+  const dateinamen = [...t.matchAll(/'([^'\s/\\]+\.[a-z]{2,4})'/g)].map(m => m[1]);
+  assert.deepEqual([...new Set(dateinamen)], ['echtprobe-soll.json'], 'Muss-Treffer und einziger Dateiname');
+  assert.deepEqual([...t.matchAll(/from '(node:[^']+)'/g)].map(m => m[1]).sort(), ['node:fs', 'node:os', 'node:path']);
+
+  const { ECHTPROBE_SOLL, echtprobe, ladeSoll } = await import('../werkzeuge/zentrale/echtprobe.mjs');
+  const gueltig = JSON.stringify({ schema: 'zentrale-echtprobe-soll-v1', leseTokenAblauf: '2026-12-21T21:04:30Z', eingetragen: '2026-11-21', quelle: 'noah' });
+  const fake = (inhalt, git = false) => {
+    const protokoll = [];
+    const ziel = {
+      lstatSync: p => { protokoll.push(['lstatSync', p]); if (inhalt === null) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return { isSymbolicLink: () => false, isFile: () => true, size: inhalt.length }; },
+      readFileSync: p => { protokoll.push(['readFileSync', p]); return inhalt; },
+      existsSync: p => { protokoll.push(['existsSync', p]); return git; },
+    };
+    return { protokoll, fsImpl: new Proxy(ziel, { get: (o, k) => (k in o ? o[k] : (...a) => { protokoll.push([String(k), a[0]]); throw new Error(`unerwartet ${String(k)}`); }) }) };
+  };
+  const leser = () => ({
+    holeJson: async (p, o) => (o?.start ? { klasse: 'ok', daten: {}, status: 200, tokenAblauf: Date.parse('2026-12-21T21:04:30Z') } : { klasse: 'unbekannt', grund: 'x' }),
+    holeAlleSeiten: async () => ({ klasse: 'unbekannt', grund: 'x' }),
+    holeLog: async () => ({ klasse: 'unbekannt', grund: 'x' }),
+  });
+
+  for (const [name, inhalt, git, muster] of [
+    ['gueltig', gueltig, false, /frist-lese-token: 2026-12-21T21:04:30\.000Z .* OK/],
+    ['fehlt', null, false, /frist-lese-token: Sollwert nicht pruefbar: Referenzdatei fehlt/],
+    ['Git-Arbeitsbaum', gueltig, true, /frist-lese-token: Sollwert nicht pruefbar: Referenzdatei liegt in einem Git-Arbeitsbaum/],
+    ['ungueltig', '{"schema":1}', false, /frist-lese-token: Sollwert nicht pruefbar: /],
+  ]) {
+    const f = fake(inhalt, git);
+    const zeilen = [];
+    await echtprobe([], {
+      tokenLaden: () => ({ ok: true, token: 'github_pat_TESTNURATTRAPPE_0000000000' }), leserBauen: leser, ausgabe: z => zeilen.push(z),
+      jetzt: Date.parse('2026-11-22T12:00:00Z'), sollLaden: a => ladeSoll({ ...a, fsImpl: f.fsImpl }),
+    });
+    assert.match(zeilen.join('\n'), muster, name);
+    const gelesen = f.protokoll.filter(([m]) => m !== 'existsSync');
+    assert.ok(gelesen.length >= 1, `${name}: Muss-Treffer, Referenzdatei angefasst`);
+    assert.ok(gelesen.every(([m, p]) => ['lstatSync', 'readFileSync'].includes(m) && p === ECHTPROBE_SOLL), `${name}: ${JSON.stringify(gelesen)}`);
+    assert.ok(f.protokoll.filter(([m]) => m === 'existsSync').every(([, p]) => p.endsWith('.git')), name);
   }
 });

@@ -4,7 +4,8 @@ globalThis.fetch = () => { throw new Error('W10: Netz in Zentrale-Tests verboten
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -13,7 +14,7 @@ import {
   restMinuten, startfreigaben, fristStufe, fristenAusJson, fristDatum,
 } from '../werkzeuge/zentrale/daten.mjs';
 import {
-  KOSTEN_TOLERANZ, LESE_TOKEN_ABLAUF_SOLL_MS, MONAT_SOLL, REFERENZ_JETZT, SOLL, echtprobe, historischerAbruf, referenzLeser, unbelegteLaeufe, vergleicheLauf, vergleicheMonat,
+  ECHTPROBE_SOLL, KOSTEN_TOLERANZ, MONAT_SOLL, REFERENZ_JETZT, SOLL, echtprobe, historischerAbruf, ladeSoll, referenzLeser, sollAusJson, unbelegteLaeufe, vergleicheLauf, vergleicheMonat,
 } from '../werkzeuge/zentrale/echtprobe.mjs';
 import { CSP, seite } from '../werkzeuge/zentrale/darstellung.mjs';
 import { erzeugeLeser } from '../werkzeuge/zentrale/github-lesen.mjs';
@@ -315,13 +316,34 @@ test('K1: Monatssumme nur vollstaendig mit Beleg (Lauf ohne Startzeit, Liste unv
 
 // K2: Echt-Probe gegen die nachgebaute API. Geloeschter Zweig antwortet wie GitHub mit "Branch not found".
 const zweig = nur(`${P}/branches/wp/78-agent-44536520447-1`, () => antwort(404, { message: 'Branch not found' }));
-async function probe(stoerung = () => null, jetzt = JETZT) {
+// B1.3a: Sollwert aus einer Referenzdatei in einer Datei-Attrappe, geladen ueber das echte ladeSoll. Simulierte Uhrzeit,
+// Sollwert und simulierter Antwortkopf bleiben zueinander passend: bis zum 21.12.2026 gilt der echte Wert der Kopfprobe
+// (2026-12-21T21:04:30Z), danach (K2b, K2c im Januar 2027) ein Token, das 30 Tage nach jetzt ablaeuft, eingetragen am
+// Tag von jetzt. Der Kopf der Attrappe wird dann passend gesetzt; eine ausdrueckliche Stoerung des Kopfs geht vor.
+const LESE_SOLL = Date.parse('2026-12-21T21:04:30Z');
+const SOLL_DATEI = join('Z', '.zentrale', 'echtprobe-soll.json');
+const sollText = (ablauf, eingetragen, extra = {}) => JSON.stringify({ schema: 'zentrale-echtprobe-soll-v1', leseTokenAblauf: ablauf, eingetragen, quelle: 'noah', ...extra });
+const kopfWert = ms => `${new Date(ms).toISOString().slice(0, 10)} ${new Date(ms).toISOString().slice(11, 19)} UTC`;
+const sollFs = text => { const fs = speicher(); if (text !== null) fs.dateien.set(SOLL_DATEI, text); return fs; };
+function passenderSoll(jetzt) {
+  if (jetzt < LESE_SOLL) {
+    return { ablauf: LESE_SOLL, text: sollText('2026-12-21T21:04:30Z', new Date(Math.min(jetzt, Date.parse('2026-11-23T00:00:00Z'))).toISOString().slice(0, 10)) };
+  }
+
+  const ablauf = Math.floor(jetzt / 1000) * 1000 + 30 * 24 * 3600 * 1000;
+  return { ablauf, text: sollText(new Date(ablauf).toISOString().replace('.000Z', 'Z'), new Date(jetzt).toISOString().slice(0, 10)) };
+}
+async function probe(stoerung = () => null, jetzt = JETZT, { soll = undefined, sollLaden = undefined } = {}) {
   const zeilen = [];
+  const p = passenderSoll(jetzt);
+  const text = soll === undefined ? p.text : soll;
+  const kopf = p.ablauf === LESE_SOLL ? () => null : nur(P, () => antwort(200, api('repo'), { 'github-authentication-token-expiration': kopfWert(p.ablauf) }));
   const code = await echtprobe([], {
     tokenLaden: () => ({ ok: true, token: TOKEN }),
-    leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: github(beide(zweig, stoerung)).f }),
+    leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: github(beide(zweig, stoerung, kopf)).f }),
     ausgabe: t => zeilen.push(t),
     jetzt,
+    sollLaden: sollLaden ?? (a => ladeSoll({ ...a, datei: SOLL_DATEI, fsImpl: sollFs(text) })),
   });
   return { code, text: zeilen.join('\n') };
 }
@@ -529,6 +551,7 @@ test('K2c: unvollstaendige historische Antwort und Umschreibung nicht genau einm
     tokenLaden: () => ({ ok: true, token: TOKEN }),
     leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: github(beide(zweig, november())).f }),
     ausgabe: t => zeilen.push(t), jetzt: JETZT,
+    sollLaden: a => ladeSoll({ ...a, datei: SOLL_DATEI, fsImpl: sollFs(passenderSoll(JETZT).text) }),
     historisch: l => historischerAbruf(l, async a => { await sammle(a); return sammle(a); }),
   });
   assert.equal(code, 1);
@@ -1258,21 +1281,197 @@ test('B1.3 Notseite: Geheimnis-Filter aktiv, Schleife laesst die Notseite stehen
   assert.ok(!html.includes('Durchlauf gescheitert') && !html.includes('<table') && !/http-equiv="refresh"/.test(html));
 });
 
-test('B1.3 Echt-Probe frist-lese-token: Muss-Treffer 2026-12-21 21:04:30 UTC, fehlender oder anderer Kopf ist eine Abweichung', async () => {
-  assert.equal(LESE_TOKEN_ABLAUF_SOLL_MS, Date.parse('2026-12-21T21:04:30Z'));
+// B1.3a: Sollwert aus der Referenzdatei. Kopf der Startpruefung ueberschreiben.
+const mitKopf = wert => beide(p => (p === P ? antwort(200, api('repo'), wert === null ? {} : { 'github-authentication-token-expiration': wert }) : null), november());
+const FRIST_OK = /PROBE frist-lese-token: 2026-12-21T21:04:30\.000Z \(erwartet 2026-12-21T21:04:30\.000Z, eingetragen 2026-11-21 von noah\) OK/;
+const nurFrist = r => (r.text.match(/^PROBE frist-lese-token: .*$/m) ?? [''])[0];
+const SEK = 1000;
+const TAG = 24 * 3600 * SEK;
+
+test('B1.3a Echt-Probe (1): Kopf gleich Referenzdatei ist OK, eine Sekunde daneben eine Abweichung; uebrige Proben laufen weiter', async () => {
+  assert.equal(ECHTPROBE_SOLL, join(homedir(), '.zentrale', 'echtprobe-soll.json'));
   const gut = await probe(november());
   assert.equal(gut.code, 0, gut.text);
-  assert.match(gut.text, /PROBE frist-lese-token: 2026-12-21T21:04:30\.000Z \(erwartet 2026-12-21T21:04:30\.000Z\) OK/);
+  assert.match(gut.text, FRIST_OK);
   assert.match(gut.text, /historisch-monat 2026-11: .* OK/, 'historische Proben unveraendert');
 
-  for (const [name, kopf, muster] of [
-    ['Kopf fehlt', {}, /frist-lese-token: kein gueltiges Ablaufdatum im Kopf .*ABWEICHUNG/],
-    ['anderes Datum', { 'github-authentication-token-expiration': '2026-12-22 21:04:30 UTC' }, /frist-lese-token: 2026-12-22T21:04:30\.000Z .*ABWEICHUNG/],
-    ['ungueltiger Kopf', { 'github-authentication-token-expiration': '<b>2026-12-21 21:04:30 UTC</b>' }, /frist-lese-token: kein gueltiges Ablaufdatum im Kopf .*ABWEICHUNG/],
+  for (const [name, r, muster] of [
+    ['Kopf eine Sekunde frueher', await probe(mitKopf('2026-12-21 21:04:29 UTC')), /frist-lese-token: 2026-12-21T21:04:29\.000Z \(erwartet 2026-12-21T21:04:30\.000Z, eingetragen 2026-11-21 von noah\) ABWEICHUNG/],
+    ['Kopf eine Sekunde spaeter', await probe(mitKopf('2026-12-21 21:04:31 UTC')), /frist-lese-token: 2026-12-21T21:04:31\.000Z .*ABWEICHUNG/],
+    ['Soll eine Sekunde spaeter', await probe(november(), JETZT, { soll: sollText('2026-12-21T21:04:31Z', '2026-11-21') }), /frist-lese-token: 2026-12-21T21:04:30\.000Z \(erwartet 2026-12-21T21:04:31\.000Z, .*ABWEICHUNG/],
+    ['Soll eine Sekunde frueher', await probe(november(), JETZT, { soll: sollText('2026-12-21T21:04:29Z', '2026-11-21') }), /frist-lese-token: .*\(erwartet 2026-12-21T21:04:29\.000Z, .*ABWEICHUNG/],
+    ['Kopf fehlt', await probe(mitKopf(null)), /frist-lese-token: kein gueltiges Ablaufdatum im Kopf \(erwartet 2026-12-21T21:04:30\.000Z, .*ABWEICHUNG/],
+    ['anderes Datum', await probe(mitKopf('2026-12-22 21:04:30 UTC')), /frist-lese-token: 2026-12-22T21:04:30\.000Z .*ABWEICHUNG/],
+    ['ungueltiger Kopf', await probe(mitKopf('<b>2026-12-21 21:04:30 UTC</b>')), /frist-lese-token: kein gueltiges Ablaufdatum im Kopf .*ABWEICHUNG/],
   ]) {
-    const r = await probe(beide(p => (p === P ? antwort(200, api('repo'), kopf) : null), november()));
     assert.equal(r.code, 1, `${name}: ${r.text}`);
     assert.match(r.text, muster, name);
+    assert.match(r.text, /ECHTPROBE NICHT BESTANDEN: 1 Abweichungen/, `${name}: genau diese eine Probe weicht ab`);
     assert.ok(!r.text.includes('<b>'), 'Rohwert ausgegeben');
   }
+});
+
+test('B1.3a Echt-Probe (2): Datei fehlt, Link, Verzeichnis, Groesse, Git, Form und Felder; je eigener Grund, Exitcode 1', async () => {
+  const lade = (fs, jetzt = JETZT, token = TOKEN) => ladeSoll({ datei: SOLL_DATEI, fsImpl: fs, jetzt, token });
+  const gueltig = sollText('2026-12-21T21:04:30Z', '2026-11-21');
+  assert.deepEqual(lade(sollFs(gueltig)), { ok: true, soll: LESE_SOLL, eingetragen: '2026-11-21', quelle: 'noah' }, 'Muss-Treffer');
+  assert.equal(lade(sollFs(`﻿${gueltig}`)).ok, true, 'BOM erlaubt');
+
+  const mitStat = (st, text = gueltig) => { const fs = sollFs(text); fs.lstatSync = () => st; return fs; };
+  const lesefehler = (() => { const fs = sollFs(gueltig); fs.readFileSync = () => { throw new Error('EACCES'); }; return fs; })();
+  const statfehler = (() => { const fs = sollFs(gueltig); fs.lstatSync = () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); }; return fs; })();
+  const git = (() => { const fs = sollFs(gueltig); fs.dateien.set(join(resolve('Z'), '.git'), ''); return fs; })();
+  const auffuellen = n => { const t = gueltig.replace(/\}$/, ''); return `${t}${' '.repeat(n - Buffer.byteLength(t) - 1)}}`; };
+  assert.equal(Buffer.byteLength(auffuellen(4096)), 4096);
+  assert.equal(lade(sollFs(auffuellen(4096))).ok, true, 'genau 4 KB ist erlaubt');
+  const ohne = feld => { const j = JSON.parse(gueltig); delete j[feld]; return JSON.stringify(j); };
+
+  const faelle = [
+    ['fehlt', sollFs(null), 'Referenzdatei fehlt, bitte anlegen (siehe LIESMICH)'],
+    ['nicht lesbar (lstat)', statfehler, 'Referenzdatei nicht lesbar'],
+    ['nicht lesbar (read)', lesefehler, 'Referenzdatei nicht lesbar'],
+    ['Link', mitStat({ isSymbolicLink: () => true, isFile: () => true, size: 10 }), 'Referenzdatei ist ein Link'],
+    ['Verzeichnis', mitStat({ isSymbolicLink: () => false, isFile: () => false, size: 0 }), 'Referenzdatei ist keine Datei'],
+    ['ueber 4 KB laut lstat', mitStat({ isSymbolicLink: () => false, isFile: () => true, size: 4097 }), 'Referenzdatei zu gross'],
+    ['ueber 4 KB gelesen', mitStat({ isSymbolicLink: () => false, isFile: () => true, size: 10 }, auffuellen(4097)), 'Referenzdatei zu gross'],
+    ['im Git-Arbeitsbaum', git, 'Referenzdatei liegt in einem Git-Arbeitsbaum'],
+    ['kein JSON', sollFs('{"schema": '), 'kein JSON'],
+    ['kein Objekt', sollFs('["zentrale-echtprobe-soll-v1"]'), 'kein JSON-Objekt'],
+    ['null', sollFs('null'), 'kein JSON-Objekt'],
+    ['falsches Schema', sollFs(sollText('2026-12-21T21:04:30Z', '2026-11-21', { schema: 'zentrale-echtprobe-soll-v2' })), 'falsches Schema'],
+    ['Zusatzfeld', sollFs(sollText('2026-12-21T21:04:30Z', '2026-11-21', { kommentar: 'x' })), 'unbekanntes Zusatzfeld'],
+    ['schema fehlt', sollFs(ohne('schema')), 'Feld schema fehlt'],
+    ['leseTokenAblauf fehlt', sollFs(ohne('leseTokenAblauf')), 'Feld leseTokenAblauf fehlt'],
+    ['eingetragen fehlt', sollFs(ohne('eingetragen')), 'Feld eingetragen fehlt'],
+    ['quelle fehlt', sollFs(ohne('quelle')), 'Feld quelle fehlt'],
+    ['quelle anders', sollFs(sollText('2026-12-21T21:04:30Z', '2026-11-21', { quelle: 'zentrale' })), 'quelle ist nicht noah'],
+    ['quelle gross', sollFs(sollText('2026-12-21T21:04:30Z', '2026-11-21', { quelle: 'Noah' })), 'quelle ist nicht noah'],
+  ];
+  assert.equal(new Set(faelle.map(f => f[2])).size, 15, 'eigene Gruende');
+
+  for (const [name, fs, grund] of faelle) {
+    assert.deepEqual(lade(fs), { ok: false, grund }, name);
+  }
+
+  // Durch die Echt-Probe: Abweichung mit dem Grund, Exitcode 1, uebrige Proben laufen weiter, keine Datei geschrieben.
+  for (const [name, fs, grund] of faelle) {
+    const r = await probe(november(), JETZT, { sollLaden: a => ladeSoll({ ...a, datei: SOLL_DATEI, fsImpl: fs }) });
+    assert.equal(r.code, 1, name);
+    assert.equal(nurFrist(r), `PROBE frist-lese-token: Sollwert nicht pruefbar: ${grund} ABWEICHUNG`, name);
+    assert.match(r.text, /PROBE repo: ok .*OK/, name);
+    assert.match(r.text, /lauf Live 2 44765669207: .* OK/, name);
+    assert.match(r.text, /historisch-monat 2026-11: .* OK/, name);
+    assert.match(r.text, /ECHTPROBE NICHT BESTANDEN: 1 Abweichungen/, name);
+    assert.deepEqual(fs.log, [], `${name}: keine Datei geschrieben`);
+  }
+});
+
+test('B1.3a Echt-Probe (3, 6): ungueltiger Ablauf und Geheimnisse; kein Rohwert in der Ausgabe', async () => {
+  for (const wert of ['2026-02-31T10:00:00Z', '2026-12-21T21:04:30', '2026-12-21T21:04:30+01:00', '2026-12-21T21:04:30.000Z', '<b>2026-12-21T21:04:30Z</b>',
+    '2026-12-21T24:00:00Z', '2026-12-21 21:04:30Z', ' 2026-12-21T21:04:30Z', '2026-12-21T21:04:30Z\n', 1797282270000, null]) {
+    const r = await probe(november(), JETZT, { soll: sollText(wert, '2026-11-21') });
+    assert.equal(r.code, 1, String(wert));
+    assert.equal(nurFrist(r), 'PROBE frist-lese-token: Sollwert nicht pruefbar: leseTokenAblauf ungueltig (erwartet JJJJ-MM-TTThh:mm:ssZ, echtes Datum) ABWEICHUNG', String(wert));
+    assert.ok(typeof wert !== 'string' || !r.text.includes(wert), `Rohwert ausgegeben: ${wert}`);
+    assert.ok(!r.text.includes('<b>'));
+  }
+
+  for (const wert of ['2026-02-30', '2026-11-21T00:00:00Z', '21.11.2026', '2026-11-1', 20261121]) {
+    assert.deepEqual(sollAusJson(sollText('2026-12-21T21:04:30Z', wert), JETZT), { ok: false, grund: 'eingetragen ungueltig (erwartet JJJJ-MM-TT, echtes Datum)' }, String(wert));
+  }
+
+  // Geheimnisse in jedem Feld, auch in einem Zusatzfeld und als Tokenwert ohne Muster: abgelehnt, Wert erscheint nirgends.
+  const geheim = ['ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 'github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz', 'sk-ant-api03-ABCDEFGHIJKLMNOP'];
+  for (const g of geheim) {
+    for (const extra of [{ quelle: g }, { eingetragen: g }, { schema: g }, { leseTokenAblauf: g }, { notiz: g }]) {
+      const r = await probe(november(), JETZT, { soll: sollText('2026-12-21T21:04:30Z', '2026-11-21', extra) });
+      assert.equal(r.code, 1, g);
+      assert.equal(nurFrist(r), 'PROBE frist-lese-token: Sollwert nicht pruefbar: Referenzdatei enthaelt ein Geheimnis-Muster ABWEICHUNG', `${g} ${Object.keys(extra)}`);
+      assert.ok(!r.text.includes(g) && !r.text.includes(g.slice(0, 8)), 'Wert ausgegeben');
+    }
+  }
+  const tok = 'abcdefgh12345678TOKEN';
+  assert.deepEqual(ladeSoll({ datei: SOLL_DATEI, fsImpl: sollFs(sollText('2026-12-21T21:04:30Z', '2026-11-21', { notiz: tok })), jetzt: JETZT, token: tok }),
+    { ok: false, grund: 'Referenzdatei enthaelt ein Geheimnis-Muster' }, 'Tokenwert ohne Muster');
+  // Durch die Echt-Probe: der geladene Tokenwert erreicht den Filter.
+  const zeilen = [];
+  const code = await echtprobe([], {
+    tokenLaden: () => ({ ok: true, token: tok }),
+    leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: github(beide(zweig, november())).f }),
+    ausgabe: t => zeilen.push(t), jetzt: JETZT,
+    sollLaden: a => ladeSoll({ ...a, datei: SOLL_DATEI, fsImpl: sollFs(sollText('2026-12-21T21:04:30Z', '2026-11-21', { notiz: tok })) }),
+  });
+  assert.equal(code, 1);
+  assert.ok(zeilen.includes('PROBE frist-lese-token: Sollwert nicht pruefbar: Referenzdatei enthaelt ein Geheimnis-Muster ABWEICHUNG'), zeilen.join('\n'));
+  assert.ok(!zeilen.join('\n').includes(tok));
+});
+
+test('B1.3a Echt-Probe (4, 5): Zeitregeln, jeder Grenzfall einzeln', async () => {
+  const pruef = (ablaufMs, eingetragen, jetzt) => sollAusJson(sollText(new Date(ablaufMs).toISOString().replace('.000Z', 'Z'), eingetragen), jetzt);
+  const VERALTET = 'Sollwert abgelaufen, Referenzdatei nach der Token-Erneuerung neu eintragen';
+  const ZU_WEIT = 'leseTokenAblauf mehr als 366 Tage in der Zukunft, nicht plausibel';
+
+  // (4) Veraltet: Soll gleich jetzt und eine Sekunde davor; eine Sekunde danach geht in den Vergleich.
+  assert.deepEqual(pruef(LESE_SOLL, '2026-11-23', LESE_SOLL), { ok: false, grund: VERALTET });
+  assert.deepEqual(pruef(LESE_SOLL, '2026-11-23', LESE_SOLL + SEK), { ok: false, grund: VERALTET });
+  assert.deepEqual(pruef(LESE_SOLL, '2026-11-23', LESE_SOLL - SEK), { ok: true, soll: LESE_SOLL, eingetragen: '2026-11-23', quelle: 'noah' });
+  const vorher = await probe(november(), LESE_SOLL - SEK, { soll: sollText('2026-12-21T21:04:30Z', '2026-11-23') });
+  assert.match(nurFrist(vorher), /2026-12-21T21:04:30\.000Z \(erwartet 2026-12-21T21:04:30\.000Z, eingetragen 2026-11-23 von noah\) OK$/);
+  for (const jetzt of [LESE_SOLL, LESE_SOLL + SEK]) {
+    const r = await probe(november(), jetzt, { soll: sollText('2026-12-21T21:04:30Z', '2026-11-23') });
+    assert.equal(r.code, 1);
+    assert.equal(nurFrist(r), `PROBE frist-lese-token: Sollwert nicht pruefbar: ${VERALTET} ABWEICHUNG`);
+  }
+
+  // (5) Plausibel: genau 366 Tage geht in den Vergleich, eine Sekunde mehr nicht.
+  assert.deepEqual(pruef(JETZT + 366 * TAG + SEK, '2026-11-21', JETZT), { ok: false, grund: ZU_WEIT });
+  assert.equal(pruef(JETZT + 366 * TAG, '2026-11-21', JETZT).ok, true);
+  const weit = await probe(beide(nur(P, () => antwort(200, api('repo'), { 'github-authentication-token-expiration': kopfWert(JETZT + 366 * TAG) })), november()), JETZT,
+    { soll: sollText(new Date(JETZT + 366 * TAG).toISOString().replace('.000Z', 'Z'), '2026-11-21') });
+  assert.equal(weit.code, 0, weit.text);
+  assert.match(nurFrist(weit), /2027-11-22T10:20:00\.000Z \(erwartet 2027-11-22T10:20:00\.000Z, eingetragen 2026-11-21 von noah\) OK$/);
+  const zuWeit = await probe(november(), JETZT, { soll: sollText(new Date(JETZT + 366 * TAG + SEK).toISOString().replace('.000Z', 'Z'), '2026-11-21') });
+  assert.equal(nurFrist(zuWeit), `PROBE frist-lese-token: Sollwert nicht pruefbar: ${ZU_WEIT} ABWEICHUNG`);
+
+  // Ablauf vor dem Eintragungstag (eigener Grund); genau 00:00 des Eintragungstags ist nicht "vor", aber veraltet.
+  assert.deepEqual(pruef(Date.parse('2026-11-20T23:59:59Z'), '2026-11-21', JETZT), { ok: false, grund: 'leseTokenAblauf liegt vor dem Eintragungstag, nicht plausibel' });
+  assert.deepEqual(pruef(Date.parse('2026-11-21T00:00:00Z'), '2026-11-21', JETZT), { ok: false, grund: VERALTET });
+
+  // eingetragen: heute gilt zu jeder Uhrzeit, morgen ist Zukunft (auch eine Sekunde vor Mitternacht).
+  const ZUKUNFT = { ok: false, grund: 'eingetragen liegt in der Zukunft' };
+  assert.equal(pruef(LESE_SOLL, '2026-11-21', Date.parse('2026-11-21T00:00:00Z')).ok, true);
+  assert.equal(pruef(LESE_SOLL, '2026-11-21', Date.parse('2026-11-21T23:59:59Z')).ok, true);
+  assert.deepEqual(pruef(LESE_SOLL, '2026-11-22', Date.parse('2026-11-21T23:59:59Z')), ZUKUNFT);
+  assert.deepEqual(pruef(LESE_SOLL, '2027-01-01', JETZT), ZUKUNFT);
+  const zukunft = await probe(november(), JETZT, { soll: sollText('2026-12-21T21:04:30Z', '2026-11-22') });
+  assert.equal(nurFrist(zukunft), 'PROBE frist-lese-token: Sollwert nicht pruefbar: eingetragen liegt in der Zukunft ABWEICHUNG');
+
+  // Unbekannte Zeit: kein Vergleich.
+  assert.deepEqual(sollAusJson(sollText('2026-12-21T21:04:30Z', '2026-11-21'), Number.NaN), { ok: false, grund: 'aktuelle Zeit unbekannt' });
+});
+
+test('B1.3a Echt-Probe (7): kein Selbstbefuellen, Referenzdatei wird einmal und vor jedem Netzabruf geladen', async () => {
+  // Fehlt die Datei, darf der Kopf (der genau dem echten Wert entspricht) nie als Sollwert dienen.
+  const ohne = await probe(november(), JETZT, { soll: null });
+  assert.equal(ohne.code, 1, ohne.text);
+  assert.equal(nurFrist(ohne), 'PROBE frist-lese-token: Sollwert nicht pruefbar: Referenzdatei fehlt, bitte anlegen (siehe LIESMICH) ABWEICHUNG');
+  assert.ok(!ohne.text.includes('2026-12-21T21:04:30'), 'Kopfwert ausgegeben');
+
+  // Reihenfolge: genau ein Ladevorgang, vor dem ersten Leser-Abruf; die Datei-Attrappe bleibt unveraendert.
+  const ereignisse = [];
+  const fs = sollFs(sollText('2026-12-21T21:04:30Z', '2026-11-21'));
+  const vorher = new Map(fs.dateien);
+  const zeilen = [];
+  const code = await echtprobe([], {
+    tokenLaden: () => ({ ok: true, token: TOKEN }),
+    sollLaden: a => { ereignisse.push('soll'); return ladeSoll({ ...a, datei: SOLL_DATEI, fsImpl: fs }); },
+    leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: async (u, o) => { ereignisse.push('netz'); return github(beide(zweig, november())).f(u, o); } }),
+    ausgabe: t => zeilen.push(t), jetzt: JETZT,
+  });
+  assert.equal(code, 0, zeilen.join('\n'));
+  assert.equal(ereignisse[0], 'soll');
+  assert.equal(ereignisse.filter(e => e === 'soll').length, 1);
+  assert.ok(ereignisse.filter(e => e === 'netz').length > 10, 'Muss-Treffer: Netzabrufe gezaehlt');
+  assert.deepEqual(fs.log, []);
+  assert.deepEqual(fs.dateien, vorher);
 });
