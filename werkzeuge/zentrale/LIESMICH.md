@@ -127,9 +127,49 @@ Exitcode 0 nur, wenn alles stimmt und die Daten vollständig sind. Jede Abweichu
 Zeitfensters liegender Lauf, ein Teilfehler oder eine unvollständige Monatssumme ergibt Exitcode 1. Eine Schreibprobe
 gibt es in B1.1 nicht.
 
-B1.3: Die Probe `frist-lese-token` verlangt im Antwortkopf der Startprüfung ein gültiges Ablaufdatum, und zwar genau
-2026-12-21 21:04:30 UTC (`LESE_TOKEN_ABLAUF_SOLL_MS` in `echtprobe.mjs`). Ausgegeben wird nur das gelesene Datum, nie
-der Rohwert. Nach einer Erneuerung des Lese-Tokens ist dieser Sollwert anzupassen.
+B1.3 und B1.3a: Die Probe `frist-lese-token` verlangt im Antwortkopf der Startprüfung ein gültiges Ablaufdatum, das auf
+die Millisekunde dem Sollwert entspricht. Ausgegeben wird nur das gelesene Datum, nie der Rohwert. Der Sollwert steht
+nicht im Code, sondern in einer Referenzdatei, die nur Noah selbst anlegt und pflegt:
+
+`%USERPROFILE%\.zentrale\echtprobe-soll.json` (derselbe Ordner wie `lese-token` und `fristen.json`)
+
+```json
+{ "schema": "zentrale-echtprobe-soll-v1",
+  "leseTokenAblauf": "2026-12-21T21:04:30Z",
+  "eingetragen": "2026-11-23",
+  "quelle": "noah" }
+```
+
+- **Genau diese vier Felder,** keine weiteren. `schema` und `quelle` genau wie oben.
+- **`leseTokenAblauf`:** streng `JJJJ-MM-TTThh:mm:ssZ` in UTC, ein echtes Datum (kein 31.02.), keine Millisekunden,
+  kein Versatz wie `+01:00`.
+- **`eingetragen`:** der Tag des Eintrags als `JJJJ-MM-TT` in UTC. Er darf nicht nach dem heutigen UTC-Tag liegen.
+- **Zeitregeln:** Der Ablauf muss strikt nach der aktuellen Zeit liegen, höchstens 366 Tage danach (eigene Setzung,
+  keine GitHub-Grenze), und nicht vor dem Eintragungstag.
+- **Ladeprüfung:** kein Link, keine Nicht-Datei, höchstens 4 KB, nicht in einem Git-Arbeitsbaum, kein Geheimnis-Muster
+  und kein Tokenwert im Inhalt. Ein BOM am Anfang ist erlaubt.
+
+Die Echt-Probe lädt die Datei einmal, vor dem ersten Abruf bei GitHub. Sie erstellt, ändert oder ergänzt sie nie, und
+sie nimmt nie den Antwortkopf als Ersatz. Fehlt die Datei oder ist sie ungültig, meldet `frist-lese-token` eine
+Abweichung mit einem festen Grund (zum Beispiel „Referenzdatei fehlt, bitte anlegen (siehe LIESMICH)“ oder „Sollwert
+abgelaufen, Referenzdatei nach der Token-Erneuerung neu eintragen“). Der Antwortkopf wird dann gar nicht abgerufen, die
+übrigen Proben laufen weiter, Exitcode 1. Bei Erfolg steht da zum Beispiel:
+
+`PROBE frist-lese-token: 2026-12-21T21:04:30.000Z (erwartet 2026-12-21T21:04:30.000Z, eingetragen 2026-11-23 von noah) OK`
+
+**Woher der Wert kommt:**
+- **Datum:** steht auf der GitHub-Seite des Tokens („Expires on …“).
+- **Uhrzeit:** zeigt die Seite nicht. Sie stammt aus einer eigenen Kopfprobe (Terminal 1, außerhalb des Repos). Das ist
+  ein gesonderter Abruf und nicht die Echt-Probe selbst, damit der Sollwert ein unabhängiger Beleg bleibt.
+
+**Handgriff bei jeder Erneuerung des Lese-Tokens:**
+1. Neues Datum auf der Token-Seite ablesen und die Uhrzeit aus einer neuen Kopfprobe übernehmen.
+2. Prüfen, dass das Datum der Kopfprobe mit der Token-Seite übereinstimmt.
+3. In `echtprobe-soll.json` `leseTokenAblauf` und `eingetragen` (heutiger Tag) von Hand ändern und speichern.
+4. Echt-Probe starten. Erwartet: `frist-lese-token … OK` und `ECHTPROBE BESTANDEN`.
+
+Eine Codeänderung ist dafür nicht nötig. `echtprobe.mjs` liest außer dem Token (über `token.mjs`) nur diese Datei und
+schreibt keine Datei (Wache W13).
 
 ## Tests
 

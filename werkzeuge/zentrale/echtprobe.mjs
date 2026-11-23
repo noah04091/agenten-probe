@@ -2,8 +2,8 @@
 //
 //   node werkzeuge/zentrale/echtprobe.mjs
 //
-// Braucht Noahs Lese-Token in %USERPROFILE%\.zentrale\lese-token. Gibt nur feste Kennungen, Zahlen und Codes aus, nie
-// den Token-Wert oder Logtext. Eine Schreibprobe gibt es in B1.1 nicht (GO vom 21.11.2026); --schreibprobe wird
+// Braucht Noahs Lese-Token in %USERPROFILE%\.zentrale\lese-token und daneben den Sollwert in echtprobe-soll.json
+// (B1.3a, siehe LIESMICH). Gibt nur feste Kennungen, Zahlen und Codes aus, nie den Token-Wert oder Logtext. Eine Schreibprobe gibt es in B1.1 nicht (GO vom 21.11.2026); --schreibprobe wird
 // abgelehnt.
 //
 // Zwei Teile, beide mit derselben Abruf-Logik wie die Zentrale (sammle):
@@ -17,15 +17,165 @@
 // Exitcode 0 nur, wenn jede Probe stimmt und die Daten vollstaendig sind. Jede Abweichung, jeder fehlende Lauf, jeder
 // zusaetzliche unbelegte Lauf, jeder Teilfehler und jede falsche Summe ergibt Exitcode 1.
 
+import * as fs from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+import { geheimnisTreffer } from './darstellung.mjs';
 import { REPO, monat } from './daten.mjs';
 import { erzeugeLeser } from './github-lesen.mjs';
-import { ladeToken } from './token.mjs';
+import { imGitArbeitsbaum, ladeToken } from './token.mjs';
 import { sammle } from './zentrale.mjs';
 
 export const KOSTEN_TOLERANZ = 1e-6;
-// B1.3: Ablauf von Noahs Lese-Token laut Kopfprobe vom 22.11.2026 ("2026-12-21 21:04:30 UTC"). Nach einer Erneuerung
-// des Tokens ist dieser Sollwert anzupassen; bis dahin ergibt jede Abweichung Exitcode 1.
-export const LESE_TOKEN_ABLAUF_SOLL_MS = Date.parse('2026-12-21T21:04:30Z');
+
+// B1.3a: Sollwert fuer den Ablauf des Lese-Tokens. Er steht nicht im Code, sondern in einer Referenzdatei, die Noah
+// bei jeder Token-Erneuerung selbst eintraegt (Datum von der Token-Seite, Uhrzeit aus einer gesonderten Kopfprobe).
+// Die Echt-Probe liest sie nur; sie erstellt, aendert oder ergaenzt sie nie und nimmt nie den Antwortkopf als Ersatz.
+export const ECHTPROBE_SOLL = join(homedir(), '.zentrale', 'echtprobe-soll.json');
+export const SOLL_SCHEMA = 'zentrale-echtprobe-soll-v1';
+export const SOLL_GRENZE_BYTES = 4096;
+// Eigene Setzung (Noahs Tokens laufen 30 Tage), keine gepruefte GitHub-Obergrenze.
+export const SOLL_MAX_VORLAUF_MS = 366 * 24 * 60 * 60 * 1000;
+const SOLL_FELDER = Object.freeze(['eingetragen', 'leseTokenAblauf', 'quelle', 'schema']);
+const ABLAUF_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const TAG_ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+// Streng gelesener Zeitpunkt oder null. Rundreise ueber toISOString lehnt Kalenderfehler (31.02., 24:00) ab.
+function ablaufMs(wert) {
+  if (typeof wert !== 'string' || !ABLAUF_ISO.test(wert)) {
+    return null;
+  }
+
+  const ms = Date.parse(wert);
+  return Number.isFinite(ms) && new Date(ms).toISOString() === `${wert.slice(0, 19)}.000Z` ? ms : null;
+}
+
+function tagMs(wert) {
+  if (typeof wert !== 'string' || !TAG_ISO.test(wert)) {
+    return null;
+  }
+
+  const ms = Date.parse(`${wert}T00:00:00Z`);
+  return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === wert ? ms : null;
+}
+
+// Reine Pruefung des Dateiinhalts gegen die (simulierte) aktuelle Zeit. Ergebnis { ok: true, soll, eingetragen, quelle }
+// oder { ok: false, grund }. Der Grund ist immer ein fester Text und nennt nie einen Wert aus der Datei.
+export function sollAusJson(text, jetzt) {
+  const nein = grund => ({ ok: false, grund });
+
+  if (!Number.isFinite(jetzt)) {
+    return nein('aktuelle Zeit unbekannt');
+  }
+
+  let j;
+
+  try {
+    j = JSON.parse(text);
+  } catch {
+    return nein('kein JSON');
+  }
+
+  if (j === null || typeof j !== 'object' || Array.isArray(j)) {
+    return nein('kein JSON-Objekt');
+  }
+
+  const felder = Object.keys(j);
+
+  if (felder.some(f => !SOLL_FELDER.includes(f))) {
+    return nein('unbekanntes Zusatzfeld');
+  }
+
+  const fehlt = SOLL_FELDER.find(f => !felder.includes(f));
+
+  if (fehlt !== undefined) {
+    return nein(`Feld ${fehlt} fehlt`);
+  }
+
+  if (j.schema !== SOLL_SCHEMA) {
+    return nein('falsches Schema');
+  }
+
+  if (j.quelle !== 'noah') {
+    return nein('quelle ist nicht noah');
+  }
+
+  const soll = ablaufMs(j.leseTokenAblauf);
+
+  if (soll === null) {
+    return nein('leseTokenAblauf ungueltig (erwartet JJJJ-MM-TTThh:mm:ssZ, echtes Datum)');
+  }
+
+  const tag = tagMs(j.eingetragen);
+
+  if (tag === null) {
+    return nein('eingetragen ungueltig (erwartet JJJJ-MM-TT, echtes Datum)');
+  }
+
+  if (j.eingetragen > new Date(jetzt).toISOString().slice(0, 10)) {
+    return nein('eingetragen liegt in der Zukunft');
+  }
+
+  if (soll < tag) {
+    return nein('leseTokenAblauf liegt vor dem Eintragungstag, nicht plausibel');
+  }
+
+  if (soll <= jetzt) {
+    return nein('Sollwert abgelaufen, Referenzdatei nach der Token-Erneuerung neu eintragen');
+  }
+
+  if (soll - jetzt > SOLL_MAX_VORLAUF_MS) {
+    return nein('leseTokenAblauf mehr als 366 Tage in der Zukunft, nicht plausibel');
+  }
+
+  return { ok: true, soll, eingetragen: j.eingetragen, quelle: j.quelle };
+}
+
+// Laedt die Referenzdatei nach dem Muster von ladeFristen (zentrale.mjs): kein Link, keine Nicht-Datei, hoechstens
+// 4 KB, nicht in einem Git-Arbeitsbaum, Geheimnis-Filter ueber den Rohinhalt, BOM erlaubt. Liest nur, wirft nie.
+export function ladeSoll({ datei = ECHTPROBE_SOLL, fsImpl = fs, jetzt = Date.now(), token = null } = {}) {
+  const nein = grund => ({ ok: false, grund });
+  let st;
+
+  try {
+    st = fsImpl.lstatSync(datei);
+  } catch (e) {
+    return e?.code === 'ENOENT' ? nein('Referenzdatei fehlt, bitte anlegen (siehe LIESMICH)') : nein('Referenzdatei nicht lesbar');
+  }
+
+  try {
+    if (st.isSymbolicLink()) {
+      return nein('Referenzdatei ist ein Link');
+    }
+
+    if (!st.isFile()) {
+      return nein('Referenzdatei ist keine Datei');
+    }
+
+    if (st.size > SOLL_GRENZE_BYTES) {
+      return nein('Referenzdatei zu gross');
+    }
+
+    if (imGitArbeitsbaum(datei, fsImpl)) {
+      return nein('Referenzdatei liegt in einem Git-Arbeitsbaum');
+    }
+
+    const inhalt = fsImpl.readFileSync(datei, 'utf8');
+
+    if (typeof inhalt !== 'string' || Buffer.byteLength(inhalt, 'utf8') > SOLL_GRENZE_BYTES) {
+      return nein('Referenzdatei zu gross');
+    }
+
+    if (geheimnisTreffer(inhalt, token).length > 0) {
+      return nein('Referenzdatei enthaelt ein Geheimnis-Muster');
+    }
+
+    return sollAusJson(inhalt.replace(/^﻿/, ''), jetzt);
+  } catch {
+    return nein('Referenzdatei nicht lesbar');
+  }
+}
 // Fester Zeitpunkt fuer den historischen Teil: letzte Sekunde des Novembers 2026 (UTC).
 export const REFERENZ_JETZT = Date.parse('2026-11-30T23:59:59Z');
 // Der historische Bestand ist bis einschliesslich 20.11.2026 unabhaengig geprueft (17 Laeufe). Die Issue-Laufliste
@@ -192,6 +342,7 @@ function vollstaendigText(laeufe) {
 
 export async function echtprobe(argv, {
   tokenLaden = ladeToken, leserBauen = erzeugeLeser, ausgabe = t => process.stdout.write(`${t}\n`), jetzt = Date.now(), historisch = historischerAbruf,
+  sollLaden = ladeSoll,
 } = {}) {
   if (argv.includes('--schreibprobe')) {
     ausgabe('Abgelehnt: eine Schreibprobe ist in B1.1 nicht enthalten und braucht ein eigenes GO.');
@@ -210,6 +361,8 @@ export async function echtprobe(argv, {
     return 1;
   }
 
+  // B1.3a: Referenzdatei genau einmal laden, vor dem ersten GitHub-Abruf.
+  const soll = sollLaden({ jetzt, token: t.token });
   const leser = leserBauen({ token: t.token });
   let fehler = 0;
   const melde = (name, ok, text) => {
@@ -220,12 +373,18 @@ export async function echtprobe(argv, {
 
   pruefe('repo', (await leser.holeJson(`/repos/${REPO}`)).klasse, 'ok');
 
-  // B1.3: Ablaufdatum des Lese-Tokens aus dem Antwortkopf der Startpruefung (Muss-Treffer). Ausgegeben wird nur das
-  // streng gelesene Datum, nie der Rohwert des Kopfs.
-  const st = await leser.holeJson(`/repos/${REPO}`, { start: true });
-  const ablauf = st.klasse === 'ok' && Number.isFinite(st.tokenAblauf) ? st.tokenAblauf : null;
-  melde('frist-lese-token', ablauf === LESE_TOKEN_ABLAUF_SOLL_MS,
-    `${ablauf === null ? 'kein gueltiges Ablaufdatum im Kopf' : new Date(ablauf).toISOString()} (erwartet ${new Date(LESE_TOKEN_ABLAUF_SOLL_MS).toISOString()})`);
+  // B1.3: Ablaufdatum des Lese-Tokens aus dem Antwortkopf der Startpruefung (Muss-Treffer), exakt gegen den Sollwert
+  // aus der Referenzdatei (B1.3a). Ausgegeben wird nur das streng gelesene Datum, nie der Rohwert des Kopfs. Ohne
+  // gueltigen Sollwert wird der Kopf gar nicht erst abgerufen: er kann so nie zum Ersatz-Sollwert werden.
+  if (!soll.ok) {
+    melde('frist-lese-token', false, `Sollwert nicht pruefbar: ${soll.grund}`);
+  } else {
+    const st = await leser.holeJson(`/repos/${REPO}`, { start: true });
+    const ablauf = st.klasse === 'ok' && Number.isFinite(st.tokenAblauf) ? st.tokenAblauf : null;
+    melde('frist-lese-token', ablauf !== null && ablauf === soll.soll,
+      `${ablauf === null ? 'kein gueltiges Ablaufdatum im Kopf' : new Date(ablauf).toISOString()} (erwartet ${new Date(soll.soll).toISOString()}, eingetragen ${soll.eingetragen} von ${soll.quelle})`);
+  }
+
   pruefe('geloeschter-zweig', (await leser.holeJson(`/repos/${REPO}/branches/wp/78-agent-44536520447-1`)).klasse, 'unbekannt');
   pruefe('repo-fehlt', (await leser.holeJson('/repos/noah04091/gibt-es-nicht-b1-zentrale')).klasse, 'fehlt');
   pruefe('rate-limit', (await leser.holeJson('/rate_limit')).klasse, 'ok');
