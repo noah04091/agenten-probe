@@ -35,7 +35,7 @@ defaults:
     shell: bash
 
 env:
-  A6_FUNKTIONEN_SHA256: 725a53128b6b3a499ec93f829dccced7bb1471b728b23328387c214b2ea7658a
+  A6_FUNKTIONEN_SHA256: 3d6011bc293643dedd81c26201a8f6a925520c31650c4895e7ee4856074673a3
   A6_INTEGRITAET_SHA256: f345b7c75cd24670073d7462419290fae3f139e3c3e2fd8390a241a9c1ab003f
   A6_PROBE_SHA256: ecb9a047fa21c252951667c9892869980177e4e8d1ff550382c5111cf4851d2a
   A6_ATTRAPPE_SHA256: 5a47138a8f702b8b0ffbf34844d4fcb00b76fd5e03156e76b3a6009645b96861
@@ -119,6 +119,18 @@ jobs:
           path: ${{ runner.temp }}/a6-auftrag/schnappschuss.json
           if-no-files-found: error
           retention-days: 1
+
+      - name: Bericht in die Zusammenfassung schreiben
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          A6_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }
+          source .github/agent/a6-funktionen.sh
+          a6_bericht auftrag
 
   claude:
     name: Job 1 Claude im Container
@@ -263,6 +275,18 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Bericht in die Zusammenfassung schreiben
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          A6_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }
+          source .github/agent/a6-funktionen.sh
+          a6_bericht claude
+
   abnahme:
     name: Job 2 Abnahme ohne Netz
     needs: [auftrag, claude]
@@ -312,6 +336,18 @@ jobs:
           a6_container none "" agent-code-job-abnahme.mjs \
             GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA \
             GITHUB_WORKFLOW_REF A6_AUFTRAG_SHA256 A6_SCHNAPPSCHUSS_SHA256 A6_PAKET_SHA256
+
+      - name: Bericht in die Zusammenfassung schreiben
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          A6_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }
+          source .github/agent/a6-funktionen.sh
+          a6_bericht abnahme
 
   veroeffentlichen:
     name: Job 3 Draft-PR veroeffentlichen
@@ -378,6 +414,18 @@ jobs:
             GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_EVENT_PATH GITHUB_RUN_ID GITHUB_RUN_ATTEMPT \
             GITHUB_SHA GITHUB_WORKFLOW_REF A6_AUFTRAG_SHA256 A6_PAKET_SHA256 A6_APP_TOKEN
 
+      - name: Bericht in die Zusammenfassung schreiben
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          A6_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }
+          source .github/agent/a6-funktionen.sh
+          a6_bericht veroeffentlichen
+
   # -------------------------------------------------------------------------------------------------
   # Generalprobe: nur pull_request aus diesem Repository, ohne Environment, ohne Secrets
   # -------------------------------------------------------------------------------------------------
@@ -443,6 +491,18 @@ jobs:
           path: ${{ runner.temp }}/a6-probe/artefakt/
           if-no-files-found: error
           retention-days: 1
+
+      - name: Bericht in die Zusammenfassung schreiben
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          A6_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }
+          source .github/agent/a6-funktionen.sh
+          a6_bericht probe_auftrag
 
   probe_claude:
     name: Generalprobe Job 1 mit Ersatz statt Claude
@@ -776,6 +836,18 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Bericht in die Zusammenfassung schreiben
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          A6_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }
+          source .github/agent/a6-funktionen.sh
+          a6_bericht probe_claude
+
   probe_abnahme:
     name: Generalprobe Job 2
     needs: [probe_auftrag, probe_claude]
@@ -878,6 +950,18 @@ jobs:
             grep -q 'Read-only file system' "$O/s1.err" )
           echo "S1: Checkout im Container nur lesbar."
 
+      - name: Bericht in die Zusammenfassung schreiben
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          A6_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }
+          source .github/agent/a6-funktionen.sh
+          a6_bericht probe_abnahme
+
   probe_veroeffentlichen:
     name: Generalprobe Job 3 gegen nachgebautes GitHub
     needs: [probe_auftrag, probe_claude, probe_abnahme]
@@ -929,6 +1013,18 @@ jobs:
           test "$(sha256sum "$O/t/a6-paket/paket-v2.json" | cut -d' ' -f1)" = "$P_PAKET"
           a6_probe schritt veroeffentlichen-auswerten "$O"
           echo "Job 3: genau die erwarteten Schreibaufrufe an das nachgebaute GitHub, Paket-SHA-256 $P_PAKET wie in Job 1b und 2."
+
+      - name: Bericht in die Zusammenfassung schreiben
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          A6_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }
+          source .github/agent/a6-funktionen.sh
+          a6_bericht probe_veroeffentlichen
 
   probe_negativ:
     name: Generalprobe Negativfaelle
@@ -1067,3 +1163,25 @@ jobs:
             a6_sammel "probe_auftrag=$R_PROBE_AUFTRAG" "probe_claude=$R_PROBE_CLAUDE" "probe_abnahme=$R_PROBE_ABNAHME" \
               "probe_veroeffentlichen=$R_PROBE_VEROEFFENTLICHEN" "probe_negativ=$R_PROBE_NEGATIV" "probe_sammel_pruefung=$R_PROBE_SAMMEL"
           fi
+
+      - name: Bericht in die Zusammenfassung schreiben
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          A6_JOB_STATUS: ${{ job.status }}
+          A6_ERGEBNIS_AUFTRAG: ${{ needs.auftrag.result }}
+          A6_ERGEBNIS_CLAUDE: ${{ needs.claude.result }}
+          A6_ERGEBNIS_ABNAHME: ${{ needs.abnahme.result }}
+          A6_ERGEBNIS_VEROEFFENTLICHEN: ${{ needs.veroeffentlichen.result }}
+          A6_ERGEBNIS_PROBE_AUFTRAG: ${{ needs.probe_auftrag.result }}
+          A6_ERGEBNIS_PROBE_CLAUDE: ${{ needs.probe_claude.result }}
+          A6_ERGEBNIS_PROBE_ABNAHME: ${{ needs.probe_abnahme.result }}
+          A6_ERGEBNIS_PROBE_VEROEFFENTLICHEN: ${{ needs.probe_veroeffentlichen.result }}
+          A6_ERGEBNIS_PROBE_NEGATIV: ${{ needs.probe_negativ.result }}
+          A6_ERGEBNIS_PROBE_SAMMEL: ${{ needs.probe_sammel_pruefung.result }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }
+          source .github/agent/a6-funktionen.sh
+          a6_bericht_sammel
