@@ -290,3 +290,155 @@ export function monatsKosten(laeufe, jetzt, listeVollstaendig) {
     vollstaendig: listeVollstaendig === true && !abrufOffen && kostenUnbekannt === 0,
   };
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// B1.3 Ablaufwarnungen. Rein, ohne Netz, ohne Dateien. Gerechnet wird in UTC ab der Erzeugungszeit der Seite.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const TAG = 24 * 60 * 60 * 1000;
+export const FRIST_OK_MS = 14 * TAG;
+export const FRIST_HINWEIS_MS = 7 * TAG;
+export const FRIST_DRINGEND_MS = 2 * TAG;
+export const MANUELL_PRUEFEN_MS = 45 * TAG;
+export const FRISTEN_SCHEMA = 'zentrale-fristen-v1';
+export const FRISTEN_MAX = 10;
+export const FRIST_NAME_MAX = 60;
+
+// Die drei Zugaenge, immer alle angezeigt. Der Handgriff ist ein Satz ohne Tokenwert und ohne Pfad zu einem Geheimnis.
+export const ZUGAENGE = Object.freeze([
+  Object.freeze({
+    zugang: 'lese-token', name: 'Lese-Token der Zentrale', quelle: 'github',
+    handgriff: 'Neues Lese-Token auf GitHub anlegen (nicht „Regenerate“), die Token-Datei der Zentrale ersetzen, Zentrale neu starten, danach das alte Token löschen.',
+  }),
+  Object.freeze({
+    zugang: 'bot-token', name: 'Bot-Token noah04091-agent', quelle: 'manuell',
+    handgriff: 'Neues Token für noah04091-agent anlegen (nicht „Regenerate“), in der Windows-Anmeldeinformationsverwaltung eintragen, Terminal 2 neu starten, danach das alte löschen und den Ablauf in fristen.json nachtragen.',
+  }),
+  Object.freeze({
+    zugang: 'anthropic-schluessel', name: 'Anthropic-Schlüssel', quelle: 'manuell',
+    handgriff: 'Neuen Schlüssel in der Anthropic-Konsole anlegen, bei GitHub als Secret hinterlegen, danach den alten löschen und den Ablauf in fristen.json nachtragen.',
+  }),
+]);
+
+// Stufe einer Frist. ablauf und eingetragenAm in Millisekunden. Schwellen: mehr als 14 Tage ok; mehr als 7 Tage
+// Hinweis; mindestens 2 Tage Warnung; darunter dringend; ab 0 abgelaufen. Ohne belegten Ablauf: unbekannt.
+// pruefen: manuelle Angabe, deren Eintrag aelter als 45 Tage ist.
+export function fristStufe(ablauf, jetzt, quelle, eingetragenAm) {
+  const pruefen = quelle === 'manuell' && Number.isFinite(eingetragenAm) && Number.isFinite(jetzt) && jetzt - eingetragenAm > MANUELL_PRUEFEN_MS;
+
+  if (!Number.isFinite(ablauf) || !Number.isFinite(jetzt)) {
+    return { stufe: 'unbekannt', restMs: null, pruefen };
+  }
+
+  const rest = ablauf - jetzt;
+  const stufe = rest <= 0 ? 'abgelaufen' : rest < FRIST_DRINGEND_MS ? 'dringend' : rest <= FRIST_HINWEIS_MS ? 'warnung' : rest <= FRIST_OK_MS ? 'hinweis' : 'ok';
+  return { stufe, restMs: rest, pruefen };
+}
+
+// Datum aus fristen.json: "JJJJ-MM-TT" (Tagesgenauigkeit, gerechnet ab 00:00 UTC) oder "JJJJ-MM-TTThh:mm:ssZ".
+// Ergebnis { ms, tagesgenau } oder null bei jeder anderen Form oder einem ungueltigen Kalenderdatum.
+export function fristDatum(wert, { nurTag = false } = {}) {
+  if (typeof wert !== 'string' || wert.length > 20) {
+    return null;
+  }
+
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})Z)?$/.exec(wert);
+
+  if (!m || (nurTag && m[4] !== undefined)) {
+    return null;
+  }
+
+  const [j, mo, t] = [m[1], m[2], m[3]].map(Number);
+  const [h, mi, s] = m[4] === undefined ? [0, 0, 0] : [m[4], m[5], m[6]].map(Number);
+  const ms = Date.UTC(j, mo - 1, t, h, mi, s);
+  const d = new Date(ms);
+  const gleich = d.getUTCFullYear() === j && d.getUTCMonth() === mo - 1 && d.getUTCDate() === t && d.getUTCHours() === h && d.getUTCMinutes() === mi && d.getUTCSeconds() === s;
+  return gleich && j >= 2000 && j <= 2199 ? { ms, tagesgenau: m[4] === undefined } : null;
+}
+
+const istReinesObjekt = x => istObjekt(x) && Object.getPrototypeOf(x) === Object.prototype;
+const genauSchluessel = (o, schluessel) => Object.keys(o).length === schluessel.length && schluessel.every(k => Object.hasOwn(o, k));
+
+// Inhalt von fristen.json pruefen. Ergebnis { ok: true, fristen: { 'bot-token'?: {...}, 'anthropic-schluessel'?: {...} } }
+// oder { ok: false, grund }. Jede Abweichung lehnt die ganze Datei ab; der Grund nennt nie einen Wert aus der Datei.
+export function fristenAusJson(text) {
+  const ab = grund => ({ ok: false, grund });
+  let roh;
+
+  try {
+    roh = JSON.parse(text);
+  } catch {
+    return ab('kein gültiges JSON');
+  }
+
+  if (!istReinesObjekt(roh) || !genauSchluessel(roh, ['schema', 'fristen']) || roh.schema !== FRISTEN_SCHEMA) {
+    return ab('falsches Schema');
+  }
+
+  if (!Array.isArray(roh.fristen) || roh.fristen.length > FRISTEN_MAX) {
+    return ab(`höchstens ${FRISTEN_MAX} Einträge`);
+  }
+
+  const fristen = {};
+
+  for (const f of roh.fristen) {
+    if (!istReinesObjekt(f) || !genauSchluessel(f, ['zugang', 'name', 'ablauf', 'eingetragen'])) {
+      return ab('Eintrag mit fehlenden oder zusätzlichen Feldern');
+    }
+
+    if (f.zugang !== 'bot-token' && f.zugang !== 'anthropic-schluessel') {
+      return ab('unbekannter Zugang');
+    }
+
+    if (Object.hasOwn(fristen, f.zugang)) {
+      return ab('Zugang doppelt');
+    }
+
+    if (typeof f.name !== 'string' || f.name.length === 0 || f.name.length > FRIST_NAME_MAX || /[\u0000-\u001f\u007f-\u009f]/.test(f.name)) {
+      return ab('ungültiger Name');
+    }
+
+    const ablauf = fristDatum(f.ablauf);
+    const eingetragen = fristDatum(f.eingetragen, { nurTag: true });
+
+    if (ablauf === null || eingetragen === null) {
+      return ab('ungültiges Datum');
+    }
+
+    fristen[f.zugang] = { name: f.name, ablauf: ablauf.ms, tagesgenau: ablauf.tagesgenau, eingetragenAm: eingetragen.ms };
+  }
+
+  return { ok: true, fristen };
+}
+
+// Fristen fuer die Seite: immer alle drei Zugaenge.
+// leseToken: { ablauf, gemeldetAm } aus der erfolgreichen Startpruefung (ablauf null, wenn der Kopf fehlte).
+// letzteMeldung: der zuletzt gespeicherte Wert aus dem Cache ({ ablauf, gemeldetAm }) oder null.
+// datei: Ergebnis von ladeFristen ({ status: 'ok' | 'fehlt' | 'ungueltig', fristen?, grund? }).
+export function fristenModell({ jetzt, leseToken, letzteMeldung = null, datei }) {
+  const eintraege = ZUGAENGE.map(z => {
+    const basis = { zugang: z.zugang, name: z.name, quelle: z.quelle, handgriff: z.handgriff };
+
+    if (z.quelle === 'github') {
+      const ablauf = Number.isFinite(leseToken?.ablauf) ? leseToken.ablauf : null;
+      const s = fristStufe(ablauf, jetzt, 'github', null);
+      const historisch = ablauf === null && Number.isFinite(letzteMeldung?.ablauf) && Number.isFinite(letzteMeldung?.gemeldetAm) ? { ...letzteMeldung } : null;
+      return {
+        ...basis, ...s, ablauf, tagesgenau: false, gemeldetAm: ablauf === null ? null : leseToken.gemeldetAm, historisch,
+        grund: ablauf === null ? 'GitHub hat in der Startprüfung kein Ablaufdatum gemeldet' : null,
+      };
+    }
+
+    const f = datei?.status === 'ok' ? datei.fristen?.[z.zugang] : undefined;
+
+    if (!f) {
+      const grund = datei?.status === 'ok' ? 'kein Eintrag in fristen.json'
+        : datei?.status === 'fehlt' ? 'keine manuellen Fristen (fristen.json fehlt)' : `fristen.json ungültig${datei?.grund ? `: ${datei.grund}` : ''}`;
+      return { ...basis, stufe: 'unbekannt', restMs: null, pruefen: false, ablauf: null, tagesgenau: false, eingetragenAm: null, grund };
+    }
+
+    return { ...basis, name: f.name, ...fristStufe(f.ablauf, jetzt, 'manuell', f.eingetragenAm), ablauf: f.ablauf, tagesgenau: f.tagesgenau, eingetragenAm: f.eingetragenAm, grund: null };
+  });
+
+  return { erzeugt: jetzt, datei: datei?.status ?? 'ungueltig', eintraege };
+}

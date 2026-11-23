@@ -1,6 +1,6 @@
 # Zentrale (B1.1 Command Center v1)
 
-Eine lokale Seite mit vier Bereichen:
+Eine lokale Seite mit vier Bereichen, darüber seit B1.3 der Bereich „0 Fristen“:
 1. offene Agenten-Aufträge;
 2. Agentenläufe mit Fehlergrund und Draft-PR;
 3. wartende Freigaben mit Frist;
@@ -78,8 +78,38 @@ Fehlen dem Token Rechte, steht im betroffenen Bereich „keine Berechtigung (403
 - **Sitzungen:** nur `name`, `cwd`, Start, letzte Aktivität, `status`, `kind` und die ersten 8 Zeichen der Sitzungs-ID aus
   `%USERPROFILE%\.claude\sessions\*.json`. Keine `.key`-Dateien, keine Links, keine Gesprächsinhalte. Für die Tiefe
   verlinkt die Seite die bestehende Sitzungsübersicht `Documents/claude-werkzeuge/sitzungen.html`, falls vorhanden.
+- **Fristen (B1.3):** Ganz oben steht der Bereich „0 Fristen“ mit immer drei Zugängen: Lese-Token der Zentrale,
+  Bot-Token `noah04091-agent` und Anthropic-Schlüssel. Gerechnet wird in UTC ab der Erzeugungszeit. Stufen: mehr als
+  14 Tage „ok“; 14 bis 8 Tage gelb, „bald erneuern“; 7 bis 2 Tage rot, „jetzt erneuern“; darunter „läuft in n Stunden
+  ab“; danach „abgelaufen seit …“. Warnung, dringend und abgelaufen stehen zusätzlich als rotes Banner ganz oben. Jede
+  Zeile nennt einen Handgriff, nie einen Tokenwert oder einen Pfad zu einem Geheimnis.
+  - **Lese-Token:** automatisch aus dem Antwortkopf `github-authentication-token-expiration` der erfolgreichen
+    Startprüfung („von GitHub gemeldet am …“). Nur das Datum wird gelesen, streng in der Form
+    `JJJJ-MM-TT hh:mm:ss UTC`, sonst „Ablauf unbekannt“. Das zuletzt gemeldete Datum steht in `cache.json`
+    (`leseTokenAblauf`); fehlt der Kopf, erscheint es nur als historische Angabe mit Meldezeit.
+  - **Bot-Token und Anthropic-Schlüssel:** manuell aus `%USERPROFILE%\.zentrale\fristen.json` („manuell eingetragen am
+    …, nicht von der Zentrale geprüft“; älter als 45 Tage zusätzlich „bitte prüfen“). Fehlt die Datei oder ein
+    Eintrag, steht „Ablauf unbekannt“, nie „ok“. Eine ungültige Datei wird ganz verworfen, die übrigen Bereiche
+    bleiben unberührt. Die Datei ist kein Link, höchstens 4 KB groß, liegt nicht in einem Git-Arbeitsbaum und enthält
+    kein Geheimnis-Muster. Format (höchstens 10 Einträge, `zugang` je höchstens einmal, keine weiteren Felder;
+    `ablauf` als `JJJJ-MM-TT` gilt ab 00:00 UTC und wird ohne Uhrzeit angezeigt):
+
+    ```json
+    { "schema": "zentrale-fristen-v1",
+      "fristen": [
+        { "zugang": "bot-token", "name": "Bot-Token noah04091-agent", "ablauf": "2026-12-22T11:26:44Z", "eingetragen": "2026-11-22" },
+        { "zugang": "anthropic-schluessel", "name": "Anthropic-Schlüssel github-testbot", "ablauf": "2027-01-31", "eingetragen": "2026-11-22" } ] }
+    ```
+- **Notseite (B1.3):** Scheitert die Startprüfung oder fehlt die Token-Datei, ersetzt eine Notseite ohne GitHub-Daten
+  und ohne Neuladen die alte Seite; der Exitcode bleibt 1. Bei 401 heißt es „abgelehnt“, nie pauschal „abgelaufen“: je
+  nach letzter Meldung „wahrscheinlich abgelaufen am …“, „abgelehnt, obwohl laut letzter Meldung gültig bis …“ oder
+  „Ablauf unbekannt“. Bei 403, 429, 5xx, Zeitlimit oder Netzfehler steht eine allgemeine Fehlerseite mit dem Grund da,
+  ohne Hinweis auf das Token.
+- **Gelesene Dateien:** `zentrale.mjs` liest nur `cache.json` und `fristen.json`; das Lese-Token liest `token.mjs`, die
+  Sitzungen liest `sitzungen-meta.mjs` (Wache W12).
 - **Nicht in v1:**
   - Schreibaktionen jeder Art;
+  - automatische Erneuerung von Tokens oder Schlüsseln;
   - Freigaben aus der Zentrale (maßgeblich ist GitHub);
   - Benachrichtigungen;
   - Gesprächsinhalte;
@@ -96,6 +126,10 @@ Prüft die Antwortklassen an echten 404 und vergleicht die Läufe Live 2 (447656
 Exitcode 0 nur, wenn alles stimmt und die Daten vollständig sind. Jede Abweichung, ein fehlender oder außerhalb des
 Zeitfensters liegender Lauf, ein Teilfehler oder eine unvollständige Monatssumme ergibt Exitcode 1. Eine Schreibprobe
 gibt es in B1.1 nicht.
+
+B1.3: Die Probe `frist-lese-token` verlangt im Antwortkopf der Startprüfung ein gültiges Ablaufdatum, und zwar genau
+2026-12-21 21:04:30 UTC (`LESE_TOKEN_ABLAUF_SOLL_MS` in `echtprobe.mjs`). Ausgegeben wird nur das gelesene Datum, nie
+der Rohwert. Nach einer Erneuerung des Lese-Tokens ist dieser Sollwert anzupassen.
 
 ## Tests
 

@@ -5,7 +5,10 @@
 //
 // Ausgabe %USERPROFILE%\.zentrale\zentrale.html (ueber eine Nebendatei und Umbenennen). Cache
 // %USERPROFILE%\.zentrale\cache.json nur mit ausgezogenen Werten abgeschlossener Jobs, nie Rohtext. Die Zentrale
-// schreibt nie auf GitHub. Exitcode 1 ohne Seite bei Token-Fehler, gescheiterter Startpruefung oder Geheimnis-Treffer.
+// schreibt nie auf GitHub. Exitcode 1 bei Token-Fehler, gescheiterter Startpruefung oder Geheimnis-Treffer. B1.3: Bei
+// Token-Fehler oder gescheiterter Startpruefung ersetzt eine Notseite ohne GitHub-Daten die alte Seite (nur 401 nennt
+// das Token, und auch dann nie pauschal "abgelaufen"); bei einem Geheimnis-Treffer wird keine Seite geschrieben.
+// Gelesen werden nur lese-token (token.mjs), cache.json, fristen.json und der Sitzungsordner (sitzungen-meta.mjs).
 // Die Seite ist eine Momentaufnahme. Nur mit --schleife laedt der Browser sie neu; endet die Schleife (Strg+C oder
 // gescheiterter Durchlauf), wird die letzte Seite ohne Neuladen und mit Hinweis auf das Ende neu geschrieben.
 
@@ -15,29 +18,46 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
-  REPO, freigabenAus, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, monatsKosten, offeneAuftraege, pflichtchecks, prZuLauf, restMinuten,
-  startfreigaben, wartenderJob,
+  REPO, freigabenAus, fristenAusJson, fristenModell, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, monatsKosten, offeneAuftraege, pflichtchecks,
+  prZuLauf, restMinuten, startfreigaben, wartenderJob,
 } from './daten.mjs';
-import { geheimnisTreffer, seite } from './darstellung.mjs';
+import { geheimnisTreffer, notseite, seite } from './darstellung.mjs';
 import { erzeugeLeser } from './github-lesen.mjs';
 import { logAuszug } from './log-auszug.mjs';
 import { leseSitzungen } from './sitzungen-meta.mjs';
-import { ladeToken } from './token.mjs';
+import { imGitArbeitsbaum, ladeToken } from './token.mjs';
 
 export const ORDNER = join(homedir(), '.zentrale');
 export const AUSGABE = join(ORDNER, 'zentrale.html');
 export const CACHE = join(ORDNER, 'cache.json');
+// B1.3: manuelle Fristen (Bot-Token, Anthropic-Schluessel), von Noah oder Terminal 1 lokal gepflegt. Keine Geheimnisse.
+export const FRISTEN = join(ORDNER, 'fristen.json');
+export const FRISTEN_GRENZE_BYTES = 4096;
 export const SITZUNGS_UEBERSICHT = join(homedir(), 'Documents', 'claude-werkzeuge', 'sitzungen.html');
 export const SCHLEIFE_MS = 120_000;
 const TAG_MS = 24 * 60 * 60 * 1000;
 const R = `/repos/${REPO}`;
 
+// Zeitpunkt in Millisekunden zwischen 2000 und 2199 (UTC), sonst ungueltig.
+const ZEIT_MIN = Date.UTC(2000, 0, 1);
+const ZEIT_MAX = Date.UTC(2200, 0, 1);
+const zeitpunkt = x => Number.isInteger(x) && x >= ZEIT_MIN && x < ZEIT_MAX;
+
 // Cache: nur { jobId: { code, runden, kosten } } mit festen Formen; alles andere wird verworfen.
+// B1.3: dazu genau ein festes Feld leseTokenAblauf: { ablauf, gemeldetAm } (beides Millisekunden), das zuletzt von
+// GitHub gemeldete Ablaufdatum des Lese-Tokens. Nur das Datum, nie ein Tokenwert. Alte Cache-Dateien ohne das Feld
+// laden weiter; jede andere Form des Felds wird verworfen.
 export function cacheBereinigt(roh) {
   const sauber = {};
 
   if (typeof roh !== 'object' || roh === null || Array.isArray(roh)) {
     return sauber;
+  }
+
+  const lt = roh.leseTokenAblauf;
+
+  if (typeof lt === 'object' && lt !== null && !Array.isArray(lt) && Object.keys(lt).length === 2 && zeitpunkt(lt.ablauf) && zeitpunkt(lt.gemeldetAm)) {
+    sauber.leseTokenAblauf = { ablauf: lt.ablauf, gemeldetAm: lt.gemeldetAm };
   }
 
   for (const [id, w] of Object.entries(roh).slice(0, 5000)) {
@@ -252,6 +272,74 @@ function cacheLaden(fsImpl, datei) {
   }
 }
 
+// B1.3: fristen.json laden, nach dem Muster von token.mjs. Ergebnis { status: 'fehlt' } (kein Fehler),
+// { status: 'ok', fristen } oder { status: 'ungueltig', grund }. Kein Link, keine Nicht-Datei, hoechstens 4 KB, nicht in
+// einem Git-Arbeitsbaum, kein Geheimnis-Muster und kein Tokenwert im Inhalt, strenges Schema (daten.mjs). Der Grund
+// nennt nie einen Wert aus der Datei. Wirft nie.
+export function ladeFristen({ datei = FRISTEN, fsImpl = fs, token = null } = {}) {
+  const ungueltig = grund => ({ status: 'ungueltig', grund });
+  let st;
+
+  try {
+    st = fsImpl.lstatSync(datei);
+  } catch (e) {
+    return e?.code === 'ENOENT' ? { status: 'fehlt' } : ungueltig('nicht lesbar');
+  }
+
+  try {
+    if (st.isSymbolicLink()) {
+      return ungueltig('ist ein Link');
+    }
+
+    if (!st.isFile()) {
+      return ungueltig('ist keine Datei');
+    }
+
+    if (st.size > FRISTEN_GRENZE_BYTES) {
+      return ungueltig('zu groß');
+    }
+
+    if (imGitArbeitsbaum(datei, fsImpl)) {
+      return ungueltig('liegt in einem Git-Arbeitsbaum');
+    }
+
+    const inhalt = fsImpl.readFileSync(datei, 'utf8');
+
+    if (typeof inhalt !== 'string' || Buffer.byteLength(inhalt, 'utf8') > FRISTEN_GRENZE_BYTES) {
+      return ungueltig('zu groß');
+    }
+
+    if (geheimnisTreffer(inhalt, token).length > 0) {
+      return ungueltig('enthält ein Geheimnis-Muster');
+    }
+
+    const r = fristenAusJson(inhalt.replace(/^﻿/, ''));
+    return r.ok ? { status: 'ok', fristen: r.fristen } : ungueltig(r.grund);
+  } catch {
+    return ungueltig('nicht lesbar');
+  }
+}
+
+// B1.3: Notseite statt der normalen Seite, ohne GitHub-Daten, ohne Neuladen. art: 'abgelehnt' (401 der Startpruefung),
+// 'token-datei' (Token-Datei fehlt oder ist ungueltig) oder 'start' (andere Fehler der Startpruefung). Laeuft durch
+// den Geheimnis-Filter. Liefert true, wenn die Seite geschrieben wurde. Wirft nie.
+export function notseiteSchreiben({ art, grund, jetzt, token = null, fsImpl = fs, ordner = ORDNER }) {
+  try {
+    const letzte = cacheLaden(fsImpl, join(ordner, 'cache.json')).leseTokenAblauf ?? null;
+    const html = notseite({ erzeugt: jetzt, art, grund, letzteMeldung: letzte });
+
+    if (geheimnisTreffer(html, token).length > 0) {
+      return false;
+    }
+
+    fsImpl.mkdirSync(ordner, { recursive: true });
+    schreibeAtomar(join(ordner, 'zentrale.html'), html, fsImpl);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Seite pruefen und schreiben. Liefert null bei Erfolg, sonst die Liste der Geheimnis-Treffer.
 function seiteSchreiben({ modell, jetzt, token, fsImpl, ordner, modus }) {
   const html = seite(modell, jetzt, modus);
@@ -285,16 +373,36 @@ export async function durchlauf({
   token, leser, jetzt, vorher = null, fsImpl = fs, ordner = ORDNER, sitzungen = () => leseSitzungen(), uebersicht = SITZUNGS_UEBERSICHT,
   schleife = false,
 }) {
-  const start = await leser.holeJson(`/repos/${REPO}`);
+  const start = await leser.holeJson(`/repos/${REPO}`, { start: true });
 
   if (start.klasse !== 'ok') {
-    return { exitcode: 1, meldung: `Startprüfung fehlgeschlagen: GET /repos/${REPO} lieferte nicht 200 (${start.grund ?? start.klasse})` };
+    // B1.3: 401 heisst "Anmeldung abgelehnt", nicht automatisch "abgelaufen". Jeder andere Fehler (403, 429, 5xx,
+    // Zeitlimit, Netzfehler) ist kein Token-Fehler und bekommt eine allgemeine Fehlerseite ohne alte GitHub-Daten.
+    const abgelehnt = start.status === 401;
+    const geschrieben = notseiteSchreiben({ art: abgelehnt ? 'abgelehnt' : 'start', grund: start.grund ?? start.klasse, jetzt, token, fsImpl, ordner });
+    const satz = abgelehnt ? 'Das Lese-Token wird von GitHub abgelehnt (401). ' : '';
+    return {
+      exitcode: 1, notseite: geschrieben,
+      meldung: `${satz}Startprüfung fehlgeschlagen: GET /repos/${REPO} lieferte nicht 200 (${start.grund ?? start.klasse})${geschrieben ? '. Notseite geschrieben.' : ''}`,
+    };
   }
 
   const cacheDatei = join(ordner, 'cache.json');
-  const { modell: neu, cache } = await sammle({ leser, jetzt, cache: cacheLaden(fsImpl, cacheDatei), sitzungen });
+  const geladen = cacheLaden(fsImpl, cacheDatei);
+  const letzteMeldung = geladen.leseTokenAblauf ?? null;
+
+  // Ablauf nur aus der erfolgreichen Startpruefung; fehlt der Kopf, bleibt die letzte Meldung als historische Angabe.
+  if (Number.isFinite(start.tokenAblauf)) {
+    geladen.leseTokenAblauf = { ablauf: start.tokenAblauf, gemeldetAm: jetzt };
+  }
+
+  const { modell: neu, cache } = await sammle({ leser, jetzt, cache: geladen, sitzungen });
   const modell = zusammenfuehren(vorher, neu);
   modell.sitzungsUebersicht = fsImpl.existsSync(uebersicht) ? pathToFileURL(uebersicht).href : null;
+  modell.fristen = fristenModell({
+    jetzt, letzteMeldung, datei: ladeFristen({ datei: join(ordner, 'fristen.json'), fsImpl, token }),
+    leseToken: { ablauf: Number.isFinite(start.tokenAblauf) ? start.tokenAblauf : null, gemeldetAm: jetzt },
+  });
   const treffer = seiteSchreiben({ modell, jetzt, token, fsImpl, ordner, modus: { schleife } });
 
   if (treffer !== null) {
@@ -320,17 +428,19 @@ export async function main(argv, {
     return 2;
   }
 
+  // Wo beim Abschluss geschrieben wird: dieselben Werte wie im Durchlauf.
+  const ziel = { fsImpl: rest.fsImpl ?? fs, ordner: rest.ordner ?? ORDNER };
   const t = tokenLaden();
 
   if (!t.ok) {
-    ausgabe(`Abbruch: ${t.grund}. Keine Seite geschrieben.`);
+    // B1.3 (E2): auch ohne gueltige Token-Datei darf die alte Seite nicht mehr aktuell wirken.
+    const geschrieben = notseiteSchreiben({ art: 'token-datei', grund: t.grund, jetzt: jetzt(), ...ziel });
+    ausgabe(`Abbruch: ${t.grund}. ${geschrieben ? 'Notseite geschrieben.' : 'Keine Seite geschrieben.'}`);
     return 1;
   }
 
   const leser = leserBauen({ token: t.token });
   let vorher = null;
-  // Wo beim Abschluss geschrieben wird: dieselben Werte wie im Durchlauf.
-  const ziel = { fsImpl: rest.fsImpl ?? fs, ordner: rest.ordner ?? ORDNER };
 
   if (schleife) {
     beiAbbruch(() => {
@@ -349,8 +459,12 @@ export async function main(argv, {
     }
 
     if (r.exitcode !== 0) {
-      // Die zuletzt geschriebene Seite darf nach dem Abbruch kein Neuladen mehr versprechen.
-      schleifeBeenden({ modell: vorher, token: t.token, um: jetzt(), grund: 'Durchlauf gescheitert', ...ziel });
+      // Die zuletzt geschriebene Seite darf nach dem Abbruch kein Neuladen mehr versprechen. Hat der Durchlauf schon
+      // eine Notseite geschrieben (Startpruefung gescheitert), bleibt sie stehen.
+      if (r.notseite !== true) {
+        schleifeBeenden({ modell: vorher, token: t.token, um: jetzt(), grund: 'Durchlauf gescheitert', ...ziel });
+      }
+
       return r.exitcode;
     }
 

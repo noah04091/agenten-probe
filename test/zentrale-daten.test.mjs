@@ -10,14 +10,14 @@ import { fileURLToPath } from 'node:url';
 
 import {
   CLAUDE_NICHT_GESTARTET, freigabenAus, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, monatsKosten, offeneAuftraege, pflichtchecks, prZuLauf,
-  restMinuten, startfreigaben,
+  restMinuten, startfreigaben, fristStufe, fristenAusJson, fristDatum,
 } from '../werkzeuge/zentrale/daten.mjs';
 import {
-  KOSTEN_TOLERANZ, MONAT_SOLL, REFERENZ_JETZT, SOLL, echtprobe, historischerAbruf, referenzLeser, unbelegteLaeufe, vergleicheLauf, vergleicheMonat,
+  KOSTEN_TOLERANZ, LESE_TOKEN_ABLAUF_SOLL_MS, MONAT_SOLL, REFERENZ_JETZT, SOLL, echtprobe, historischerAbruf, referenzLeser, unbelegteLaeufe, vergleicheLauf, vergleicheMonat,
 } from '../werkzeuge/zentrale/echtprobe.mjs';
-import { seite } from '../werkzeuge/zentrale/darstellung.mjs';
+import { CSP, seite } from '../werkzeuge/zentrale/darstellung.mjs';
 import { erzeugeLeser } from '../werkzeuge/zentrale/github-lesen.mjs';
-import { durchlauf, main, sammle, schleifeBeenden, zusammenfuehren } from '../werkzeuge/zentrale/zentrale.mjs';
+import { cacheBereinigt, durchlauf, ladeFristen, main, notseiteSchreiben, sammle, schleifeBeenden, zusammenfuehren } from '../werkzeuge/zentrale/zentrale.mjs';
 
 const FIX = join(fileURLToPath(new URL('.', import.meta.url)), 'fixtures', 'zentrale');
 const api = name => JSON.parse(readFileSync(join(FIX, 'api', `${name}.json`), 'utf8'));
@@ -55,7 +55,8 @@ function github(stoerung = () => null) {
     const leer = feld => antwort(200, feld ? { total_count: 0, [feld]: [] } : []);
     let m;
 
-    if (p === P) return antwort(200, api('repo'));
+    // B1.3: GitHub sendet bei Personal Access Tokens das Ablaufdatum im Antwortkopf (Kopfprobe vom 22.11.2026).
+    if (p === P) return antwort(200, api('repo'), { 'github-authentication-token-expiration': '2026-12-21 21:04:30 UTC' });
     if (p === '/rate_limit') return antwort(200, api('rate-limit'));
     if (p === `${P}/issues`) return seite > 1 ? leer() : antwort(200, api(u.searchParams.get('state') === 'open' ? 'issues-offen' : 'issues-alle'));
     if ((m = /^\/repos\/noah04091\/agenten-probe\/issues\/(\d+)\/events$/.exec(p))) {
@@ -601,7 +602,27 @@ test('K3: Schleifenbetrieb schreibt Neuladen; endet die Schleife, traegt die let
     fsImpl: fs2, ordner, sitzungen: keineSitzungen, ausgabe: () => {}, beiAbbruch: () => {},
   });
   assert.equal(code, 1);
-  const ende = fs2.dateien.get(html);
+  // B1.3: Bei 401 ersetzt die Notseite die letzte Seite (keine alten GitHub-Daten, kein Neuladen). Der erste Durchlauf
+  // hat den Ablauf 21.12.2026 gemeldet, er liegt in der Zukunft: abgelehnt, obwohl laut letzter Meldung gueltig.
+  const not = fs2.dateien.get(html);
+  assert.ok(!not.includes(REFRESH), 'Neuladen nach dem Abbruch');
+  assert.ok(not.includes('Notseite: erzeugt am 21.11.2026 um 10:22 UTC.'));
+  assert.ok(not.includes('obwohl es laut letzter Meldung von GitHub am 21.11.2026 um 10:20 UTC bis 21.12.2026 um 21:04 UTC gültig ist. Wurde es widerrufen oder geändert?'), not);
+  assert.ok(!not.includes('abnahme-exitcode') && !not.includes('<table'), 'keine GitHub-Daten auf der Notseite');
+
+  // Gescheiterter Durchlauf aus anderem Grund (Geheimnis-Treffer, keine Seite): die letzte Seite wird mit Vermerk neu
+  // geschrieben, wie bisher.
+  const fs2b = speicher();
+  let m = 0;
+  const stoerB = (p, u) => (p === `${P}/issues` && u.searchParams.get('state') === 'open' && m >= 2
+    ? antwort(200, [{ number: 5, title: 'enthaelt ghp_ABC', labels: [{ name: 'agent:js-text' }] }]) : null);
+  const zaehlB = { f: async (url, o) => { if (new URL(url).pathname === P) m += 1; return github(stoerB).f(url, o); } };
+  zeit = JETZT;
+  assert.equal(await main(['--schleife'], {
+    tokenLaden: () => ({ ok: true, token: TOKEN }), leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: zaehlB.f }),
+    jetzt: () => zeit, warte: async () => { zeit += 120_000; }, fsImpl: fs2b, ordner, sitzungen: keineSitzungen, ausgabe: () => {}, beiAbbruch: () => {},
+  }), 1);
+  const ende = fs2b.dateien.get(html);
   assert.ok(!ende.includes(REFRESH), 'Neuladen nach dem Abbruch');
   assert.ok(ende.includes('Die Schleife wurde am 21.11.2026 um 10:22 UTC beendet (Durchlauf gescheitert).'));
   assert.ok(ende.includes('Momentaufnahme: erzeugt am 21.11.2026 um 10:20 UTC.'));
@@ -677,6 +698,8 @@ function speicher() {
     dateien,
     log,
     existsSync: p => dateien.has(p),
+    // B1.3: fuer fristen.json (wie ein echtes Dateisystem: fehlt heisst ENOENT).
+    lstatSync: p => { if (!dateien.has(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return { isSymbolicLink: () => false, isFile: () => true, size: Buffer.byteLength(dateien.get(p)) }; },
     readFileSync: p => { if (!dateien.has(p)) throw new Error('ENOENT'); return dateien.get(p); },
     writeFileSync: (p, inhalt) => { log.push(`schreibe ${p}`); dateien.set(p, inhalt); },
     renameSync: (a, b) => { log.push(`umbenennen ${a} ${b}`); dateien.set(b, dateien.get(a)); dateien.delete(a); },
@@ -698,13 +721,15 @@ test('Durchlauf: Startpruefung, atomares Schreiben, Cache ohne Rohtext', async (
   assert.ok(!cache.includes('A6-') && !cache.includes('Claude') && !cache.includes(TOKEN));
   assert.ok(!fs.dateien.get(html).includes(TOKEN));
 
-  // Startpruefung scheitert (401): Exitcode 1, keine Seite, Meldung ohne Token.
+  // Startpruefung scheitert (401): Exitcode 1, Meldung ohne Token. B1.3: statt keiner Seite eine Notseite ohne
+  // GitHub-Daten (ersetzt die alte Seite); kein Cache geschrieben, kein weiterer Abruf.
   const fs2 = speicher();
   const g2 = github(p => (p === P ? antwort(401, { message: 'Bad credentials' }) : null));
   const r2 = await durchlauf({ token: TOKEN, leser: erzeugeLeser({ token: TOKEN, fetchImpl: g2.f }), jetzt: JETZT, fsImpl: fs2, ordner, sitzungen: keineSitzungen });
   assert.equal(r2.exitcode, 1);
   assert.match(r2.meldung, /Startprüfung fehlgeschlagen.*401/);
-  assert.equal(fs2.dateien.size, 0);
+  assert.deepEqual([...fs2.dateien.keys()], [html]);
+  assert.ok(fs2.dateien.get(html).includes('Notseite') && !fs2.dateien.get(html).includes(TOKEN));
   assert.equal(g2.aufrufe.length, 1);
 });
 
@@ -914,4 +939,340 @@ test('B1.1a P1: mehrfach auftretende Codes bleiben "mehrere Fehlercodes im Log",
   assert.equal(eintrag(r, 44793828526).code, 'irgendwas');
   const html = seite(r.modell, JETZT);
   assert.ok(html.includes('<td>unbekannter Code</td>') && !html.includes('irgendwas'));
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// B1.3 Ablaufwarnungen
+// ---------------------------------------------------------------------------------------------------------------------
+const STD = 60 * 60 * 1000;
+const TG = 24 * STD;
+const LESE_ABLAUF = Date.parse('2026-12-21T21:04:30Z');
+const KOPF_GUELTIG = { 'github-authentication-token-expiration': '2026-12-21 21:04:30 UTC' };
+const FRISTEN_OK = JSON.stringify({ schema: 'zentrale-fristen-v1', fristen: [
+  { zugang: 'bot-token', name: 'Bot-Token noah04091-agent', ablauf: '2026-12-22T11:26:44Z', eingetragen: '2026-11-22' },
+  { zugang: 'anthropic-schluessel', name: 'Anthropic-Schlüssel github-testbot', ablauf: '2027-01-31', eingetragen: '2026-11-22' },
+] });
+
+test('B1.3 Schwellen: genau an 14, 8, 7 und 2 Tagen und an 0 Sekunden, je eine Sekunde davor und danach', () => {
+  const st = (rest, quelle = 'github') => fristStufe(LESE_ABLAUF, LESE_ABLAUF - rest, quelle, null).stufe;
+  assert.equal(st(3650 * TG), 'ok', 'weit in der Zukunft');
+  assert.equal(st(14 * TG + 1000), 'ok');
+  assert.equal(st(14 * TG), 'hinweis');
+  assert.equal(st(14 * TG - 1000), 'hinweis');
+  assert.equal(st(8 * TG + 1000), 'hinweis');
+  assert.equal(st(8 * TG), 'hinweis');
+  assert.equal(st(8 * TG - 1000), 'hinweis');
+  assert.equal(st(7 * TG + 1000), 'hinweis');
+  assert.equal(st(7 * TG), 'warnung');
+  assert.equal(st(7 * TG - 1000), 'warnung');
+  assert.equal(st(2 * TG + 1000), 'warnung');
+  assert.equal(st(2 * TG), 'warnung');
+  assert.equal(st(2 * TG - 1000), 'dringend');
+  assert.equal(st(1000), 'dringend');
+  assert.equal(st(0), 'abgelaufen');
+  assert.equal(st(-1000), 'abgelaufen');
+  assert.equal(st(-400 * TG), 'abgelaufen');
+  assert.deepEqual(fristStufe(null, LESE_ABLAUF, 'github', null), { stufe: 'unbekannt', restMs: null, pruefen: false });
+  assert.equal(fristStufe(NaN, LESE_ABLAUF, 'manuell', LESE_ABLAUF).stufe, 'unbekannt');
+  // Mit heutigen Daten: Hinweis ab 07.12. 21:04:30 UTC, rot ab 14.12. 21:04:30 UTC (Lese-Token).
+  assert.equal(fristStufe(LESE_ABLAUF, Date.parse('2026-12-07T21:04:29Z'), 'github', null).stufe, 'ok');
+  assert.equal(fristStufe(LESE_ABLAUF, Date.parse('2026-12-07T21:04:30Z'), 'github', null).stufe, 'hinweis');
+  assert.equal(fristStufe(LESE_ABLAUF, Date.parse('2026-12-14T21:04:30Z'), 'github', null).stufe, 'warnung');
+  const bot = Date.parse('2026-12-22T11:26:44Z');
+  assert.equal(fristStufe(bot, Date.parse('2026-12-08T11:26:44Z'), 'manuell', null).stufe, 'hinweis');
+  assert.equal(fristStufe(bot, Date.parse('2026-12-15T11:26:44Z'), 'manuell', null).stufe, 'warnung');
+});
+
+test('B1.3 Herkunft: manuelle Angabe aelter als 45 Tage bekommt den Pruefhinweis, automatische nie', () => {
+  const ein = Date.parse('2026-11-22T00:00:00Z');
+  const ab = Date.parse('2027-06-01T00:00:00Z');
+  assert.equal(fristStufe(ab, ein + 45 * TG, 'manuell', ein).pruefen, false, 'genau 45 Tage');
+  assert.equal(fristStufe(ab, ein + 45 * TG + 1000, 'manuell', ein).pruefen, true);
+  assert.equal(fristStufe(ab, ein + 400 * TG, 'github', ein).pruefen, false, 'automatische Angabe');
+  assert.equal(fristStufe(null, ein + 46 * TG, 'manuell', ein).pruefen, true, 'auch bei unbekanntem Ablauf');
+});
+
+test('B1.3 fristen.json: Schema streng, Datum mit und ohne Uhrzeit, jede Abweichung lehnt die ganze Datei ab', () => {
+  const ok = fristenAusJson(FRISTEN_OK);
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.fristen['bot-token'], { name: 'Bot-Token noah04091-agent', ablauf: Date.parse('2026-12-22T11:26:44Z'), tagesgenau: false, eingetragenAm: Date.parse('2026-11-22T00:00:00Z') });
+  assert.deepEqual(ok.fristen['anthropic-schluessel'], { name: 'Anthropic-Schlüssel github-testbot', ablauf: Date.parse('2027-01-31T00:00:00Z'), tagesgenau: true, eingetragenAm: Date.parse('2026-11-22T00:00:00Z') });
+  assert.deepEqual(fristenAusJson('{"schema":"zentrale-fristen-v1","fristen":[]}'), { ok: true, fristen: {} });
+  assert.deepEqual(fristDatum('2027-01-31'), { ms: Date.parse('2027-01-31T00:00:00Z'), tagesgenau: true });
+  assert.equal(fristDatum('2026-11-22T00:00:00Z', { nurTag: true }), null);
+
+  const roh = JSON.parse(FRISTEN_OK);
+  const mit = f => JSON.stringify(f(structuredClone(roh)));
+  const eintrag = (n, aenderung) => mit(r => { Object.assign(r.fristen[n], aenderung); return r; });
+  const faelle = [
+    ['kein JSON', '{schema:', 'kein gültiges JSON'],
+    ['Liste statt Objekt', '[]', 'falsches Schema'],
+    ['falsches Schema', mit(r => ({ ...r, schema: 'zentrale-fristen-v2' })), 'falsches Schema'],
+    ['Zusatzfeld oben', mit(r => ({ ...r, extra: 1 })), 'falsches Schema'],
+    ['fristen kein Array', mit(r => ({ ...r, fristen: {} })), 'höchstens 10 Einträge'],
+    ['11 Eintraege', mit(r => ({ ...r, fristen: Array.from({ length: 11 }, () => r.fristen[0]) })), 'höchstens 10 Einträge'],
+    ['Zusatzfeld im Eintrag', eintrag(0, { token: 'x' }), 'Eintrag mit fehlenden oder zusätzlichen Feldern'],
+    ['Feld fehlt', mit(r => { delete r.fristen[0].eingetragen; return r; }), 'Eintrag mit fehlenden oder zusätzlichen Feldern'],
+    ['unbekannter Zugang', eintrag(0, { zugang: 'lese-token' }), 'unbekannter Zugang'],
+    ['Zugang doppelt', mit(r => ({ ...r, fristen: [r.fristen[0], { ...r.fristen[0], name: 'zweiter' }] })), 'Zugang doppelt'],
+    ['Name zu lang', eintrag(0, { name: 'x'.repeat(61) }), 'ungültiger Name'],
+    ['Name leer', eintrag(0, { name: '' }), 'ungültiger Name'],
+    ['Name mit Steuerzeichen', eintrag(0, { name: 'a\nb' }), 'ungültiger Name'],
+    ['Name keine Zeichenkette', eintrag(0, { name: 5 }), 'ungültiger Name'],
+    ['Datum 31.02.', eintrag(0, { ablauf: '2027-02-31' }), 'ungültiges Datum'],
+    ['Datum mit Zeitzone', eintrag(0, { ablauf: '2026-12-22T11:26:44+01:00' }), 'ungültiges Datum'],
+    ['Datum ohne Z', eintrag(0, { ablauf: '2026-12-22T11:26:44' }), 'ungültiges Datum'],
+    ['Datum als Zahl', eintrag(0, { ablauf: 1766402804000 }), 'ungültiges Datum'],
+    ['eingetragen mit Uhrzeit', eintrag(0, { eingetragen: '2026-11-22T00:00:00Z' }), 'ungültiges Datum'],
+    ['Prototyp-Trick', '{"schema":"zentrale-fristen-v1","fristen":[{"__proto__":{"x":1},"zugang":"bot-token","name":"a","ablauf":"2027-01-01","eingetragen":"2026-11-22"}]}', 'Eintrag mit fehlenden oder zusätzlichen Feldern'],
+  ];
+
+  for (const [name, text, grund] of faelle) {
+    assert.deepEqual(fristenAusJson(text), { ok: false, grund }, name);
+  }
+
+  // Name mit HTML ist erlaubt und wird bei der Anzeige maskiert (siehe Darstellung).
+  assert.equal(fristenAusJson(eintrag(0, { name: '<b>Bot</b>' })).fristen['bot-token'].name, '<b>Bot</b>');
+});
+
+// Dateisystem-Attrappe nur fuer fristen.json: Inhalt, Art, Groesse, Git-Arbeitsbaum.
+function fristenFs({ inhalt = FRISTEN_OK, art = 'datei', groesse, git = false, datei = join('Z', '.zentrale', 'fristen.json') } = {}) {
+  const gelesen = [];
+  return {
+    gelesen,
+    lstatSync(p) {
+      if (p !== datei || art === 'fehlt') {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      }
+
+      if (art === 'kaputt') {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      }
+
+      return { isSymbolicLink: () => art === 'link', isFile: () => art === 'datei', size: groesse ?? Buffer.byteLength(inhalt) };
+    },
+    existsSync: p => git && p.endsWith('.git'),
+    readFileSync(p) {
+      gelesen.push(p);
+      return inhalt;
+    },
+  };
+}
+
+test('B1.3 fristen.json laden: fehlt ist kein Fehler; Link, Verzeichnis, zu gross, Git-Arbeitsbaum, Geheimnis lehnen ab', () => {
+  const D = join('Z', '.zentrale', 'fristen.json');
+  const lade = (opt, token = TOKEN) => ladeFristen({ datei: D, fsImpl: fristenFs(opt), token });
+  assert.equal(lade().status, 'ok');
+  assert.deepEqual(lade({ art: 'fehlt' }), { status: 'fehlt' });
+  assert.deepEqual(lade({ art: 'kaputt' }), { status: 'ungueltig', grund: 'nicht lesbar' });
+  assert.deepEqual(lade({ art: 'link' }), { status: 'ungueltig', grund: 'ist ein Link' });
+  assert.deepEqual(lade({ art: 'verzeichnis' }), { status: 'ungueltig', grund: 'ist keine Datei' });
+  assert.deepEqual(lade({ groesse: 4097 }), { status: 'ungueltig', grund: 'zu groß' });
+  assert.deepEqual(lade({ inhalt: `${FRISTEN_OK}${' '.repeat(4096)}`, groesse: 10 }), { status: 'ungueltig', grund: 'zu groß' }, 'Groesse nachgemessen');
+  assert.deepEqual(lade({ git: true }), { status: 'ungueltig', grund: 'liegt in einem Git-Arbeitsbaum' });
+  assert.deepEqual(lade({ inhalt: '{' }), { status: 'ungueltig', grund: 'kein gültiges JSON' });
+  // Ein Eintrag mit Tokenwert im Namen: ganze Datei abgelehnt, der Wert erscheint im Ergebnis nirgends.
+  for (const wert of ['ghp_ABCDEFGHIJ1234567890', 'github_pat_ABCDEFGHIJ1234567890', 'sk-ant-api03-xyz']) {
+    const inhalt = FRISTEN_OK.replace('Bot-Token noah04091-agent', wert);
+    const r = lade({ inhalt });
+    assert.deepEqual(r, { status: 'ungueltig', grund: 'enthält ein Geheimnis-Muster' }, wert);
+    assert.ok(!JSON.stringify(r).includes(wert));
+  }
+  // Der Wert des eigenen Lese-Tokens im Inhalt (auch ohne bekanntes Praefix im Treffer): abgelehnt.
+  const eigen = 'TESTNURATTRAPPE_0000000000';
+  assert.deepEqual(ladeFristen({ datei: D, fsImpl: fristenFs({ inhalt: FRISTEN_OK.replace('Bot-Token noah04091-agent', eigen) }), token: eigen }), { status: 'ungueltig', grund: 'enthält ein Geheimnis-Muster' });
+  // Muss-Treffer: gelesen wird nur fristen.json.
+  const fs1 = fristenFs();
+  ladeFristen({ datei: D, fsImpl: fs1, token: TOKEN });
+  assert.deepEqual(fs1.gelesen, [D]);
+});
+
+test('B1.3 Cache: leseTokenAblauf ueberlebt Schreiben und Laden, alte Caches laden weiter, falsche Formen fallen weg', () => {
+  const alt = { 136389814103: { code: null, runden: 6, kosten: 0.04 } };
+  assert.deepEqual(cacheBereinigt(alt), alt, 'alter Cache ohne Feld');
+  const lt = { ablauf: LESE_ABLAUF, gemeldetAm: JETZT };
+  assert.deepEqual(cacheBereinigt(JSON.parse(JSON.stringify({ ...alt, leseTokenAblauf: lt }))), { ...alt, leseTokenAblauf: lt });
+
+  for (const falsch of [null, 5, 'x', [], {}, { ablauf: LESE_ABLAUF }, { ablauf: LESE_ABLAUF, gemeldetAm: JETZT, token: 'ghp_x' }, { ablauf: '2026-12-21', gemeldetAm: JETZT },
+    { ablauf: LESE_ABLAUF + 0.5, gemeldetAm: JETZT }, { ablauf: 5, gemeldetAm: JETZT }, { ablauf: Date.parse('2300-01-01T00:00:00Z'), gemeldetAm: JETZT }]) {
+    assert.deepEqual(cacheBereinigt({ ...alt, leseTokenAblauf: falsch }), alt, JSON.stringify(falsch));
+  }
+
+  assert.deepEqual(cacheBereinigt({ ...alt, andereFeld: { ablauf: LESE_ABLAUF, gemeldetAm: JETZT } }), alt, 'unbekannte Felder verworfen');
+});
+
+// Durchlauf mit Speicher-Attrappe und optionaler fristen.json.
+async function fristenLauf({ stoerung = () => null, fristen = null, cache = null, jetzt = JETZT } = {}) {
+  const fs = speicher();
+  const ordner = join('Z', '.zentrale');
+
+  if (fristen !== null) {
+    fs.dateien.set(join(ordner, 'fristen.json'), fristen);
+  }
+
+  if (cache !== null) {
+    fs.dateien.set(join(ordner, 'cache.json'), JSON.stringify(cache));
+  }
+
+  const g = github(stoerung);
+  const r = await durchlauf({ token: TOKEN, leser: erzeugeLeser({ token: TOKEN, fetchImpl: g.f }), jetzt, fsImpl: fs, ordner, sitzungen: keineSitzungen });
+  return { r, fs, html: fs.dateien.get(join(ordner, 'zentrale.html')), cache: fs.dateien.has(join(ordner, 'cache.json')) ? JSON.parse(fs.dateien.get(join(ordner, 'cache.json'))) : null };
+}
+
+test('B1.3 Durchlauf: drei Zugaenge mit Herkunft; Ablauf aus dem Kopf landet im Cache; ohne fristen.json nie ok', async () => {
+  let x = await fristenLauf({ fristen: FRISTEN_OK });
+  assert.equal(x.r.exitcode, 0, x.r.meldung);
+  assert.deepEqual(x.r.modell.fristen.eintraege.map(e => [e.zugang, e.stufe, e.quelle]), [['lese-token', 'ok', 'github'], ['bot-token', 'ok', 'manuell'], ['anthropic-schluessel', 'ok', 'manuell']]);
+  assert.deepEqual(x.cache.leseTokenAblauf, { ablauf: LESE_ABLAUF, gemeldetAm: JETZT });
+  assert.ok(x.html.includes('<h2>0 Fristen</h2>'));
+  assert.ok(x.html.indexOf('<h2>0 Fristen</h2>') < x.html.indexOf('<h2>1 Offene Aufträge</h2>'), 'ganz oben');
+  assert.ok(x.html.includes('läuft am 21.12.2026 um 21:04 UTC ab (noch 30 Tage)'));
+  assert.ok(x.html.includes('von GitHub gemeldet am 21.11.2026 um 10:20 UTC'));
+  assert.ok(x.html.includes('läuft am 31.01.2027 ab (noch 70 Tage)'), 'tagesgenau ohne Uhrzeit');
+  assert.ok(x.html.includes('manuell eingetragen am 22.11.2026, nicht von der Zentrale geprüft'));
+  assert.ok(!x.html.includes('class="banner"'), 'kein Banner, alles ok');
+
+  // fristen.json fehlt: Bot-Token und Anthropic "Ablauf unbekannt", nie ok; Bereich sagt "keine manuellen Fristen".
+  x = await fristenLauf();
+  assert.deepEqual(x.r.modell.fristen.eintraege.map(e => e.stufe), ['ok', 'unbekannt', 'unbekannt']);
+  assert.ok(x.html.includes('Ablauf unbekannt: keine manuellen Fristen (fristen.json fehlt).'));
+  // fristen.json ungueltig: keine ihrer Werte, die uebrigen Bereiche unberuehrt.
+  x = await fristenLauf({ fristen: FRISTEN_OK.replace('"bot-token"', '"lese-token"') });
+  assert.equal(x.r.exitcode, 0);
+  assert.ok(x.html.includes('Ablauf unbekannt: fristen.json ungültig: unbekannter Zugang.'));
+  assert.ok(!x.html.includes('31.01.2027') && !x.html.includes('Anthropic-Schlüssel github-testbot'));
+  assert.ok(x.html.includes('abnahme-exitcode'), 'Laeufe-Bereich unberuehrt');
+  // Ein Eintrag fehlt: dieser Zugang unbekannt.
+  x = await fristenLauf({ fristen: JSON.stringify({ schema: 'zentrale-fristen-v1', fristen: [JSON.parse(FRISTEN_OK).fristen[0]] }) });
+  assert.deepEqual(x.r.modell.fristen.eintraege.map(e => e.stufe), ['ok', 'ok', 'unbekannt']);
+  assert.ok(x.html.includes('Ablauf unbekannt: kein Eintrag in fristen.json.'));
+  // Name mit HTML: maskiert.
+  x = await fristenLauf({ fristen: FRISTEN_OK.replace('Bot-Token noah04091-agent', '<img src=x onerror=alert(1)>') });
+  assert.ok(x.html.includes('&lt;img src=x onerror=alert(1)&gt;') && !x.html.includes('<img src=x'));
+  // Geheimnis im Namen: Datei abgelehnt, Wert nirgends, Seite trotzdem geschrieben.
+  x = await fristenLauf({ fristen: FRISTEN_OK.replace('Bot-Token noah04091-agent', 'ghp_ABCDEFGHIJ1234567890') });
+  assert.equal(x.r.exitcode, 0);
+  assert.ok(x.html.includes('fristen.json ungültig: enthält ein Geheimnis-Muster') && !x.html.includes('ghp_'));
+});
+
+test('B1.3 Durchlauf: Kopf fehlt oder ungueltig, dann aktuell unbekannt, letzter Wert nur als historische Angabe', async () => {
+  const ohneKopf = p => (p === P ? antwort(200, api('repo')) : null);
+  const alt = { leseTokenAblauf: { ablauf: LESE_ABLAUF, gemeldetAm: Date.parse('2026-11-20T08:00:00Z') } };
+  let x = await fristenLauf({ stoerung: ohneKopf, cache: alt });
+  const e = x.r.modell.fristen.eintraege[0];
+  assert.deepEqual([e.stufe, e.ablauf, e.historisch], ['unbekannt', null, alt.leseTokenAblauf]);
+  assert.ok(x.html.includes('Ablauf unbekannt: GitHub hat in der Startprüfung kein Ablaufdatum gemeldet. Zuletzt von GitHub gemeldet am 20.11.2026 um 08:00 UTC: Ablauf 21.12.2026 um 21:04 UTC (historische Angabe).'));
+  assert.deepEqual(x.cache.leseTokenAblauf, alt.leseTokenAblauf, 'letzte Meldung bleibt im Cache');
+  // Ungueltiger Kopf: wie fehlend, Rohwert nirgends.
+  x = await fristenLauf({ stoerung: p => (p === P ? antwort(200, api('repo'), { 'github-authentication-token-expiration': '<b>2026-12-21</b>' }) : null) });
+  assert.equal(x.r.modell.fristen.eintraege[0].stufe, 'unbekannt');
+  assert.ok(!x.html.includes('<b>2026-12-21</b>') && !x.html.includes('historische Angabe'));
+  // Kurz vor Ablauf: rotes Banner ganz oben mit Handgriff.
+  x = await fristenLauf({ jetzt: LESE_ABLAUF - 30 * STD });
+  assert.ok(x.html.includes('class="banner"'));
+  assert.ok(x.html.indexOf('class="banner"') < x.html.indexOf('<h2>0 Fristen</h2>'));
+  assert.ok(x.html.includes('Lese-Token der Zentrale:</strong> läuft in 30 Stunden ab (am 21.12.2026 um 21:04 UTC), jetzt erneuern.'));
+  assert.ok(x.html.includes('Neues Lese-Token auf GitHub anlegen'));
+});
+
+test('B1.3 Notseite bei 401: wahrscheinlich abgelaufen, abgelehnt obwohl gueltig, Ablauf unbekannt', async () => {
+  const abgelehnt = p => (p === P ? antwort(401, { message: 'Bad credentials' }, KOPF_GUELTIG) : null);
+  const meldung = { ablauf: LESE_ABLAUF, gemeldetAm: Date.parse('2026-11-20T08:00:00Z') };
+  const pruefe = x => {
+    assert.equal(x.r.exitcode, 1);
+    assert.equal(x.r.notseite, true);
+    assert.deepEqual([...x.fs.dateien.keys()].filter(k => k.endsWith('.html')), [join('Z', '.zentrale', 'zentrale.html')]);
+    assert.ok(x.html.includes('Notseite: erzeugt'));
+    assert.ok(!/http-equiv="refresh"/.test(x.html) && !/<script/i.test(x.html) && x.html.includes(`content="${CSP}"`));
+    assert.ok(!x.html.includes('<table') && !x.html.includes('abnahme-exitcode') && !x.html.includes('#104'), 'keine GitHub-Daten');
+    assert.ok(!x.html.includes(TOKEN));
+    assert.match(x.r.meldung, /^Das Lese-Token wird von GitHub abgelehnt \(401\)\. Startprüfung fehlgeschlagen/);
+  };
+
+  // (a) letzte Meldung in der Vergangenheit.
+  let x = await fristenLauf({ stoerung: abgelehnt, cache: { leseTokenAblauf: meldung }, jetzt: LESE_ABLAUF + 5 * STD });
+  pruefe(x);
+  assert.ok(x.html.includes('Das Lese-Token wird von GitHub abgelehnt (401). Es ist wahrscheinlich abgelaufen am 21.12.2026 um 21:04 UTC (laut letzter Meldung von GitHub am 20.11.2026 um 08:00 UTC).'));
+  // (b) letzte Meldung in der Zukunft.
+  x = await fristenLauf({ stoerung: abgelehnt, cache: { leseTokenAblauf: meldung } });
+  pruefe(x);
+  assert.ok(x.html.includes('obwohl es laut letzter Meldung von GitHub am 20.11.2026 um 08:00 UTC bis 21.12.2026 um 21:04 UTC gültig ist. Wurde es widerrufen oder geändert?'));
+  assert.ok(!x.html.includes('abgelaufen'), 'nicht pauschal abgelaufen');
+  // (c) ohne Cache.
+  x = await fristenLauf({ stoerung: abgelehnt });
+  pruefe(x);
+  assert.ok(x.html.includes('Das Lese-Token wird von GitHub abgelehnt (401). Ablauf unbekannt.'));
+  assert.ok(!x.html.includes('abgelaufen'));
+  // Der Ablaufkopf einer abgelehnten Antwort zaehlt nicht: kein Cache geschrieben.
+  assert.ok(!x.fs.dateien.has(join('Z', '.zentrale', 'cache.json')));
+});
+
+test('B1.3 Andere Fehler der Startpruefung: allgemeine Fehlerseite, nie "abgelaufen", nie eine Token-Ablehnung', async () => {
+  const faelle = [
+    ['403', () => antwort(403, { message: 'Forbidden' }), 'keine Berechtigung (403), Token-Rechte prüfen'],
+    ['429 Rate-Limit', () => antwort(429, {}, { 'x-ratelimit-remaining': '0' }), 'Rate-Limit erschöpft'],
+    ['500', () => antwort(500, {}), 'HTTP 500'],
+    ['503', () => antwort(503, {}), 'HTTP 503'],
+    ['Netzfehler', () => new Error('weg'), 'Netzfehler'],
+    ['Zeitlimit', () => Object.assign(new Error('zu spaet'), { name: 'TimeoutError' }), 'Zeitlimit'],
+  ];
+
+  for (const [name, wie, grund] of faelle) {
+    const fs = speicher();
+    const ordner = join('Z', '.zentrale');
+    fs.dateien.set(join(ordner, 'cache.json'), JSON.stringify({ leseTokenAblauf: { ablauf: JETZT - TG, gemeldetAm: JETZT - 30 * TG } }));
+    const f = async url => {
+      if (new URL(url).pathname === P) {
+        const a = wie();
+        if (a instanceof Error) throw a;
+        return a;
+      }
+      return github().f(url);
+    };
+    const r = await durchlauf({ token: TOKEN, leser: erzeugeLeser({ token: TOKEN, fetchImpl: f }), jetzt: JETZT, fsImpl: fs, ordner, sitzungen: keineSitzungen });
+    const html = fs.dateien.get(join(ordner, 'zentrale.html'));
+    assert.equal(r.exitcode, 1, name);
+    assert.ok(html.includes(`Die Startprüfung bei GitHub ist fehlgeschlagen: ${grund}. Das ist keine Ablehnung der Anmeldung (401).`), `${name}: ${html}`);
+    assert.ok(!/abgelaufen/i.test(html) && !html.includes('abgelehnt (401)') && !html.includes('<table'), name);
+    assert.ok(!r.meldung.includes('abgelehnt'), name);
+  }
+});
+
+test('B1.3 Notseite: Geheimnis-Filter aktiv, Schleife laesst die Notseite stehen', async () => {
+  // Ein Grund mit Geheimnis-Muster: keine Seite.
+  const fs = speicher();
+  assert.equal(notseiteSchreiben({ art: 'start', grund: 'sk-ant-xyz', jetzt: JETZT, token: TOKEN, fsImpl: fs, ordner: 'Z' }), false);
+  assert.equal(fs.dateien.size, 0);
+  assert.equal(notseiteSchreiben({ art: 'start', grund: 'HTTP 500', jetzt: JETZT, token: TOKEN, fsImpl: fs, ordner: 'Z' }), true);
+  // Schleife: erster Durchlauf gut, zweiter 403. Die allgemeine Fehlerseite bleibt, kein "Durchlauf gescheitert"-Neuschreiben.
+  const fs2 = speicher();
+  let n = 0;
+  let zeit = JETZT;
+  const f = async (url, o) => { if (new URL(url).pathname === P) { n += 1; if (n >= 2) return antwort(403, { message: 'x' }); } return github().f(url, o); };
+  assert.equal(await main(['--schleife'], {
+    tokenLaden: () => ({ ok: true, token: TOKEN }), leserBauen: ({ token }) => erzeugeLeser({ token, fetchImpl: f }),
+    jetzt: () => zeit, warte: async () => { zeit += 120_000; }, fsImpl: fs2, ordner: 'Z', sitzungen: keineSitzungen, ausgabe: () => {}, beiAbbruch: () => {},
+  }), 1);
+  const html = fs2.dateien.get(join('Z', 'zentrale.html'));
+  assert.ok(html.includes('Die Startprüfung bei GitHub ist fehlgeschlagen: keine Berechtigung (403)'));
+  assert.ok(!html.includes('Durchlauf gescheitert') && !html.includes('<table') && !/http-equiv="refresh"/.test(html));
+});
+
+test('B1.3 Echt-Probe frist-lese-token: Muss-Treffer 2026-12-21 21:04:30 UTC, fehlender oder anderer Kopf ist eine Abweichung', async () => {
+  assert.equal(LESE_TOKEN_ABLAUF_SOLL_MS, Date.parse('2026-12-21T21:04:30Z'));
+  const gut = await probe(november());
+  assert.equal(gut.code, 0, gut.text);
+  assert.match(gut.text, /PROBE frist-lese-token: 2026-12-21T21:04:30\.000Z \(erwartet 2026-12-21T21:04:30\.000Z\) OK/);
+  assert.match(gut.text, /historisch-monat 2026-11: .* OK/, 'historische Proben unveraendert');
+
+  for (const [name, kopf, muster] of [
+    ['Kopf fehlt', {}, /frist-lese-token: kein gueltiges Ablaufdatum im Kopf .*ABWEICHUNG/],
+    ['anderes Datum', { 'github-authentication-token-expiration': '2026-12-22 21:04:30 UTC' }, /frist-lese-token: 2026-12-22T21:04:30\.000Z .*ABWEICHUNG/],
+    ['ungueltiger Kopf', { 'github-authentication-token-expiration': '<b>2026-12-21 21:04:30 UTC</b>' }, /frist-lese-token: kein gueltiges Ablaufdatum im Kopf .*ABWEICHUNG/],
+  ]) {
+    const r = await probe(beide(p => (p === P ? antwort(200, api('repo'), kopf) : null), november()));
+    assert.equal(r.code, 1, `${name}: ${r.text}`);
+    assert.match(r.text, muster, name);
+    assert.ok(!r.text.includes('<b>'), 'Rohwert ausgegeben');
+  }
 });
