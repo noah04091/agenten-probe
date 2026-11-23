@@ -53,7 +53,8 @@ const SETTINGS_ENTWURF_BYTES = readFileSync(join(ROOT, 'test', 'fixtures', 'clau
 // A6.4-3a: SHA-256 der freigegebenen produktiven Policy (Pruefpunkt B des Eigentuemer-PR).
 // Stand nach dem Tokenformat-Fix: nur die Hashes von Transport- und Paketmodul sind neu.
 // B1.2: dazu genau der neue Eintrag scripts/agent-code-job-bericht.mjs (bisher 2012009abe81965866c9c11c2a0ad8b08fd4f32ee23c41d3ffdf95546e94f1ae).
-const POLICY_SHA256 = '7e6719d7781b3d55fcf102b88b524c63fcd54a0141c70d85574ccd3c1fefa25a';
+// B1.3c: nur der Hash von scripts/agent-code-job-bericht.mjs ist neu (bisher 83d9f815a28096183a69fb7ab99de6a6e8fe0bf9815aba07b659c84346bd2f03).
+const POLICY_SHA256 = '8f6d617a45d50eca09a955a5972449b03d72fb53fac67a87844f85deb1b5cf3b';
 
 const IST_WINDOWS = process.platform === 'win32';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');

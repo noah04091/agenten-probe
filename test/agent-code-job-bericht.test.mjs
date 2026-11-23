@@ -459,3 +459,18 @@ test('T15: unbekanntes Modul ohne import.meta.main endet nie mit 0', () => {
   assert.ok(SKRIPT.includes("} else if (import.meta.main !== false) {\n  process.exitCode = 1;\n}"));
   assert.deepEqual(fehlerEintraege('A6-FEHLER a\nx\n\n'), ['a', null, null]);
 });
+
+// ---------------------------------------------------------------------------
+// B1.3c P3: Klartext fuer auftrag-issue-geschlossen
+// ---------------------------------------------------------------------------
+
+test('B1.3c P3 (11, 14): auftrag-issue-geschlossen mit festem Klartext, nicht mehr in der Namensliste', () => {
+  const text = bericht({ job: 'auftrag', status: 'failure', statusDatei: ERFASST, fehler: 'A6-FEHLER auftrag-issue-geschlossen\n' });
+  nurFesteTexte(text);
+  assert.ok(text.includes('- Fehlercode: `auftrag-issue-geschlossen`\n- Bedeutung: Abgebrochen: das Issue ist geschlossen.\n'));
+  assert.ok(!text.includes('kein Klartext hinterlegt'));
+  assert.equal(FEHLERCODES['auftrag-issue-geschlossen'], 'Abgebrochen: das Issue ist geschlossen.');
+  assert.ok(!BEKANNTE_CODES.includes('auftrag-issue-geschlossen'));
+  assert.ok(!zentrale.BEKANNTE_CODES.includes('auftrag-issue-geschlossen'));
+  assert.equal(zentrale.FEHLERCODES['auftrag-issue-geschlossen'], 'Abgebrochen: das Issue ist geschlossen.');
+});

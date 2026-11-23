@@ -318,3 +318,21 @@ test('B1.3 Notseite: drei Faelle bei 401, Token-Datei, andere Fehler; ohne Daten
     assert.deepEqual(geheimnisTreffer(s, 'github_pat_TESTNURATTRAPPE_0000000000'), []);
   }
 });
+
+// B1.3c P3 (12) und P4 (15).
+test('B1.3c P3 (12): auftrag-issue-geschlossen mit Klartext in der Spalte "Fehler laut Log"', () => {
+  const m = modell();
+  m.bereiche.laeufe.eintraege[0].code = 'auftrag-issue-geschlossen';
+  const html = seite(m, JETZT);
+  assert.ok(html.includes('<td>auftrag-issue-geschlossen: Abgebrochen: das Issue ist geschlossen.</td>'));
+  assert.ok(!html.includes('keine Beschreibung hinterlegt') && !html.includes('unbekannter Code'));
+});
+
+test('B1.3c P4 (15): Abschnittsnummern der Seite sind 0 bis 5, jede genau einmal, aufsteigend', () => {
+  for (const m of [modell(), modell({ fehlschlag: JETZT, stand: null })]) {
+    const nummern = [...seite(m, JETZT).matchAll(/<h2>(\d+) /g)].map(x => Number(x[1]));
+    assert.deepEqual(nummern, [0, 1, 2, 3, 4, 5]);
+  }
+
+  assert.ok(seite(modell(), JETZT).includes('<h2>5 Laufende Sitzungen</h2>'));
+});

@@ -174,7 +174,7 @@ function prText(pr) {
   return `${link(pr.url, `#${pr.nummer}`)} ${maskiere(pr.zustand)}${checks ? ` (${checks})` : ''}`;
 }
 
-function laeufe(b) {
+function laeufe(b, warnungen = []) {
   const teile = [];
 
   if (!b.eintraege.length) {
@@ -185,6 +185,11 @@ function laeufe(b) {
       + `${[0, 1, 2, 3].map(n => `<td>${jobText(l.jobs[n])}</td>`).join('')}`
       + `<td>${fehlerText(l.code)}</td><td>${Number.isFinite(l.kosten) ? dollar(l.kosten) : l.kostenOffen ? 'unbekannt' : 'keine'}</td><td>${prText(l.pr)}</td></tr>`);
     teile.push(`<table><tr><th>Lauf</th><th>Issue</th><th>Start</th><th>Job 0</th><th>Job 1</th><th>Job 2</th><th>Job 3</th><th>Fehler laut Log</th><th>Kosten</th><th>Draft-PR</th></tr>${zeilen.join('')}</table>`);
+  }
+
+  // B1.3c: Laufwarnungen am Lauf (dieselben Saetze wie oben auf der Seite).
+  for (const w of warnungen.filter(x => Number.isInteger(x.laufId))) {
+    teile.push(`<p class="laufwarnung">${laufwarnungText(w)}</p>`);
   }
 
   if (b.unvollstaendig) {
@@ -335,6 +340,50 @@ function fristenBanner(fristen) {
   return `<div class="banner">${rot.map(e => `<p><strong>${maskiere(e.name)}:</strong> ${fristText(e)}. ${maskiere(e.handgriff ?? '')}</p>`).join('')}</div>`;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// B1.3c Laufwarnungen: oben auf der Seite (wie die Fristwarnungen) und am Lauf. Feste Saetze, Zahlen und Labelnamen nur
+// nach festem Muster (daten.mjs); kein anderer Rohtext. Fehlende Daten erscheinen als "nicht pruefbar", nie als
+// Entwarnung. Die Saetze behaupten keinen Vergleich des main-Stands mit dem Ausgangscommit eines Laufs.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const nummern = prs => prs.map(n => `#${maskiere(n)}`).join(', ');
+
+export function laufwarnungText(w) {
+  const an = Number.isInteger(w.issue) ? `an #${maskiere(w.issue)}` : '(Issue unbekannt)';
+  const id = maskiere(w.laufId);
+
+  if (w.art === 'label') {
+    const welches = typeof w.label === 'string' ? `das Label ${maskiere(w.label)}` : 'ein Label';
+    const mehr = Number.isInteger(w.weitere) && w.weitere > 0 ? ` Danach ${w.weitere} weitere ${w.weitere === 1 ? 'Labeländerung' : 'Labeländerungen'}.` : '';
+    return `Lauf ${id} ${an}: während des Laufs wurde ${welches} geändert (${datumZeit(w.zeit)}).${mehr} Das kann den Lauf abbrechen. Nichts erneut setzen, erst das Ende abwarten.`;
+  }
+
+  if (w.art === 'gemergt') {
+    return `Während Lauf ${id} wurde ein PR nach main gemergt (${nummern(w.prs)}). Der Lauf könnte dadurch ungültig sein.`;
+  }
+
+  if (w.art === 'offen') {
+    return `Lauf ${id} ${an} läuft. Ein Merge könnte den laufenden Auftrag ungültig machen. Offene PRs nach main: ${nummern(w.prs)}.`;
+  }
+
+  return `Laufwarnungen nicht prüfbar (${maskiere(w.quelle ?? 'unbekannt')}).`;
+}
+
+// Ohne Laufwarnungsmodell (etwa eine Seite aus einem frueheren Stand): nicht pruefbar, nie eine Entwarnung.
+function laufwarnungEintraege(lw) {
+  return lw && Array.isArray(lw.eintraege) ? lw.eintraege : [{ art: 'nicht-pruefbar', laufId: null, quelle: 'nicht ermittelt' }];
+}
+
+function laufwarnungenBanner(lw) {
+  const e = laufwarnungEintraege(lw);
+
+  if (e.length === 0) {
+    return '';
+  }
+
+  return `<div class="banner laufwarnungen">${e.map(w => `<p>${laufwarnungText(w)}</p>`).join('')}</div>`;
+}
+
 const STIL = 'body{font-family:system-ui,sans-serif;margin:16px;color:#111;background:#fff}h1{font-size:1.4em}'
   + 'section{border:1px solid #ccc;border-radius:6px;padding:8px 12px;margin:12px 0}section.veraltet{background:#eee;color:#666}'
   + 'section.fehlgeschlagen{border-color:#b00}.fehler{color:#b00}.hinweis{font-style:italic}.stand{color:#555}'
@@ -371,13 +420,13 @@ export function seite(modell, jetzt, { schleife = false, beendet = null } = {}) 
     schleife === true && !beendet ? '<meta http-equiv="refresh" content="60">' : '',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     `<title>Zentrale (Momentaufnahme ${uhrzeit(modell.erzeugt)})</title><style>${STIL}</style></head><body>`,
-    `<h1>Zentrale Agentensystem</h1>${fristenBanner(modell.fristen)}${momentaufnahme(modell, schleife === true, beendet)}${uebersicht}`,
+    `<h1>Zentrale Agentensystem</h1>${fristenBanner(modell.fristen)}${laufwarnungenBanner(modell.laufwarnungen)}${momentaufnahme(modell, schleife === true, beendet)}${uebersicht}`,
     fristenBereich(modell.fristen, modell.erzeugt),
     rahmen('1 Offene Aufträge', b.auftraege, jetzt, () => auftraege(b.auftraege)),
-    rahmen('2 Agentenläufe', b.laeufe, jetzt, () => laeufe(b.laeufe)),
+    rahmen('2 Agentenläufe', b.laeufe, jetzt, () => laeufe(b.laeufe, laufwarnungEintraege(modell.laufwarnungen))),
     rahmen('3 Meine Freigaben', b.freigaben, jetzt, () => freigaben(b.freigaben, jetzt)),
     rahmen('4 Kosten', b.kosten, jetzt, () => kosten(b.kosten)),
-    rahmen('4 Laufende Sitzungen', b.sitzungen, jetzt, () => sitzungen(b.sitzungen)),
+    rahmen('5 Laufende Sitzungen', b.sitzungen, jetzt, () => sitzungen(b.sitzungen)),
     '</body></html>\n',
   ].join('');
 }

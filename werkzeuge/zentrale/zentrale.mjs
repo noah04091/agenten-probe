@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
-  REPO, freigabenAus, fristenAusJson, fristenModell, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, monatsKosten, offeneAuftraege, pflichtchecks,
+  REPO, freigabenAus, fristenAusJson, fristenModell, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, laufwarnungen, monatsKosten, offeneAuftraege, pflichtchecks,
   prZuLauf, restMinuten, startfreigaben, wartenderJob,
 } from './daten.mjs';
 import { geheimnisTreffer, notseite, seite } from './darstellung.mjs';
@@ -87,6 +87,8 @@ function seitDatum(jetzt) {
 export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
   const neuerCache = { ...cache };
   const b = {};
+  // B1.3c: Laufwarnungen werden in jedem Durchlauf neu bestimmt; ohne gelesene Laufliste sind sie nicht pruefbar.
+  let warnungen = laufwarnungen({ laeufe: null });
   const fehl = grund => ({ stand: null, fehlschlag: jetzt, grund, eintraege: [] });
 
   // --- Bereich 1: offene Auftraege -----------------------------------------------------------------------------
@@ -136,7 +138,11 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
         if (i && i.pull_request === undefined && Number.isInteger(i.number) && titel.has(i.title)) {
           const ev = await leser.holeAlleSeiten(`${R}/issues/${i.number}/events?per_page=100`);
           const evOk = ev.klasse === 'ok' && ev.vollstaendig === true;
-          kandidaten.push({ nummer: i.number, titel: i.title, url: typeof i.html_url === 'string' ? i.html_url : null, freigaben: evOk ? startfreigaben(ev.daten) : null });
+          kandidaten.push({
+            nummer: i.number, titel: i.title, url: typeof i.html_url === 'string' ? i.html_url : null, freigaben: evOk ? startfreigaben(ev.daten) : null,
+            // B1.3c: die schon gelesenen Ereignisse, nur intern fuer die Laufwarnungen, nie im Modell.
+            ereignisse: evOk ? ev.daten : null,
+          });
           teil ||= !evOk;
         }
       }
@@ -147,6 +153,7 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
     const pullsVollstaendig = pulls.klasse === 'ok' && pulls.vollstaendig === true;
     const freigaben = [];
     const eintraege = [];
+    const laufKontext = [];
 
     for (const l of laeufe) {
       const jr = await leser.holeAlleSeiten(`${R}/actions/runs/${l.id}/jobs?per_page=100`, { feld: 'jobs' });
@@ -219,12 +226,14 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
         }
       }
 
+      laufKontext.push({ lauf: l, issue: issue ? { nummer: issue.nummer, ereignisse: issue.ereignisse } : null });
       eintraege.push({
         id: l.id, url: l.url, start: l.start, issue: issue ? { nummer: issue.nummer, url: issue.url } : null, jobs,
         code: codes.length === 0 ? null : codes.length === 1 ? codes[0] : 'mehrdeutig', kosten: k1.kosten, runden: k1.runden, pr, kostenOffen: k1.offen, kostenGrund: k1.grund,
       });
     }
 
+    warnungen = laufwarnungen({ laeufe: laufKontext, laeufeVollstaendig: runs.vollstaendig === true, pulls: pulls.klasse === 'ok' ? pulls.daten : null, pullsVollstaendig });
     const stempel = teil ? jetzt : null;
     const summe = monatsKosten(eintraege, jetzt, runs.vollstaendig === true);
     b.laeufe = { stand: jetzt, fehlschlag: null, teilFehler: stempel, eintraege, generalprobe, unvollstaendig: runs.vollstaendig !== true, kandidatenUnvollstaendig: !kandidatenVollstaendig };
@@ -238,7 +247,7 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
   // --- Bereich 4: Sitzungen -------------------------------------------------------------------------------------
   const s = sitzungen();
   b.sitzungen = s.ok ? { stand: jetzt, fehlschlag: null, eintraege: s.eintraege } : fehl(s.grund);
-  return { modell: { erzeugt: jetzt, bereiche: b }, cache: neuerCache };
+  return { modell: { erzeugt: jetzt, bereiche: b, laufwarnungen: { erzeugt: jetzt, eintraege: warnungen } }, cache: neuerCache };
 }
 
 // Neuer Stand je Bereich; ist ein Bereich gescheitert, bleiben die alten Werte mit altem Stand erhalten und der

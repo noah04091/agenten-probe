@@ -11,12 +11,12 @@ import { fileURLToPath } from 'node:url';
 
 import {
   CLAUDE_NICHT_GESTARTET, freigabenAus, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, monatsKosten, offeneAuftraege, pflichtchecks, prZuLauf,
-  restMinuten, startfreigaben, fristStufe, fristenAusJson, fristDatum,
+  restMinuten, startfreigaben, fristStufe, fristenAusJson, fristDatum, laufwarnungen,
 } from '../werkzeuge/zentrale/daten.mjs';
 import {
   ECHTPROBE_SOLL, KOSTEN_TOLERANZ, MONAT_SOLL, REFERENZ_JETZT, SOLL, echtprobe, historischerAbruf, ladeSoll, referenzLeser, sollAusJson, unbelegteLaeufe, vergleicheLauf, vergleicheMonat,
 } from '../werkzeuge/zentrale/echtprobe.mjs';
-import { CSP, seite } from '../werkzeuge/zentrale/darstellung.mjs';
+import { CSP, laufwarnungText, seite } from '../werkzeuge/zentrale/darstellung.mjs';
 import { erzeugeLeser } from '../werkzeuge/zentrale/github-lesen.mjs';
 import { cacheBereinigt, durchlauf, ladeFristen, main, notseiteSchreiben, sammle, schleifeBeenden, zusammenfuehren } from '../werkzeuge/zentrale/zentrale.mjs';
 
@@ -1474,4 +1474,241 @@ test('B1.3a Echt-Probe (7): kein Selbstbefuellen, Referenzdatei wird einmal und 
   assert.ok(ereignisse.filter(e => e === 'netz').length > 10, 'Muss-Treffer: Netzabrufe gezaehlt');
   assert.deepEqual(fs.log, []);
   assert.deepEqual(fs.dateien, vorher);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// B1.3c Laufwarnungen (Auftrag Abschnitt 6, Faelle 1 bis 10a). Grundlage ist der nachgebaute laufende Lauf 44900000001
+// an #90 (Status waiting, Start 2026-11-21T10:00:03Z). Geprueft werden das Modell und die erzeugte Seite.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const LW_LAUF = 44900000001;
+const LW_START = '2026-11-21T10:00:03Z';
+const lwBanner = html => (/<div class="banner laufwarnungen">(.*?)<\/div>/.exec(html) ?? [null, ''])[1];
+const lwAmLauf = html => [...html.matchAll(/<p class="laufwarnung">(.*?)<\/p>/g)].map(m => m[1]);
+const evLabel = (event, name, created_at) => ({ event, label: { name }, actor: { login: 'noah04091' }, created_at });
+const mitEreignissen = (...zusatz) => nur(`${P}/issues/90/events`, () => antwort(200, [...api('events-90'), ...zusatz]));
+const mitPulls = (...zusatz) => nur(`${P}/pulls`, () => antwort(200, [...api('pulls'), ...zusatz]));
+const pr = (number, extra = {}) => ({
+  number, state: 'open', draft: false, merged_at: null, head: { ref: `wp/x-${number}`, sha: 'c'.repeat(40) }, base: { ref: 'main' },
+  html_url: `https://github.com/noah04091/agenten-probe/pull/${number}`, ...extra,
+});
+// Laufliste mit geaendertem Lauf 44900000001.
+const laufAendern = aendern => (p, u) => {
+  if (p !== RUNS || u.searchParams.get('event') !== 'issues' || (u.searchParams.get('page') ?? '1') !== '1') {
+    return null;
+  }
+
+  const w = api('runs').workflow_runs.map(x => (x.id === LW_LAUF ? aendern({ ...x }) : x));
+  return antwort(200, { total_count: w.length, workflow_runs: w });
+};
+
+async function lw(stoerung = () => null) {
+  const r = await lauf(stoerung);
+  const html = seite(r.modell, JETZT);
+  return { eintraege: r.modell.laufwarnungen.eintraege, html, banner: lwBanner(html), amLauf: lwAmLauf(html) };
+}
+
+// "nicht pruefbar": sichtbar oben, nie eine Entwarnung.
+function nichtPruefbar(r, quelle, name) {
+  assert.ok(r.eintraege.some(e => e.art === 'nicht-pruefbar' && e.quelle.includes(quelle)), `${name}: ${JSON.stringify(r.eintraege)}`);
+  assert.ok(r.banner.includes('Laufwarnungen nicht prüfbar ('), name);
+  assert.ok(!/keine (Lauf)?warnung/i.test(r.html), `${name}: Entwarnung`);
+}
+
+const LABEL_TEXT = 'Lauf 44900000001 an #90: während des Laufs wurde das Label bot-auftrag geändert (21.11. 10:00 UTC). '
+  + 'Das kann den Lauf abbrechen. Nichts erneut setzen, erst das Ende abwarten.';
+
+test('B1.3c (Grundlage): laufender Lauf ohne Labelaenderung und ohne offene PRs: keine Laufwarnung, kein Platzhalter', async () => {
+  const r = await lw();
+  assert.deepEqual(r.eintraege, []);
+  assert.equal(r.banner, '');
+  assert.ok(!r.html.includes('laufwarnung') && !r.html.includes('nicht prüfbar'));
+});
+
+test('B1.3c P1 (1): unlabeled bot-auftrag 1 s nach Laufstart: Warnung mit Lauf, Issue und Zeit, oben und am Lauf', async () => {
+  const r = await lw(mitEreignissen(evLabel('unlabeled', 'bot-auftrag', '2026-11-21T10:00:04Z')));
+  assert.deepEqual(r.eintraege, [{ art: 'label', laufId: LW_LAUF, issue: 90, zeit: Date.parse('2026-11-21T10:00:04Z'), label: 'bot-auftrag', weitere: 0 }]);
+  assert.equal(r.banner, `<p>${LABEL_TEXT}</p>`);
+  assert.deepEqual(r.amLauf, [LABEL_TEXT]);
+
+  // Mehrere Aenderungen: die erste wird genannt, die weiteren gezaehlt.
+  const zwei = await lw(mitEreignissen(evLabel('labeled', 'bot-auftrag', '2026-11-21T10:07:00Z'), evLabel('unlabeled', 'bot-auftrag', '2026-11-21T10:00:04Z')));
+  assert.equal(zwei.eintraege[0].weitere, 1);
+  assert.ok(zwei.banner.includes('(21.11. 10:00 UTC). Danach 1 weitere Labeländerung. Das kann den Lauf abbrechen.'));
+});
+
+test('B1.3c P1 (2, 3): Ereignis zur Startzeit oder davor und abgeschlossener Lauf: keine Warnung', async () => {
+  for (const zeit of [LW_START, '2026-11-21T10:00:02Z', '2026-11-21T09:00:00Z']) {
+    const r = await lw(mitEreignissen(evLabel('unlabeled', 'bot-auftrag', zeit)));
+    assert.deepEqual(r.eintraege, [], zeit);
+  }
+
+  // Gegenprobe zur Grenze: eine Millisekunde danach zaehlt.
+  assert.equal((await lw(mitEreignissen(evLabel('unlabeled', 'bot-auftrag', '2026-11-21T10:00:03.001Z')))).eintraege[0]?.art, 'label');
+
+  const fertig = await lw(beide(laufAendern(x => ({ ...x, status: 'completed', conclusion: 'failure' })), mitEreignissen(evLabel('unlabeled', 'bot-auftrag', '2026-11-21T10:05:00Z'))));
+  assert.deepEqual(fertig.eintraege, []);
+  assert.equal(fertig.banner, '');
+});
+
+test('B1.3c P1 (4): Labelname nur nach festem Muster, sonst "ein Label", nie Rohtext', async () => {
+  const boese = ['bot auftrag', '<b>x</b>', '[klick](https://example.invalid)', 'a'.repeat(51), 'Bot-Auftrag', 'agent:js"text', 'x\ny'];
+
+  for (const name of boese) {
+    const r = await lw(mitEreignissen(evLabel('labeled', name, '2026-11-21T10:01:00Z')));
+    assert.equal(r.eintraege[0].label, null, name);
+    assert.ok(r.banner.includes('wurde ein Label geändert'), name);
+    assert.ok(!r.html.includes(name), `${JSON.stringify(name)}: Rohtext`);
+  }
+
+  // Leerer Name, Label ohne Namen, Ereignis ohne label-Feld.
+  for (const ev of [evLabel('labeled', '', '2026-11-21T10:01:00Z'), evLabel('labeled', undefined, '2026-11-21T10:01:00Z'), { event: 'labeled', created_at: '2026-11-21T10:01:00Z' }]) {
+    assert.ok((await lw(mitEreignissen(ev))).banner.includes('wurde ein Label geändert'), JSON.stringify(ev));
+  }
+
+  // Gegenprobe: Namen nach Muster (50 Zeichen, mit Doppelpunkt) erscheinen.
+  const genau = 'a'.repeat(50);
+  assert.ok((await lw(mitEreignissen(evLabel('labeled', genau, '2026-11-21T10:01:00Z')))).banner.includes(`wurde das Label ${genau} geändert`));
+  assert.ok((await lw(mitEreignissen(evLabel('labeled', 'agent:js-text', '2026-11-21T10:01:00Z')))).banner.includes('wurde das Label agent:js-text geändert'));
+});
+
+test('B1.3c P1 (5): Ereignisse nicht lesbar, nur teilweise gelesen, Lauf keinem oder mehreren Issues zugeordnet: nicht pruefbar', async () => {
+  const spaet = evLabel('unlabeled', 'bot-auftrag', '2026-11-21T10:05:00Z');
+  const voll = Array.from({ length: 100 }, (_, i) => evLabel('labeled', 'agent:js-text', `2026-11-21T09:${String(i % 60).padStart(2, '0')}:00Z`));
+  const issue90 = api('issues-alle').find(i => i.number === 90);
+  const faelle = {
+    nicht_lesbar: beide(nur(`${P}/issues/90/events`, () => antwort(500, {}))),
+    teilweise: (p, u) => (p === `${P}/issues/90/events` ? ((u.searchParams.get('page') ?? '1') === '1' ? antwort(200, [...voll.slice(1), spaet]) : antwort(500, {})) : null),
+    issueliste_kaputt: beide((p, u) => (p === `${P}/issues` && u.searchParams.get('state') === 'all' ? antwort(500, {}) : null), mitEreignissen(spaet)),
+    zwei_issues: beide(
+      (p, u) => (p === `${P}/issues` && u.searchParams.get('state') === 'all' ? antwort(200, [...api('issues-alle'), { ...issue90, number: 92 }]) : null),
+      nur(`${P}/issues/92/events`, () => antwort(200, api('events-90'))),
+      mitEreignissen(spaet),
+    ),
+    kein_issue: beide(laufAendern(x => ({ ...x, display_title: 'Titel ohne Issue' })), mitEreignissen(spaet)),
+  };
+
+  for (const [name, stoerung] of Object.entries(faelle)) {
+    const r = await lw(stoerung);
+    nichtPruefbar(r, '', name);
+    assert.ok(r.eintraege.some(e => e.art === 'nicht-pruefbar' && e.laufId === LW_LAUF && /Issue|Ereignisse/.test(e.quelle)), `${name}: ${JSON.stringify(r.eintraege)}`);
+    assert.ok(!r.eintraege.some(e => e.art === 'label'), `${name}: konkrete Labelaussage`);
+    assert.ok(!r.banner.includes('wurde ein Label') && !r.banner.includes('wurde das Label'), name);
+  }
+
+  // Ereignisse des zugeordneten Issues fehlen (reine Logik): nicht pruefbar.
+  const lauf1 = { id: 1, status: 'in_progress', start: Date.parse(LW_START) };
+  const ohneEv = laufwarnungen({ laeufe: [{ lauf: lauf1, issue: { nummer: 7, ereignisse: null } }], laeufeVollstaendig: true, pulls: [], pullsVollstaendig: true });
+  assert.deepEqual(ohneEv, [{ art: 'nicht-pruefbar', laufId: 1, quelle: 'Ereignisse von #7 nicht vollständig lesbar' }]);
+  // Laufliste nicht gelesen oder unvollstaendig, Status unbekannt: nicht pruefbar.
+  nichtPruefbar(await lw(nur(RUNS, () => antwort(500, {}))), 'Läufe nicht gelesen', 'runs 500');
+  assert.deepEqual(laufwarnungen({ laeufe: [], laeufeVollstaendig: false, pulls: [], pullsVollstaendig: true }), [{ art: 'nicht-pruefbar', laufId: null, quelle: 'Laufliste unvollständig' }]);
+  nichtPruefbar(await lw(laufAendern(x => ({ ...x, status: 'irgendwas' }))), 'Status von Lauf 44900000001 unbekannt', 'status');
+  // Seite ohne Laufwarnungsmodell (frueherer Stand): nicht pruefbar, nie leer.
+  const alt = (await lauf()).modell;
+  delete alt.laufwarnungen;
+  assert.ok(lwBanner(seite(alt, JETZT)).includes('Laufwarnungen nicht prüfbar (nicht ermittelt).'));
+});
+
+test('B1.3c P1 (5a): Ereignis ohne gueltige Zeit, Laufstart fehlt oder ungueltig: nicht pruefbar', async () => {
+  for (const zeit of [undefined, null, '', 'gestern', '2026-11-21 10:05:00', '2026-11-21T10:05:00+01:00', '2026-13-01T00:00:00Z', 1763719504000]) {
+    const r = await lw(mitEreignissen(evLabel('unlabeled', 'bot-auftrag', zeit)));
+    nichtPruefbar(r, 'Ereignisse von #90', String(zeit));
+    assert.ok(!r.eintraege.some(e => e.art === 'label'), String(zeit));
+  }
+
+  // Unbrauchbarer Eintrag in der Ereignisliste.
+  nichtPruefbar(await lw(mitEreignissen('kaputt')), 'Ereignisse von #90', 'Eintrag');
+  // Gegenprobe: ein anderes Ereignis ohne Zeit (kein Labelereignis) stoert nicht.
+  assert.deepEqual((await lw(mitEreignissen({ event: 'renamed', created_at: 'gestern' }))).eintraege, []);
+
+  for (const start of [null, 'kaputt', '1999-12-31T23:59:59Z']) {
+    const r = await lw(beide(laufAendern(x => ({ ...x, created_at: start })), mitEreignissen(evLabel('unlabeled', 'bot-auftrag', '2026-11-21T10:05:00Z')), mitPulls(pr(120))));
+    assert.ok(r.eintraege.some(e => e.art === 'nicht-pruefbar' && e.laufId === LW_LAUF), String(start));
+    assert.ok(!r.eintraege.some(e => e.art === 'label' || e.art === 'gemergt' || e.art === 'offen'), String(start));
+    assert.ok(r.banner.includes('Laufwarnungen nicht prüfbar'), String(start));
+  }
+});
+
+const OFFEN_TEXT = 'Lauf 44900000001 an #90 läuft. Ein Merge könnte den laufenden Auftrag ungültig machen. Offene PRs nach main: #120, #121.';
+const GEMERGT_TEXT = 'Während Lauf 44900000001 wurde ein PR nach main gemergt (#120). Der Lauf könnte dadurch ungültig sein.';
+
+test('B1.3c P2 (6, 7): offener PR nach main ergibt den Hinweis mit Nummern, andere Basis nicht', async () => {
+  const r = await lw(mitPulls(pr(121), pr(120), pr(122, { base: { ref: 'wp/irgendwas' } })));
+  assert.deepEqual(r.eintraege, [{ art: 'offen', laufId: LW_LAUF, issue: 90, prs: [120, 121] }]);
+  assert.equal(r.banner, `<p>${OFFEN_TEXT}</p>`);
+  assert.deepEqual(r.amLauf, [OFFEN_TEXT]);
+
+  const andere = await lw(mitPulls(pr(122, { base: { ref: 'wp/irgendwas' } }), pr(123, { base: { ref: 'mainx' } })));
+  assert.deepEqual(andere.eintraege, []);
+  // Kein laufender Lauf: kein Hinweis trotz offener PRs.
+  assert.deepEqual((await lw(beide(laufAendern(x => ({ ...x, status: 'completed' })), mitPulls(pr(120))))).eintraege, []);
+});
+
+test('B1.3c P2 (8, 9): Merge nach Laufstart ist eine Warnung mit Vorrang; davor oder genau zum Start keine', async () => {
+  const r = await lw(mitPulls(pr(121), pr(120, { state: 'closed', merged_at: '2026-11-21T10:05:00Z' })));
+  assert.deepEqual(r.eintraege, [{ art: 'gemergt', laufId: LW_LAUF, issue: 90, prs: [120] }]);
+  assert.equal(r.banner, `<p>${GEMERGT_TEXT}</p>`);
+  assert.deepEqual(r.amLauf, [GEMERGT_TEXT]);
+  assert.ok(!r.banner.includes('Offene PRs'), 'Vorrang');
+
+  for (const zeit of [LW_START, '2026-11-21T09:59:59Z']) {
+    assert.deepEqual((await lw(mitPulls(pr(120, { state: 'closed', merged_at: zeit })))).eintraege, [], zeit);
+  }
+
+  // Gemergt nach Laufstart, aber auf andere Basis: keine Warnung.
+  assert.deepEqual((await lw(mitPulls(pr(120, { state: 'closed', merged_at: '2026-11-21T10:05:00Z', base: { ref: 'wp/x' } })))).eintraege, []);
+});
+
+test('B1.3c P2 (10): PRs nicht lesbar oder unvollstaendig, Basis oder merged_at fehlt oder ungueltig: nicht pruefbar, keine Merge-Aussage', async () => {
+  const spaet = { state: 'closed', merged_at: '2026-11-21T10:05:00Z' };
+  const voll = Array.from({ length: 100 }, (_, i) => pr(200 + i, { state: 'closed' }));
+  const faelle = {
+    nicht_lesbar: nur(`${P}/pulls`, () => antwort(500, {})),
+    unvollstaendig: (p, u) => (p === `${P}/pulls` ? ((u.searchParams.get('page') ?? '1') === '1' ? antwort(200, [pr(120, spaet), ...voll.slice(1)]) : antwort(500, {})) : null),
+    basis_fehlt: mitPulls(pr(120, spaet), { ...pr(121), base: undefined }),
+    basis_kein_text: mitPulls(pr(120, spaet), pr(121, { base: { ref: 7 } })),
+    merged_at_fehlt: mitPulls(pr(120, spaet), { ...pr(121), merged_at: undefined }),
+    merged_at_ungueltig: mitPulls(pr(120, { state: 'closed', merged_at: 'gestern' })),
+    merged_at_zahl: mitPulls(pr(120, { state: 'closed', merged_at: 1763719504000 })),
+    zustand_unbekannt: mitPulls(pr(121, { state: 'irgendwas' })),
+    nummer_fehlt: mitPulls(pr(120, spaet), pr(undefined)),
+  };
+
+  for (const [name, stoerung] of Object.entries(faelle)) {
+    const r = await lw(stoerung);
+    nichtPruefbar(r, 'PRs nicht vollständig lesbar', name);
+    assert.ok(!r.eintraege.some(e => e.art === 'gemergt' || e.art === 'offen'), name);
+    assert.ok(!r.banner.includes('gemergt') && !r.banner.includes('Offene PRs'), name);
+  }
+});
+
+test('B1.3c P2 (10a): kein Text der Seite behauptet einen Vergleich von main mit dem Ausgangsstand eines Laufs', async () => {
+  const VERBOTEN = /SHA|weicht|Ausgangs|main hat sich|main wurde geändert|Stand von main|main ist neuer|Commit von main/i;
+  const szenarien = [
+    () => null,
+    mitPulls(pr(120)),
+    mitPulls(pr(120, { state: 'closed', merged_at: '2026-11-21T10:05:00Z' })),
+    nur(`${P}/pulls`, () => antwort(500, {})),
+    mitEreignissen(evLabel('unlabeled', 'bot-auftrag', '2026-11-21T10:00:04Z')),
+    laufAendern(x => ({ ...x, created_at: null })),
+  ];
+  let saetze = 0;
+
+  for (const s of szenarien) {
+    const r = await lw(s);
+    // Die ganze Seite ohne die Spalte "Fehler laut Log" (deren Klartexte stammen aus dem Log, nicht aus einem Vergleich).
+    const ohneLogSpalte = r.html.replace(/<td>[a-z0-9-]+: [^<]*<\/td>/g, '');
+    assert.ok(!VERBOTEN.test(ohneLogSpalte), ohneLogSpalte.match(VERBOTEN)?.[0]);
+    saetze += r.eintraege.length;
+  }
+
+  assert.ok(saetze >= 5, 'Muss-Treffer: Warnsaetze erzeugt');
+
+  for (const w of [{ art: 'label', laufId: 1, issue: 2, zeit: 0, label: null, weitere: 3 }, { art: 'gemergt', laufId: 1, issue: 2, prs: [3] }, { art: 'offen', laufId: 1, issue: null, prs: [3] }, { art: 'nicht-pruefbar', quelle: 'x' }]) {
+    assert.ok(!VERBOTEN.test(laufwarnungText(w)), w.art);
+  }
+
+  // Gegenprobe: die Wache erkennt einen solchen Satz.
+  assert.ok(VERBOTEN.test('Lauf 1: main weicht vom Ausgangscommit ab.'));
 });

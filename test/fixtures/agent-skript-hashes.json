@@ -15,7 +15,7 @@
   "scripts/agent-code-issue-route.mjs": "81328102fec61150556eac754d1d21d9c36dd0700b1ef55ea079b25a4b05de7c",
   "scripts/agent-code-job-abnahme.mjs": "596e6f0ea17f30c6084ec77cf54ecc3dad844842b4097fada07eb9586ea42f92",
   "scripts/agent-code-job-auftrag.mjs": "c0544022027547334b6e4537660e1d3c584cfc2bf7097230671f896143983c4c",
-  "scripts/agent-code-job-bericht.mjs": "83d9f815a28096183a69fb7ab99de6a6e8fe0bf9815aba07b659c84346bd2f03",
+  "scripts/agent-code-job-bericht.mjs": "7a472d513f8ef6d531446f9fa4958ddc96c2d4b8ccfb67e10bf5d4bf0c757b69",
   "scripts/agent-code-job-claude-nach.mjs": "62a5e9416c2e9efd3ee7b83020b05dd76e7a6130f290391e917e60fa01a0ae67",
   "scripts/agent-code-job-claude-vor.mjs": "8501ec59064bc80cba9e29568f468642037e17e2a47023fc1a84c27044fe889e",
   "scripts/agent-code-job-gemeinsam.mjs": "2177a918c921033f3514c070c009d47df5616617fb8924151c01018203668033",

@@ -1,10 +1,11 @@
 # Zentrale (B1.1 Command Center v1)
 
-Eine lokale Seite mit vier Bereichen, darüber seit B1.3 der Bereich „0 Fristen“:
+Eine lokale Seite mit fünf Bereichen, darüber seit B1.3 der Bereich „0 Fristen“ und seit B1.3c die Laufwarnungen:
 1. offene Agenten-Aufträge;
 2. Agentenläufe mit Fehlergrund und Draft-PR;
 3. wartende Freigaben mit Frist;
-4. Kosten und laufende Claude-Code-Sitzungen.
+4. Kosten;
+5. laufende Claude-Code-Sitzungen.
 
 Jeder Wert ist belegt oder steht als „unbekannt“ da. Die Zentrale schreibt nie auf GitHub und ändert nichts an der
 Agenten-Pipeline.
@@ -100,6 +101,21 @@ Fehlen dem Token Rechte, steht im betroffenen Bereich „keine Berechtigung (403
         { "zugang": "bot-token", "name": "Bot-Token noah04091-agent", "ablauf": "2026-12-22T11:26:44Z", "eingetragen": "2026-11-22" },
         { "zugang": "anthropic-schluessel", "name": "Anthropic-Schlüssel github-testbot", "ablauf": "2027-01-31", "eingetragen": "2026-11-22" } ] }
     ```
+- **Laufwarnungen (B1.3c):** Für jeden laufenden Lauf (Ereignis `issues`, Status `queued`, `in_progress`, `waiting`,
+  `requested` oder `pending`) prüft die Zentrale zwei Risiken, nur aus Daten, die sie ohnehin liest (Läufe,
+  Issue-Ereignisse, PR-Liste; kein neuer Endpunkt). Die Sätze stehen ganz oben (wie die Fristwarnungen) und am Lauf.
+  - **Label während des Laufs:** ein `labeled`- oder `unlabeled`-Ereignis am Issue des Laufs strikt nach dem
+    Laufstart. Risikohinweis, keine Aussage über ein Scheitern: „Das kann den Lauf abbrechen. Nichts erneut setzen,
+    erst das Ende abwarten.“ Nur bei eindeutiger Zuordnung Lauf zu Issue und vollständig gelesenen Ereignissen. Den
+    Labelnamen zeigt die Seite nur, wenn er auf `^[a-z0-9:_-]{1,50}$` passt, sonst „ein Label“.
+  - **Merge nach main:** ein PR nach `main` mit `merged_at` strikt nach dem Laufstart ergibt „Während Lauf … wurde
+    ein PR nach main gemergt (#…). Der Lauf könnte dadurch ungültig sein.“ Sonst nennt ein Hinweis die offenen PRs
+    nach `main`: „Ein Merge könnte den laufenden Auftrag ungültig machen.“ Die Zentrale vergleicht keinen Stand von
+    `main` mit dem Ausgangscommit eines Laufs und behauptet das nirgends.
+  - **Nicht prüfbar:** Fehlt eine dieser Daten oder widerspricht sie sich (Laufliste nicht gelesen oder unvollständig,
+    Status unbekannt, Laufstart fehlt, keine eindeutige Zuordnung, Ereignisse oder PR-Liste nicht vollständig lesbar,
+    Zeit, Basis oder `merged_at` ungültig), steht „Laufwarnungen nicht prüfbar (…)“ da, nie eine Entwarnung. Ohne
+    laufenden Lauf erscheint nichts.
 - **Notseite (B1.3):** Scheitert die Startprüfung oder fehlt die Token-Datei, ersetzt eine Notseite ohne GitHub-Daten
   und ohne Neuladen die alte Seite; der Exitcode bleibt 1. Bei 401 heißt es „abgelehnt“, nie pauschal „abgelaufen“: je
   nach letzter Meldung „wahrscheinlich abgelaufen am …“, „abgelehnt, obwohl laut letzter Meldung gültig bis …“ oder
