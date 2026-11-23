@@ -84,13 +84,50 @@ function ohneTiefeJob2(vorn) {
   return at < 0 ? vorn : vorn.slice(0, at) + vorn.slice(at).replace('          fetch-depth: 0\n', '');
 }
 
+// B1.2: Die geschuetzte Datei traegt zusaetzlich je Job einen Berichtsschritt und den neuen Funktionsanker
+// A6_FUNKTIONEN_SHA256. Verglichen wird ihr Stand ohne genau diese Teile (dieselbe Ausschneide-Probe wie in
+// a6-auftrag-workflow.test.mjs, dort mit Mutationen belegt); jede weitere Abweichung bleibt hier rot. Der Entwurf
+// bleibt der genehmigte Stand ohne Berichtsschritte.
+const B12_JOBS = ['auftrag', 'claude', 'abnahme', 'veroeffentlichen', 'probe_auftrag', 'probe_claude', 'probe_abnahme', 'probe_veroeffentlichen', 'sammel'];
+const B12_ERGEBNISSE = [['AUFTRAG', 'auftrag'], ['CLAUDE', 'claude'], ['ABNAHME', 'abnahme'], ['VEROEFFENTLICHEN', 'veroeffentlichen'],
+  ['PROBE_AUFTRAG', 'probe_auftrag'], ['PROBE_CLAUDE', 'probe_claude'], ['PROBE_ABNAHME', 'probe_abnahme'],
+  ['PROBE_VEROEFFENTLICHEN', 'probe_veroeffentlichen'], ['PROBE_NEGATIV', 'probe_negativ'], ['PROBE_SAMMEL', 'probe_sammel_pruefung']];
+const b12Schritt = job => `\n\n${[
+  '      - name: Bericht in die Zusammenfassung schreiben',
+  '        if: ${{ !cancelled() }}',
+  '        continue-on-error: true',
+  '        timeout-minutes: 1',
+  '        env:',
+  '          A6_JOB_STATUS: ${{ job.status }}',
+  ...(job === 'sammel' ? B12_ERGEBNISSE.map(([k, n]) => `          A6_ERGEBNIS_${k}: \${{ needs.${n}.result }}`) : []),
+  '        run: |',
+  '          set -euo pipefail',
+  '          printf \'%s  %s\\n\' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }',
+  '          source .github/agent/a6-funktionen.sh',
+  job === 'sammel' ? '          a6_bericht_sammel' : `          a6_bericht ${job}`,
+].join('\n')}`;
+
+function ohneBericht(text) {
+  let rest = text;
+
+  for (const job of B12_JOBS) {
+    assert.equal(rest.split(b12Schritt(job)).length, 2, `Berichtsschritt ${job} nicht genau einmal`);
+    rest = rest.replace(b12Schritt(job), () => '');
+  }
+
+  const anker = [...rest.matchAll(/^ {2}A6_FUNKTIONEN_SHA256: [0-9a-f]{64}\n/gm)];
+  assert.equal(anker.length, 1, 'Funktionsanker nicht genau einmal');
+  assert.equal(anker[0][0], `  A6_FUNKTIONEN_SHA256: ${sha256(lies('.github/agent/a6-funktionen.sh'))}\n`, 'Funktionsanker passt nicht zur Funktionsdatei');
+  return rest.replace(anker[0][0], () => /^ {2}A6_FUNKTIONEN_SHA256: [0-9a-f]{64}\n/m.exec(WF)[0]);
+}
+
 test('K1 Trennung: Kopf, Umgebung, Job 0 bis 3 und Sammeljob sind byte-gleich mit main (bis auf fetch-depth 0 in Job 2 und den Probeanker)', () => {
   const ent = liveTeile(WF);
   assert.ok(ent.vorn.includes(TIEFE_JOB2), 'Muss-Treffer: Tiefe in Job 2 des Entwurfs');
   assert.equal(sha256(ohneTiefeJob2(mitProbeAnkerVonMain(ent.vorn))), LIVE_VORN_SHA256, 'Live-Pfad oder globale Umgebung veraendert');
   assert.equal(sha256(ent.sammel), LIVE_SAMMEL_SHA256, 'Sammeljob veraendert');
   // Dieselben Teile der geschuetzten Datei (Bot-Stand: main; Eigentuemerstand: die Kopie des Entwurfs).
-  const ist = liveTeile(lies('.github/workflows/agent-auftrag.yml'));
+  const ist = liveTeile(ohneBericht(lies('.github/workflows/agent-auftrag.yml')));
   assert.equal(sha256(ohneTiefeJob2(mitProbeAnkerVonMain(ist.vorn))), LIVE_VORN_SHA256);
   assert.equal(sha256(ist.sammel), LIVE_SAMMEL_SHA256);
   // Der K1-Nachweis steht nur im Probejob.

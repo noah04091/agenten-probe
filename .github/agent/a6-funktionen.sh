@@ -38,7 +38,7 @@ a6_container() {
     umgebung+=(--env "$name")
   done
 
-  docker run --rm --pull=never --network "$netz" --read-only --cap-drop ALL \
+  a6_mitschnitt docker run --rm --pull=never --network "$netz" --read-only --cap-drop ALL \
     --security-opt no-new-privileges --pids-limit 256 --memory 2g --cpus 2 \
     --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,noexec,size=128m,mode=1777 \
     --mount "type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE,readonly" \
@@ -461,4 +461,258 @@ a6_sammel_uebersprungen() {
     fi
   done
   return "$fehler"
+}
+
+# ---------------------------------------------------------------------------------------------------
+# B1.2 Job-Zusammenfassungen: Mitschnitt der Fehlerzeile (K5, K6, K8, K9) und Berichtsstarter (K1, K7)
+# ---------------------------------------------------------------------------------------------------
+# a6_container startet den Einstiegscontainer ueber a6_mitschnitt; das ist dort die einzige Aenderung.
+# stdout bleibt unberuehrt. stderr laeuft ueber ein benanntes Rohr an tee, das jede Zeile sofort ins Log
+# weitergibt und zugleich mitschreibt. Erst nach dem Ende von tee werden die Zeilen ^A6-FEHLER <code>$ aus
+# den ersten 64 KB an a6-bericht/fehler angehaengt und genau eine Statuszeile an a6-bericht/status. Jeder
+# Erfassungsfehler laesst den Aufruf unveraendert: gleiche Bytes, gleicher Exitcode, keine neue Logzeile.
+# Kein Baustein dieses Blocks laedt ein Image oder braucht Netz.
+
+# Eigentuemer ist der eigene effektive Nutzer. Gleiche Bedeutung wie -O, aber ueber stat und id ausgedrueckt,
+# damit ein fremder Eigentuemer ohne Rechte pruefbar ist (Test mit einem anderen effektiven Nutzer).
+#   a6_bericht_eigen PFAD
+a6_bericht_eigen() {
+  local besitzer="" ich=""
+  besitzer="$(stat -c %u -- "$1" 2> /dev/null)" || besitzer=""
+  ich="$(id -u 2> /dev/null)" || ich=""
+  if [[ "$besitzer" =~ ^[0-9]+$ && "$besitzer" == "$ich" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# Berichtsordner: echtes Verzeichnis unter RUNNER_TEMP, kein Link, eigener Nutzer, beschreibbar.
+#   a6_bericht_ordner ORDNER
+a6_bericht_ordner() {
+  local ordner="$1"
+  if [[ -L "$ordner" ]]; then
+    return 1
+  fi
+  if ! mkdir -p -- "$ordner" 2> /dev/null; then
+    return 1
+  fi
+  if [[ -d "$ordner" && ! -L "$ordner" && -w "$ordner" ]] && a6_bericht_eigen "$ordner"; then
+    return 0
+  fi
+  return 1
+}
+
+#   a6_mitschnitt BEFEHL...
+a6_mitschnitt() {
+  local basis="$RUNNER_TEMP/a6-bericht" tmp="" echt="" basis_echt="" schreiber="" lese="" leser="" zeilen=""
+  local rc=0 tee_rc=0 status=unvollstaendig groesse=""
+
+  # K5 und K8: ohne brauchbaren Berichtsordner laeuft der Einstieg genau wie bisher, ohne Erfassung.
+  if ! a6_bericht_ordner "$basis"; then
+    "$@" || rc=$?
+    return "$rc"
+  fi
+
+  # K8: je Aufruf ein mit mktemp -d tatsaechlich angelegtes privates Verzeichnis (Modus 700) unter dem
+  # Berichtsordner, darin das Rohr mit Modus 600. tee muss vorab laufen, sonst gingen Logzeilen verloren.
+  # K9: Die Elternshell oeffnet zuerst den Schreib-Endpunkt (lesend und schreibend, blockiert nie) und dann
+  # das Leseende selbst (blockiert nicht, weil ein Schreiber offen ist). Jeder Fehlschlag: ohne Erfassung.
+  tmp="$(mktemp -d "$basis/lauf.XXXXXXXX" 2> /dev/null)" || tmp=""
+  if [[ -n "$tmp" ]]; then
+    basis_echt="$(realpath -e -- "$basis" 2> /dev/null)" || basis_echt=""
+    echt="$(realpath -e -- "$tmp" 2> /dev/null)" || echt=""
+  fi
+  if [[ -z "$tmp" || -z "$basis_echt" || "$echt" != "$basis_echt"/lauf.* || -L "$tmp" || ! -d "$tmp" ]] \
+    || [[ "$(stat -c %a -- "$tmp" 2> /dev/null)" != "700" ]] \
+    || ! tee --output-error=warn -- /dev/null < /dev/null > /dev/null 2>&1 \
+    || ! mkfifo -m 600 -- "$tmp/rohr" 2> /dev/null \
+    || ! { exec {schreiber}<> "$tmp/rohr"; } 2> /dev/null \
+    || ! { exec {lese}< "$tmp/rohr"; } 2> /dev/null; then
+    if [[ "$schreiber" =~ ^[0-9]+$ ]]; then
+      exec {schreiber}>&-
+    fi
+    if [[ "$lese" =~ ^[0-9]+$ ]]; then
+      exec {lese}<&-
+    fi
+    # Geloescht wird nur ein geprueftes privates Verzeichnis unter dem Berichtsordner, nie ein fremder Pfad.
+    if [[ -n "$tmp" && -n "$basis_echt" && "$echt" == "$basis_echt"/lauf.* && ! -L "$tmp" ]]; then
+      rm -rf -- "$tmp" 2> /dev/null || true
+    fi
+    printf '%s\n' unvollstaendig >> "$basis/status" 2> /dev/null || true
+    "$@" || rc=$?
+    return "$rc"
+  fi
+
+  # K6 und K9: tee erbt das Leseende beim Start des Hintergrundprozesses. Ab da hat das Rohr immer einen
+  # Leser: kein Byte geht verloren, auch wenn tee erst nach dem Ende des Befehls zum Zug kommt, und tee sieht
+  # das Ende, sobald der letzte Schreiber schliesst. Die Elternshell schliesst ihr Leseende danach sofort.
+  # tee gibt jede Zeile sofort an die eigene stderr (das Log) weiter; seine eigenen Meldungen gehen nach
+  # tee-fehler, nie ins Log. --output-error=warn: ein Schreibfehler im Mitschnitt bricht die Weitergabe nicht ab.
+  tee --output-error=warn "$tmp/mitschnitt" <&"$lese" >&2 2> "$tmp/tee-fehler" {schreiber}>&- {lese}<&- &
+  leser=$!
+  exec {lese}<&-
+  "$@" 2>&"$schreiber" {schreiber}>&- || rc=$?
+  exec {schreiber}>&-
+  wait "$leser" || tee_rc=$?
+
+  # K9: erfasst nur, wenn tee mit 0 endet, tee-fehler leer ist und der Mitschnitt hoechstens 64 KB hat.
+  # Exitcode 126 oder 127 heisst: der Befehl startete gar nicht (Startfehler), also nie erfasst.
+  if [[ "$rc" != "126" && "$rc" != "127" && "$tee_rc" == "0" && -f "$tmp/tee-fehler" && ! -s "$tmp/tee-fehler" && -f "$tmp/mitschnitt" ]]; then
+    groesse="$(stat -c %s -- "$tmp/mitschnitt" 2> /dev/null)" || groesse=""
+    if [[ "$groesse" =~ ^[0-9]+$ ]] && (( groesse <= 65536 )); then
+      status=erfasst
+    fi
+  fi
+  zeilen="$(head -c 65536 -- "$tmp/mitschnitt" 2> /dev/null | LC_ALL=C grep -a -E -x 'A6-FEHLER [a-z0-9-]{1,60}' 2> /dev/null)" || zeilen=""
+  if [[ -n "$zeilen" ]]; then
+    printf '%s\n' "$zeilen" >> "$basis/fehler" 2> /dev/null || status=unvollstaendig
+  fi
+  printf '%s\n' "$status" >> "$basis/status" 2> /dev/null || true
+  rm -rf -- "$tmp" 2> /dev/null || true
+  return "$rc"
+}
+
+# K7: genau eine feste Warnung je Berichtsfehler, nur aus dieser Liste, ohne Pfade, Werte oder Rohtext.
+#   a6_bericht_warnung GRUND
+a6_bericht_warnung() {
+  case "$1" in
+    job-ungueltig|ziel-ungueltig|funktionen-hash|image|start|pruefung|integritaet|nicht-geschrieben)
+      printf '::warning title=A6-BERICHT::%s\n' "$1"
+      ;;
+    *)
+      printf '::warning title=A6-BERICHT::%s\n' unbekannt
+      ;;
+  esac
+}
+
+# K1: Schreibziel streng pruefen. GITHUB_STEP_SUMMARY ist eine gewoehnliche Datei, kein Link, realpath
+# gleich dem Pfad, unmittelbar in RUNNER_TEMP/_runner_file_commands, Name step_summary_<id>.
+#   a6_bericht_ziel PFAD
+a6_bericht_ziel() {
+  local ziel="$1"
+  if [[ -z "$ziel" || ! -f "$ziel" || -L "$ziel" ]]; then
+    return 1
+  fi
+  if [[ "$(realpath -e -- "$ziel" 2> /dev/null)" != "$ziel" ]]; then
+    return 1
+  fi
+  if [[ "${ziel%/*}" != "$RUNNER_TEMP/_runner_file_commands" ]]; then
+    return 1
+  fi
+  if [[ ! "${ziel##*/}" =~ ^step_summary_[A-Za-z0-9_-]{1,80}$ ]]; then
+    return 1
+  fi
+  return 0
+}
+
+# Runden und Kosten aus dem Claude-Protokoll: nur bei genau einem result-Ereignis mit zwei Zahlen. Sonst
+# keine Datei, der Bericht meldet dann "Kosten unbekannt".
+#   a6_bericht_kosten PROTOKOLL ZIEL
+a6_bericht_kosten() {
+  local protokoll="$1" ziel="$2" werte=""
+  rm -f -- "$ziel" 2> /dev/null || true
+  if [[ ! -f "$protokoll" || -L "$protokoll" ]]; then
+    return 0
+  fi
+  werte="$(jq -s -r 'map(select(.type == "result")) | if length == 1 and (.[0].num_turns | type) == "number" and (.[0].total_cost_usd | type) == "number" then "\(.[0].num_turns) \(.[0].total_cost_usd)" else empty end' -- "$protokoll" 2> /dev/null)" || werte=""
+  if [[ "$werte" =~ ^[0-9.eE+-]+\ [0-9.eE+-]+$ ]]; then
+    printf '%s\n' "$werte" > "$ziel" 2> /dev/null || rm -f -- "$ziel" 2> /dev/null || true
+  fi
+  return 0
+}
+
+# Berichtsstarter fuer die Jobs mit Einstieg. Das Berichtsskript laeuft im festen, schon geladenen Image ohne
+# Netz, ohne Secrets und ohne Token, mit genau drei Einhaengungen: Checkout nur lesbar, a6-bericht nur lesbar
+# (nur wenn es ein echter eigener Ordner ist), die einzelne Zusammenfassungsdatei beschreibbar unter
+# /a6/zusammenfassung. Fehlt das Image, wird nichts geladen: Warnung image. Jeder Berichtsfehler ergibt genau
+# eine feste Warnung und Rueckgabe 1; das Jobergebnis bleibt unveraendert.
+#   a6_bericht JOB
+a6_bericht() {
+  local job="${1:-}" ziel="${GITHUB_STEP_SUMMARY:-}" basis="$RUNNER_TEMP/a6-bericht" rc=0
+  local einhaengen=() umgebung=(--env A6_BERICHT_JOB --env A6_JOB_STATUS)
+  if [[ ! "$job" =~ ^(auftrag|claude|abnahme|veroeffentlichen|probe_auftrag|probe_claude|probe_abnahme|probe_veroeffentlichen)$ ]]; then
+    echo "A6-START bericht-job" >&2
+    a6_bericht_warnung job-ungueltig
+    return 1
+  fi
+  if ! a6_bericht_ziel "$ziel"; then
+    echo "A6-BERICHT ziel-ungueltig"
+    a6_bericht_warnung ziel-ungueltig
+    return 1
+  fi
+  if [[ "$job" == "claude" ]] && a6_bericht_ordner "$basis"; then
+    a6_bericht_kosten "$RUNNER_TEMP/a6-claude-protokoll.jsonl" "$basis/claude"
+  fi
+  if ! docker image inspect "$A6_NODE_IMAGE" > /dev/null 2>&1; then
+    a6_bericht_warnung image
+    return 1
+  fi
+  export A6_BERICHT_JOB="$job"
+  einhaengen=(--mount "type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE,readonly")
+  if [[ -d "$basis" && ! -L "$basis" ]] && a6_bericht_eigen "$basis"; then
+    einhaengen+=(--mount "type=bind,src=$basis,dst=/a6/bericht,readonly")
+  fi
+  einhaengen+=(--mount "type=bind,src=$ziel,dst=/a6/zusammenfassung")
+
+  docker run --rm --pull=never --network none --read-only --cap-drop ALL \
+    --security-opt no-new-privileges --pids-limit 64 --memory 256m --cpus 1 \
+    --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777 \
+    "${einhaengen[@]}" --workdir "$GITHUB_WORKSPACE" --env PATH=/usr/local/bin:/usr/bin:/bin \
+    "${umgebung[@]}" "$A6_NODE_IMAGE" /bin/sh -euc '
+      unset NODE_VERSION YARN_VERSION
+      if env | grep -q "^NODE_"; then echo "A6-START node-umgebung" >&2; exit 3; fi
+      [ "$(node --version)" = "$1" ] || { echo "A6-START node-version" >&2; exit 3; }
+      printf "%s  %s\n" "$2" scripts/agent-code-integritaet.mjs | sha256sum -c --status || { echo "A6-START anker" >&2; exit 3; }
+      node scripts/agent-code-integritaet.mjs || exit 4
+      exec node scripts/agent-code-job-bericht.mjs
+    ' a6 "$A6_NODE_VERSION" "$A6_INTEGRITAET_SHA256" || rc=$?
+
+  case "$rc" in
+    0) return 0 ;;
+    1) a6_bericht_warnung nicht-geschrieben ;;
+    3) a6_bericht_warnung pruefung ;;
+    4) a6_bericht_warnung integritaet ;;
+    *) a6_bericht_warnung start ;;
+  esac
+  return 1
+}
+
+# Sammeltabelle ohne Container, ohne Docker, ohne Netz: nur die zehn A6_ERGEBNIS_*-Werte (aus needs.<job>.result)
+# als fest formatierte Tabelle. Erlaubt sind success, failure, cancelled, skipped; jeder andere Wert erscheint als
+# "unbekannt", skipped nie als Erfolg. Kein Wert erreicht die Ausgabe als Text. Dieselbe Zielpruefung und
+# dieselben festen Warnungen wie a6_bericht. Massgeblich bleibt die Sammelpruefung davor.
+#   a6_bericht_sammel
+a6_bericht_sammel() {
+  local ziel="${GITHUB_STEP_SUMMARY:-}" eintrag name anzeige pruefung text
+  if ! a6_bericht_ziel "$ziel"; then
+    echo "A6-BERICHT ziel-ungueltig"
+    a6_bericht_warnung ziel-ungueltig
+    return 1
+  fi
+  case "${A6_JOB_STATUS:-}" in
+    success) pruefung='bestanden' ;;
+    failure) pruefung='nicht bestanden' ;;
+    cancelled) pruefung='abgebrochen' ;;
+    *) pruefung='Status unbekannt' ;;
+  esac
+  text=$'### Bericht: agent-auftrag-sammel\n\n'"Sammelprüfung: ${pruefung}"$'\n\n| Job | Ergebnis |\n|---|---|\n'
+  for eintrag in 'AUFTRAG:Job 0 Auftrag festlegen' 'CLAUDE:Job 1 Claude im Container' 'ABNAHME:Job 2 Abnahme ohne Netz' \
+    'VEROEFFENTLICHEN:Job 3 Draft-PR veröffentlichen' 'PROBE_AUFTRAG:Generalprobe Job 0' 'PROBE_CLAUDE:Generalprobe Job 1' \
+    'PROBE_ABNAHME:Generalprobe Job 2' 'PROBE_VEROEFFENTLICHEN:Generalprobe Job 3' 'PROBE_NEGATIV:Generalprobe Negativfälle' \
+    'PROBE_SAMMEL:Generalprobe Sammelprüfung'; do
+    name="A6_ERGEBNIS_${eintrag%%:*}"
+    case "${!name:-}" in
+      success) anzeige='erfolgreich' ;;
+      failure) anzeige='fehlgeschlagen' ;;
+      cancelled) anzeige='abgebrochen' ;;
+      skipped) anzeige='übersprungen' ;;
+      *) anzeige='unbekannt' ;;
+    esac
+    text+="| ${eintrag#*:} | ${anzeige} |"$'\n'
+  done
+  if ! printf '%s\n' "$text" >> "$ziel" 2> /dev/null; then
+    a6_bericht_warnung nicht-geschrieben
+    return 1
+  fi
+  return 0
 }

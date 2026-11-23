@@ -1601,9 +1601,11 @@ test('Laufzeit: ohne import.meta.main endet jeder Start mit job-umgebung-fehlt; 
 
 // A6 P-1: Einzige Ausnahme ist agent-auftrag.yml mit genau dem genehmigten SHA-256 (Zeilenenden LF). Jede
 // andere Fassung und jeder andere Workflow, der auf einen Job-Einstieg verweist, bleibt rot.
-const A6_WORKFLOW_SHA256 = 'd5bb6eaa3d16e2bd964c2466b8c2befa343c751703d0c8961d0b7026700eb20f';
+// B1.2: neuer Stand mit den Berichtsschritten. Ohne sie ist er byte-gleich mit dem bisherigen Stand
+// d5bb6eaa3d16e2bd964c2466b8c2befa343c751703d0c8961d0b7026700eb20f (Ausschneide-Probe in a6-auftrag-workflow.test.mjs).
+const A6_WORKFLOW_SHA256 = '1136d41a25c18ba06fb32fcfc591b5e20a0cf52d0fcf92f65c9c872a1d38133d';
 
-test('Wache: ausser dem genehmigten agent-auftrag.yml ruft kein Workflow die Job-Einstiege auf; genau diese fuenf Einstiege und die Hilfsdatei, keine weitere Jobdatei', () => {
+test('Wache: ausser dem genehmigten agent-auftrag.yml ruft kein Workflow die Job-Einstiege auf; genau diese fuenf Einstiege, die Hilfsdatei und das Berichtsskript (B1.2), keine weitere Jobdatei', () => {
   const workflows = join(ROOT, '.github', 'workflows');
   const files = readdirSync(workflows).filter(name => /\.ya?ml$/.test(name));
   assert.ok(files.length >= 4 && files.includes('agent-auftrag.yml'), 'Gegenprobe: zu wenige Workflows gefunden');
@@ -1621,10 +1623,12 @@ test('Wache: ausser dem genehmigten agent-auftrag.yml ruft kein Workflow die Job
   // Kein anderes Skript verweist auf die Job-Skripte.
   const names = readdirSync(SCRIPTS).filter(name => name.endsWith('.mjs'));
   const jobs = names.filter(name => name.startsWith('agent-code-job'));
-  // Exakte Liste ohne Platzhalter: jede zusaetzliche Jobdatei braucht eine eigene Freigabe.
+  // Exakte Liste ohne Platzhalter: jede zusaetzliche Jobdatei braucht eine eigene Freigabe. B1.2: das
+  // Berichtsskript ist kein Einstieg nach a6_container, es startet nur ueber a6_bericht.
   assert.deepEqual(jobs.sort(), [
     'agent-code-job-abnahme.mjs',
     'agent-code-job-auftrag.mjs',
+    'agent-code-job-bericht.mjs',
     'agent-code-job-claude-nach.mjs',
     'agent-code-job-claude-vor.mjs',
     'agent-code-job-gemeinsam.mjs',

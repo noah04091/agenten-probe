@@ -52,13 +52,14 @@ const POLICY_ENTWURF = JSON.parse(readFileSync(join(ROOT, 'test', 'fixtures', 'a
 const SETTINGS_ENTWURF_BYTES = readFileSync(join(ROOT, 'test', 'fixtures', 'claude-settings.entwurf.json'));
 // A6.4-3a: SHA-256 der freigegebenen produktiven Policy (Pruefpunkt B des Eigentuemer-PR).
 // Stand nach dem Tokenformat-Fix: nur die Hashes von Transport- und Paketmodul sind neu.
-const POLICY_SHA256 = '2012009abe81965866c9c11c2a0ad8b08fd4f32ee23c41d3ffdf95546e94f1ae';
+// B1.2: dazu genau der neue Eintrag scripts/agent-code-job-bericht.mjs (bisher 2012009abe81965866c9c11c2a0ad8b08fd4f32ee23c41d3ffdf95546e94f1ae).
+const POLICY_SHA256 = '7e6719d7781b3d55fcf102b88b524c63fcd54a0141c70d85574ccd3c1fefa25a';
 
 const IST_WINDOWS = process.platform === 'win32';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const canon = value => JSON.stringify(value, null, 2) + '\n';
 
-// Freigegebener Stand nach A6.4-2d: genau diese 26 Dateien.
+// Freigegebener Stand nach A6.4-2d: genau diese 26 Dateien. B1.2: dazu das Berichtsskript, also 27.
 const SKRIPTE = Object.freeze([
   'scripts/agent-code-acceptance.mjs',
   'scripts/agent-code-activation-check.mjs',
@@ -76,6 +77,7 @@ const SKRIPTE = Object.freeze([
   'scripts/agent-code-issue-route.mjs',
   'scripts/agent-code-job-abnahme.mjs',
   'scripts/agent-code-job-auftrag.mjs',
+  'scripts/agent-code-job-bericht.mjs',
   'scripts/agent-code-job-claude-nach.mjs',
   'scripts/agent-code-job-claude-vor.mjs',
   'scripts/agent-code-job-gemeinsam.mjs',
@@ -191,9 +193,9 @@ const NUR_LINUX = process.platform === 'linux' ? false : 'FIFO und Socket nur un
 // Inventar und Driftfixture
 // ---------------------------------------------------------------------------
 
-test('Inventar: scripts/ enthaelt genau die 26 freigegebenen Dateien, alle mit gueltigem Namen', () => {
+test('Inventar: scripts/ enthaelt genau die 27 freigegebenen Dateien, alle mit gueltigem Namen', () => {
   const ist = readdirSync(join(ROOT, 'scripts')).map(name => `scripts/${name}`).sort();
-  assert.equal(SKRIPTE.length, 26);
+  assert.equal(SKRIPTE.length, 27);
   assert.deepEqual(ist, [...SKRIPTE].sort());
   assert.ok(ist.every(path => integritaet.SKRIPT_PFAD_RE.test(path)));
 
@@ -202,9 +204,9 @@ test('Inventar: scripts/ enthaelt genau die 26 freigegebenen Dateien, alle mit g
   }
 });
 
-test('Driftfixture: kanonisch, genau 26 Eintraege, jeder Hash gleich den tatsaechlichen Rohbytes', () => {
+test('Driftfixture: kanonisch, genau 27 Eintraege, jeder Hash gleich den tatsaechlichen Rohbytes', () => {
   assert.equal(canon(FIXTURE), FIXTURE_BYTES.toString('utf8'), 'Fixture nicht kanonisch');
-  assert.deepEqual(Object.keys(FIXTURE), [...SKRIPTE].sort(), 'Fixture deckt nicht genau die 26 Dateien ab');
+  assert.deepEqual(Object.keys(FIXTURE), [...SKRIPTE].sort(), 'Fixture deckt nicht genau die 27 Dateien ab');
 
   for (const [path, erwartet] of Object.entries(FIXTURE)) {
     assert.match(erwartet, /^[0-9a-f]{64}$/);
@@ -569,9 +571,9 @@ test('Laufzeit: ohne import.meta.main endet der Start mit umgebung-fehlt; der al
 // Positive Faelle
 // ---------------------------------------------------------------------------
 
-test('Positiv: 26 Dateien, vollstaendige Policy, Erfolg ohne Ausgabe und ohne Schreibzugriff', () => {
+test('Positiv: 27 Dateien, vollstaendige Policy, Erfolg ohne Ausgabe und ohne Schreibzugriff', () => {
   const { root, policy } = baum();
-  assert.equal(Object.keys(policy.skript_hashes).length, 26);
+  assert.equal(Object.keys(policy.skript_hashes).length, 27);
   assert.deepEqual(Object.keys(policy.skript_hashes), [...SKRIPTE].sort());
   // Die synthetische Policy besteht auch die volle Pruefung des Profilmoduls (mit neuer Pfadregel).
   assert.deepEqual(loadPolicy(readFileSync(policyPfad(root))), policy);
@@ -619,7 +621,7 @@ test('Echtes Repository: produktive Policy und Claude-Basis gueltig, Pruefer bes
   assert.deepEqual(loadPolicy(bytes), policy);
   // Alle uebrigen Werte entsprechen dem geprueften Entwurf; nur skript_hashes ist befuellt.
   assert.deepEqual({ ...policy, skript_hashes: POLICY_ENTWURF.skript_hashes }, POLICY_ENTWURF);
-  assert.equal(Object.keys(policy.skript_hashes).length, 26);
+  assert.equal(Object.keys(policy.skript_hashes).length, 27);
   assert.deepEqual(policy.skript_hashes, FIXTURE);
 
   for (const [skript, hash] of Object.entries(policy.skript_hashes)) {
