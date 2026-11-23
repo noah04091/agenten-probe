@@ -6,14 +6,16 @@
 //    Tests sind auf dem Bot-PR gruen.
 // 2. Eigentuemerstand: Die geschuetzten Zieldateien muessen byte-gleich mit dem Entwurf sein. Bis Noahs
 //    Eigentuemer-Commit sie anlegt, sind genau diese Tests bewusst rot. Sie werden nicht uebersprungen.
+//    B1.2: Workflow und Funktionsdatei tragen zusaetzlich die Berichtsteile; fuer sie gilt die Gleichheit nach den
+//    Ausschneide-Proben (Abschnitt B1.2). Der Entwurf bleibt der bisher genehmigte Stand.
 //
 // Was diese Tests NICHT zeigen: dass GitHub den Workflow so ausfuehrt (das zeigt die Generalprobe auf dem
 // Eigentuemer-PR), dass Environment, Secrets und Rulesets so eingestellt sind wie angenommen, und K1a.
 
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -992,12 +994,781 @@ test('K3: Gegenproben, jede Mutation des Messschritts scheitert am Waechter', ()
 });
 
 // ---------------------------------------------------------------------------
+// B1.2 Job-Zusammenfassungen (ziel-b/b1-2-auftrag.md): Ausschneide-Proben, Wachen und Verhalten
+// ---------------------------------------------------------------------------
+// Diese Tests lesen den geschuetzten Stand (.github/workflows/agent-auftrag.yml und .github/agent/a6-funktionen.sh).
+// Auf dem Bot-PR ohne Eigentuemer-Commit sind sie deshalb bewusst rot; sie werden nicht uebersprungen. Der Entwurf
+// unter entwurf/a6-p1/ bleibt der bisher genehmigte Stand (A6_WORKFLOW_SHA256 oben, Funktionsanker darin).
+//
+// Was diese Tests NICHT zeigen: dass GitHub die Zusammenfassung anzeigt, job.status so setzt und die Warnungen als
+// Anmerkung des Laufs zeigt (das zeigt die Generalprobe auf dem Eigentuemer-PR), und das echte docker (hier ein
+// Ersatz im PATH, der nie das echte docker aufruft).
+
+const WF_ZIEL = lies('.github/workflows/agent-auftrag.yml');
+const FN_ZIEL = lies('.github/agent/a6-funktionen.sh');
+const FN_ZIEL_PFAD = join(ROOT, '.github', 'agent', 'a6-funktionen.sh');
+const FN_ALT_PFAD = join(ROOT, ENTWURF, 'a6-funktionen.sh');
+const B12_JOBS = Object.freeze(['auftrag', 'claude', 'abnahme', 'veroeffentlichen', 'probe_auftrag', 'probe_claude', 'probe_abnahme', 'probe_veroeffentlichen', 'sammel']);
+const B12_ERGEBNISSE = Object.freeze([['AUFTRAG', 'auftrag'], ['CLAUDE', 'claude'], ['ABNAHME', 'abnahme'], ['VEROEFFENTLICHEN', 'veroeffentlichen'],
+  ['PROBE_AUFTRAG', 'probe_auftrag'], ['PROBE_CLAUDE', 'probe_claude'], ['PROBE_ABNAHME', 'probe_abnahme'],
+  ['PROBE_VEROEFFENTLICHEN', 'probe_veroeffentlichen'], ['PROBE_NEGATIV', 'probe_negativ'], ['PROBE_SAMMEL', 'probe_sammel_pruefung']]);
+const B12_NAME = 'Bericht in die Zusammenfassung schreiben';
+const b12Zeilen = job => [
+  `      - name: ${B12_NAME}`,
+  '        if: ${{ !cancelled() }}',
+  '        continue-on-error: true',
+  '        timeout-minutes: 1',
+  '        env:',
+  '          A6_JOB_STATUS: ${{ job.status }}',
+  ...(job === 'sammel' ? B12_ERGEBNISSE.map(([k, n]) => `          A6_ERGEBNIS_${k}: \${{ needs.${n}.result }}`) : []),
+  '        run: |',
+  '          set -euo pipefail',
+  '          printf \'%s  %s\\n\' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-BERICHT::funktionen-hash"; exit 1; }',
+  '          source .github/agent/a6-funktionen.sh',
+  `          a6_bericht ${job}`,
+];
+const b12Schritt = job => `\n\n${b12Zeilen(job).join('\n')}`;
+const B12_MARKE = '\n# ---------------------------------------------------------------------------------------------------\n# B1.2 Job-Zusammenfassungen:';
+const B12_AUFRUF_ALT = '  docker run --rm --pull=never --network "$netz" --read-only --cap-drop ALL \\\n';
+const B12_AUFRUF_NEU = `  a6_mitschnitt ${B12_AUFRUF_ALT.slice(2)}`;
+const B12_FUNKTIONEN = Object.freeze(['a6_bericht_ordner', 'a6_mitschnitt', 'a6_bericht_warnung', 'a6_bericht_ziel', 'a6_bericht_kosten', 'a6_bericht']);
+const B12_GRUENDE = Object.freeze(['job-ungueltig', 'ziel-ungueltig', 'funktionen-hash', 'image', 'start', 'pruefung', 'integritaet', 'nicht-geschrieben']);
+const anker = (wf, name) => {
+  const m = [...wf.matchAll(new RegExp(`^ {2}${name}: ([0-9a-f]{64})$`, 'gm'))];
+  assert.equal(m.length, 1, `${name} nicht genau einmal`);
+  return m[0][1];
+};
+
+// K3 Punkt 1: der Workflow ohne genau die neun Berichtsschritte und mit dem bisherigen Funktionsanker. Jeder
+// Schritt muss woertlich, genau einmal und als letzter Schritt in genau seinem Job stehen.
+function workflowOhneBericht(wf, fn = FN_ZIEL) {
+  const jobsZiel = jobs(wf);
+
+  for (const job of B12_JOBS) {
+    const letzter = schritte(jobsZiel.get(job) ?? '').at(-1) ?? '';
+    assert.equal(letzter.trimEnd(), b12Zeilen(job).join('\n'), `${job}: Berichtsschritt fehlt, weicht ab oder ist nicht der letzte Schritt`);
+  }
+
+  let rest = wf;
+
+  for (const job of B12_JOBS) {
+    assert.equal(rest.split(b12Schritt(job)).length, 2, `${job}: Berichtsschritt nicht genau einmal`);
+    rest = rest.replace(b12Schritt(job), () => '');
+  }
+
+  assert.ok(!/a6_bericht|A6_JOB_STATUS|A6_ERGEBNIS_|A6-BERICHT|continue-on-error: true/.test(rest), 'Reste von Berichtsschritten ausserhalb der neun');
+  assert.equal(anker(rest, 'A6_FUNKTIONEN_SHA256'), sha256(fn), 'Funktionsanker passt nicht zur Funktionsdatei');
+  return rest.replace(`  A6_FUNKTIONEN_SHA256: ${sha256(fn)}\n`, () => `  A6_FUNKTIONEN_SHA256: ${anker(WF, 'A6_FUNKTIONEN_SHA256')}\n`);
+}
+
+// K3 Punkt 2: die Funktionsdatei ohne den B1.2-Block am Dateiende und mit dem alten docker-run-Aufruf in
+// a6_container. Der Block enthaelt nur Funktionsdefinitionen (beim Laden wird nichts ausgefuehrt).
+function funktionenOhneBericht(fn) {
+  const i = fn.indexOf(B12_MARKE);
+  assert.ok(i > 0 && fn.indexOf(B12_MARKE, i + 1) < 0, 'B1.2-Block nicht genau einmal');
+  const vorn = fn.slice(0, i);
+  const block = fn.slice(i);
+  assert.equal(vorn.split(B12_AUFRUF_NEU).length, 2, 'a6_mitschnitt nicht genau einmal vor docker run');
+  const start = vorn.indexOf('a6_container() {');
+  const ende = vorn.indexOf('\n}\n', start);
+  const stelle = vorn.indexOf(B12_AUFRUF_NEU);
+  assert.ok(start > 0 && stelle > start && stelle < ende, 'a6_mitschnitt nicht in a6_container');
+  assert.ok(!/a6_mitschnitt|a6_bericht/.test(vorn.replace(B12_AUFRUF_NEU, '')), 'B1.2-Aufruf ausserhalb des Blocks');
+
+  // Oberste Ebene des Blocks: nur Leerzeilen, Kommentare, Funktionskoepfe und schliessende Klammern.
+  const namen = [];
+
+  for (const zeile of block.split('\n')) {
+    if (zeile === '' || zeile.startsWith('#') || zeile === '}' || /^\s/.test(zeile)) {
+      continue;
+    }
+
+    const m = /^([a-z0-9_]+)\(\) \{$/.exec(zeile);
+    assert.ok(m, `Anweisung auf oberster Ebene im B1.2-Block: ${zeile}`);
+    namen.push(m[1]);
+  }
+
+  assert.deepEqual(namen, [...B12_FUNKTIONEN]);
+  assert.ok(block.endsWith('\n}\n'));
+  return vorn.replace(B12_AUFRUF_NEU, () => B12_AUFRUF_ALT);
+}
+
+const pruefeWorkflowB12 = (wf, fn = FN_ZIEL) => {
+  assert.equal(sha256(workflowOhneBericht(wf, fn)), A6_WORKFLOW_SHA256);
+  assert.equal(anker(wf, 'A6_FUNKTIONEN_SHA256'), sha256(fn));
+};
+const pruefeFunktionenB12 = fn => {
+  const alt = funktionenOhneBericht(fn);
+  assert.equal(alt, FN);
+  assert.equal(sha256(alt), anker(WF, 'A6_FUNKTIONEN_SHA256'));
+};
+
+test('B1.2 T13: Ausschneide-Probe Workflow, ohne die neun Berichtsschritte byte-gleich mit dem genehmigten Stand', () => {
+  pruefeWorkflowB12(WF_ZIEL);
+  assert.notEqual(sha256(WF_ZIEL), A6_WORKFLOW_SHA256, 'Muss-Treffer: der geschuetzte Workflow traegt die Berichtsschritte');
+  // Jobs ohne Bericht: Negativfaelle und Sammelkette der Probe.
+  const jobsZiel = jobs(WF_ZIEL);
+  assert.deepEqual([...jobsZiel.keys()], [...J.keys()]);
+
+  for (const job of ['probe_negativ', 'probe_sammel_a', 'probe_sammel_b', 'probe_sammel_pruefung']) {
+    assert.equal(jobsZiel.get(job), J.get(job), job);
+  }
+});
+
+test('B1.2 T13: Ausschneide-Probe Funktionen, ohne den B1.2-Block und mit dem alten docker run byte-gleich', () => {
+  pruefeFunktionenB12(FN_ZIEL);
+  assert.notEqual(FN_ZIEL, FN, 'Muss-Treffer: die geschuetzte Funktionsdatei traegt den Block');
+});
+
+const B12_WF_MUTATIONEN = Object.freeze({
+  bestehender_schritt: wf => wf.replace('    timeout-minutes: 10\n    permissions:\n      contents: read\n      issues: read', '    timeout-minutes: 11\n    permissions:\n      contents: read\n      issues: read'),
+  job_bedingung_always: wf => wf.replace("    needs: auftrag\n    # P-4: Live-Schalter entfernt. Nur issues auf main, nur nach erfolgreichen Vorgaengern.\n    if: >-\n", "    needs: auftrag\n    # P-4: Live-Schalter entfernt. Nur issues auf main, nur nach erfolgreichen Vorgaengern.\n    if: >-\n      always() &&\n"),
+  bericht_always: wf => wf.replace(b12Schritt('auftrag'), () => b12Schritt('auftrag').replace('!cancelled()', 'always()')),
+  bericht_ohne_bedingung: wf => wf.replace(b12Schritt('veroeffentlichen'), () => b12Schritt('veroeffentlichen').replace('        if: ${{ !cancelled() }}\n', '')),
+  bericht_zeitgrenze: wf => wf.replace(b12Schritt('probe_claude'), () => b12Schritt('probe_claude').replace('        timeout-minutes: 1\n', '        timeout-minutes: 5\n')),
+  ohne_continue_on_error: wf => wf.replace(b12Schritt('abnahme'), () => b12Schritt('abnahme').replace('        continue-on-error: true\n', '')),
+  bericht_mit_secret: wf => wf.replace(b12Schritt('claude'), () => b12Schritt('claude').replace('          A6_JOB_STATUS: ${{ job.status }}\n', '          A6_JOB_STATUS: ${{ job.status }}\n          A6_X: ${{ secrets.ANTHROPIC_API_KEY }}\n')),
+  vertauschte_jobs: wf => wf.replace('          a6_bericht auftrag\n', '          a6_bericht XX\n').replace('          a6_bericht claude\n', '          a6_bericht auftrag\n').replace('          a6_bericht XX\n', '          a6_bericht claude\n'),
+  zusaetzlicher_bericht: wf => wf.replace('          a6_probe negativ "$RUNNER_TEMP/a6-negativ"\n', `          a6_probe negativ "$RUNNER_TEMP/a6-negativ"${b12Schritt('auftrag')}\n`),
+  bericht_nicht_letzter: wf => {
+    const s = b12Schritt('auftrag');
+    const ohne = wf.replace(s, '');
+    return ohne.replace('\n\n      - name: Schnappschuss als Artefakt sichern\n', `${s}\n\n      - name: Schnappschuss als Artefakt sichern\n`);
+  },
+  anker_falsch: wf => wf.replace(/^ {2}A6_FUNKTIONEN_SHA256: [0-9a-f]{64}$/m, `  A6_FUNKTIONEN_SHA256: ${'0'.repeat(64)}`),
+  sammel_ergebnis_vertauscht: wf => wf.replace('          A6_ERGEBNIS_CLAUDE: ${{ needs.claude.result }}', '          A6_ERGEBNIS_CLAUDE: ${{ needs.abnahme.result }}'),
+  artefakt_bericht: wf => wf.replace('          path: ${{ runner.temp }}/a6-auftrag/schnappschuss.json\n', '          path: ${{ runner.temp }}/a6-bericht/\n'),
+});
+
+const B12_FN_MUTATIONEN = Object.freeze({
+  container_netz: fn => fn.replace('    --security-opt no-new-privileges --pids-limit 256 --memory 2g --cpus 2 \\\n    --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,noexec,size=128m,mode=1777 \\\n    --mount "type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE,readonly" \\\n    --mount "type=bind,src=$RUNNER_TEMP,dst=$RUNNER_TEMP" \\\n    --workdir "$GITHUB_WORKSPACE" --env PATH=/usr/local/bin:/usr/bin:/bin \\\n    "${umgebung[@]}"', '    --security-opt no-new-privileges --pids-limit 512 --memory 2g --cpus 2 \\\n    --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,noexec,size=128m,mode=1777 \\\n    --mount "type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE,readonly" \\\n    --mount "type=bind,src=$RUNNER_TEMP,dst=$RUNNER_TEMP" \\\n    --workdir "$GITHUB_WORKSPACE" --env PATH=/usr/local/bin:/usr/bin:/bin \\\n    "${umgebung[@]}"'),
+  sammel_geaendert: fn => fn.replace('    if [[ "${paar#*=}" != "success" ]]; then', '    if [[ "${paar#*=}" != "success" && "${paar#*=}" != "skipped" ]]; then'),
+  anweisung_im_block: fn => fn.replace('\na6_bericht() {\n', '\nexport A6_X=1\na6_bericht() {\n'),
+  zusaetzliche_funktion: fn => `${fn}\na6_extra() {\n  :\n}\n`,
+  ohne_mitschnitt: fn => fn.replace(B12_AUFRUF_NEU, B12_AUFRUF_ALT),
+  mitschnitt_im_proxy: fn => fn.replace('  docker run -d --name "a6-proxy-$lauf"', '  a6_mitschnitt docker run -d --name "a6-proxy-$lauf"'),
+});
+
+test('B1.2 T13: jede zusaetzliche Aenderung macht die Ausschneide-Proben rot (Gegenproben)', () => {
+  for (const [name, mutation] of Object.entries(B12_WF_MUTATIONEN)) {
+    const mutiert = mutation(WF_ZIEL);
+    assert.notEqual(mutiert, WF_ZIEL, `${name}: Mutation wirkungslos`);
+    assert.throws(() => { pruefeWorkflowB12(mutiert); pruefeBerichtsschritte(mutiert); }, assert.AssertionError, `${name}: nicht erkannt`);
+  }
+
+  for (const [name, mutation] of Object.entries(B12_FN_MUTATIONEN)) {
+    const mutiert = mutation(FN_ZIEL);
+    assert.notEqual(mutiert, FN_ZIEL, `${name}: Mutation wirkungslos`);
+    assert.throws(() => pruefeFunktionenB12(mutiert), assert.AssertionError, `${name}: nicht erkannt`);
+  }
+});
+
+// K3 Punkt 4: genau diese Schritte, genau diese Felder, kein secrets., kein always(), continue-on-error und Zeitgrenze.
+function pruefeBerichtsschritte(wf) {
+  const alle = [...jobs(wf)].flatMap(([job, text]) => schritte(text).map(s => [job, s])).filter(([, s]) => /a6_bericht|A6-BERICHT|A6_JOB_STATUS/.test(s));
+  assert.deepEqual(alle.map(([job]) => job), [...B12_JOBS]);
+
+  for (const [job, s] of alle) {
+    assert.equal(s.trimEnd(), b12Zeilen(job).join('\n'), job);
+    assert.ok(!s.includes('secrets.') && !s.includes('always()') && !/^ {8}id:/m.test(s) && !s.includes('github.token'), job);
+    assert.ok(s.includes('        if: ${{ !cancelled() }}\n        continue-on-error: true\n        timeout-minutes: 1\n'), job);
+  }
+
+  assert.equal((wf.match(/continue-on-error/g) ?? []).length, B12_JOBS.length, 'continue-on-error ausserhalb der Berichtsschritte');
+  assert.equal((wf.match(/\ba6_bericht\b/g) ?? []).length, B12_JOBS.length);
+
+  // K8: kein Artefaktpfad enthaelt a6-bericht.
+  const pfade = [...wf.matchAll(/^ {10}path: (.+)$/gm)].map(m => m[1]);
+  assert.ok(pfade.length >= 10, 'Muss-Treffer: Artefaktpfade gefunden');
+  assert.ok(pfade.every(p => !p.includes('a6-bericht')), pfade.join(', '));
+  assert.ok(pfade.every(p => p.startsWith('${{ runner.temp }}/')), pfade.join(', '));
+}
+
+test('B1.2 Wache: genau neun Berichtsschritte mit genau diesen Feldern, ohne Secrets, ohne always(), nie in einem Artefakt', () => {
+  pruefeBerichtsschritte(WF_ZIEL);
+  // Job-Bedingungen, Rechte, Secrets je Job und Umgebung sind gleich dem genehmigten Stand (K3 Punkt 3).
+  const jobsZiel = jobs(WF_ZIEL);
+
+  for (const [name, text] of J) {
+    assert.equal(bedingung(jobsZiel.get(name)), bedingung(text), `${name}: Bedingung`);
+    assert.deepEqual([...jobsZiel.get(name).matchAll(/\$\{\{ secrets\.([A-Z_]+) \}\}/g)].map(m => m[1]), [...text.matchAll(/\$\{\{ secrets\.([A-Z_]+) \}\}/g)].map(m => m[1]), `${name}: Secrets`);
+    assert.equal(/^ {4}permissions:[^\n]*(\n {6}.+)*/m.exec(jobsZiel.get(name))[0], /^ {4}permissions:[^\n]*(\n {6}.+)*/m.exec(text)[0], `${name}: permissions`);
+  }
+});
+
+function funktion(fn, name) {
+  const start = fn.indexOf(`\n${name}() {\n`);
+  assert.ok(start > 0, `${name} fehlt`);
+  return fn.slice(start + 1, fn.indexOf('\n}\n', start) + 2);
+}
+
+test('B1.2 T14 und T23 statisch: a6_bericht nur ohne Netz, drei feste Einhaengungen, keine Secrets, feste Jobnamen; Rohr sicher', () => {
+  const b = funktion(FN_ZIEL, 'a6_bericht');
+  assert.deepEqual([...b.matchAll(/--network \S+/g)].map(m => m[0]), ['--network none']);
+  assert.deepEqual([...b.matchAll(/--mount "([^"]+)"/g)].map(m => m[1]), [
+    'type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE,readonly',
+    'type=bind,src=$basis,dst=/a6/bericht,readonly',
+    'type=bind,src=$ziel,dst=/a6/zusammenfassung',
+  ]);
+  assert.ok(b.includes('local job="${1:-}" ziel="${GITHUB_STEP_SUMMARY:-}" basis="$RUNNER_TEMP/a6-bericht"'));
+  assert.ok(!/src=\$RUNNER_TEMP[,"]/.test(b) && !b.includes('src=$RUNNER_TEMP,dst'), 'ganz RUNNER_TEMP eingehaengt');
+  assert.deepEqual([...b.matchAll(/--env \S+/g)].map(m => m[0]), ['--env A6_BERICHT_JOB', '--env A6_JOB_STATUS)', '--env "A6_ERGEBNIS_$name")', '--env PATH=/usr/local/bin:/usr/bin:/bin']);
+  assert.ok(!/TOKEN|ANTHROPIC|secrets|--env-file|\s-e\s|--privileged|--cap-add|docker\.sock|--network bridge|--pull=always/.test(b));
+  for (const teil of ['--rm --pull=never --network none --read-only --cap-drop ALL', '--security-opt no-new-privileges', '--user "$(id -u):$(id -g)"', '"$A6_NODE_IMAGE" /bin/sh -euc']) {
+    assert.ok(b.includes(teil), teil);
+  }
+  assert.ok(b.includes('[[ ! "$job" =~ ^(auftrag|claude|abnahme|veroeffentlichen|sammel|probe_auftrag|probe_claude|probe_abnahme|probe_veroeffentlichen)$ ]]'));
+  // Startblock im Container wie bei a6_container: Umgebung, Node-Version, Anker, Integritaetspruefer, dann das Skript.
+  const reihenfolge = ['unset NODE_VERSION YARN_VERSION', 'grep -q "^NODE_"', 'node --version', 'scripts/agent-code-integritaet.mjs | sha256sum -c --status', 'node scripts/agent-code-integritaet.mjs || exit 4', 'exec node scripts/agent-code-job-bericht.mjs'];
+  const stellen = reihenfolge.map(t => b.indexOf(t));
+  assert.ok(stellen.every(s => s > 0) && [...stellen].sort((x, y) => x - y).join() === stellen.join(), JSON.stringify(stellen));
+
+  // Warnungen nur aus der festen Liste.
+  const w = funktion(FN_ZIEL, 'a6_bericht_warnung');
+  assert.ok(w.includes(`    ${B12_GRUENDE.join('|')})\n`));
+  assert.deepEqual([...FN_ZIEL.matchAll(/a6_bericht_warnung ([a-z-]+)/g)].map(m => m[1]).filter(g => !B12_GRUENDE.includes(g)), []);
+  assert.deepEqual([...FN_ZIEL.matchAll(/::warning title=A6-BERICHT::/g)].length, 2);
+
+  // K8: kein mktemp -u; privates Verzeichnis mit mktemp -d, Rohr mit Modus 600, Pruefung auf Modus 700 und realpath.
+  const m = funktion(FN_ZIEL, 'a6_mitschnitt');
+  assert.ok(!/mktemp\s+(-[a-zA-Z]*u|--dry-run)/.test(FN_ZIEL), 'mktemp -u');
+  for (const teil of ['mktemp -d "$basis/lauf.XXXXXXXX"', 'mkfifo -m 600 -- "$tmp/rohr"', '"$(stat -c %a -- "$tmp" 2> /dev/null)" != "700"', '"$echt" != "$basis_echt"/lauf.*',
+    'tee --output-error=warn "$tmp/mitschnitt" < "$tmp/rohr" >&2 2> "$tmp/tee-fehler" {schreiber}>&- &', 'wait "$leser" || tee_rc=$?', '(( groesse <= 65536 ))', 'head -c 65536']) {
+    assert.ok(m.includes(teil), teil);
+  }
+  // Status wird erst nach wait geschrieben.
+  assert.ok(m.indexOf('wait "$leser"') < m.indexOf('status=erfasst') && m.indexOf('wait "$leser"') < m.lastIndexOf('>> "$basis/status"'));
+});
+
+// ---------------------------------------------------------------------------
+// B1.2 Verhalten mit Ersatz-docker (T12, T19, T21, T23, T24; T14, T20, T22 fuer a6_bericht)
+// ---------------------------------------------------------------------------
+
+const NUR_LINUX_B12 = process.platform === 'linux' ? false : 'braucht bash, mkfifo, GNU tee und /proc unter Linux; laeuft in CI';
+// Fester Pfad, damit ein eingeschraenkter PATH im Test (ohne docker) bash selbst nicht verliert.
+const B12_BASH = NUR_LINUX_B12 ? 'bash' : spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
+
+// Ersatz fuer docker im PATH. run: schreibt B12_STDOUT und B12_STDERR (Dateien) und endet mit B12_RC; mit
+// B12_WARTEN schreibt es eine Fehlerzeile, legt die Marke an und wartet. image/pull fuer a6_image_laden.
+const ERSATZ_DOCKER = `#!/bin/bash
+if [[ -n "\${B12_ARGV:-}" ]]; then
+  n=0; while [[ -e "$B12_ARGV/$n" ]]; do n=$((n + 1)); done
+  printf '%s\\0' "$@" > "$B12_ARGV/$n"
+fi
+case "$1" in
+  image) [[ "\${B12_IMAGE_RC:-0}" == 0 ]] || exit "$B12_IMAGE_RC"; printf '["%s"]\\n' "$3"; exit 0 ;;
+  pull) exit "\${B12_PULL_RC:-0}" ;;
+esac
+if [[ -n "\${B12_RECHTE:-}" ]]; then
+  for d in "$RUNNER_TEMP"/a6-bericht/lauf.*; do stat -c '%a %F' -- "$d" "$d/rohr"; done > "$B12_RECHTE"
+fi
+if [[ -n "\${B12_SCHREIBE:-}" ]]; then
+  for a in "$@"; do
+    if [[ "$a" == type=bind,src=*,dst=/a6/zusammenfassung ]]; then z="\${a#type=bind,src=}"; printf 'ersatz\\n' >> "\${z%,dst=/a6/zusammenfassung}"; fi
+  done
+fi
+if [[ -n "\${B12_WARTEN:-}" ]]; then
+  printf '%s\\n' "$$" > "$B12_WARTEN"
+  printf 'A6-FEHLER abnahme-exitcode\\n' >&2
+  exec sleep 30
+fi
+[[ -z "\${B12_STDOUT:-}" ]] || cat -- "$B12_STDOUT"
+[[ -z "\${B12_STDERR:-}" ]] || cat -- "$B12_STDERR" >&2
+exit "\${B12_RC:-0}"
+`;
+
+function b12Ordner() {
+  const dir = mkdtempSync(join(tmpdir(), 'a6-b12-'));
+  mkdirSync(join(dir, 'bin'));
+  writeFileSync(join(dir, 'bin', 'docker'), ERSATZ_DOCKER, { mode: 0o755 });
+  mkdirSync(join(dir, 'ws'));
+  return dir;
+}
+
+function b12Env(dir, rt, extra = {}) {
+  return {
+    PATH: `${join(dir, 'bin')}:/usr/local/bin:/usr/bin:/bin`, HOME: dir, LC_ALL: 'C.UTF-8',
+    GITHUB_WORKSPACE: join(dir, 'ws'), RUNNER_TEMP: rt, GITHUB_REPOSITORY: 'noah04091/agenten-probe',
+    A6_NODE_IMAGE: `node@sha256:${'0'.repeat(64)}`, A6_NODE_VERSION: 'v0', A6_INTEGRITAET_SHA256: 'a'.repeat(64), A6_ATTRAPPE_SHA256: 'b'.repeat(64),
+    ...extra,
+  };
+}
+
+// Startet a6_container wie im Workflow (set -euo pipefail, Funktionsdatei geladen). vorspann ersetzt Werkzeuge
+// als Shell-Funktion nach dem Laden. Ergebnis als Bytes.
+function b12Container(fnPfad, dir, rt, { extra = {}, vorspann = '', nachher = '' } = {}) {
+  mkdirSync(rt, { recursive: true });
+  const skript = nachher === ''
+    ? `set -euo pipefail\nsource "$1"\n${vorspann}\na6_container none "" agent-code-job-abnahme.mjs GITHUB_REPOSITORY`
+    : `set -uo pipefail\nsource "$1"\n${vorspann}\nrc=0\na6_container none "" agent-code-job-abnahme.mjs GITHUB_REPOSITORY || rc=$?\n${nachher}\nexit "$rc"`;
+  const r = spawnSync(B12_BASH, ['--noprofile', '--norc', '-c', skript, 'b12', fnPfad], { env: b12Env(dir, rt, extra), timeout: 30_000, maxBuffer: 8 * 1024 * 1024 });
+  assert.equal(r.error, undefined, `bash: ${r.error}`);
+  return { status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr };
+}
+
+const b12Lies = pfad => (existsSync(pfad) ? readFileSync(pfad, 'utf8') : null);
+const b12Rest = rt => (existsSync(join(rt, 'a6-bericht')) ? readdirSync(join(rt, 'a6-bericht')).filter(n => n.startsWith('lauf.')) : []);
+
+// Bash-Fehlermeldungen nennen Datei und Zeile des Aufrufs; nur dieser Vorspann darf abweichen.
+const ohneOrt = puffer => puffer.toString('latin1').replace(/^[^\n]*?: line \d+: /gm, '');
+
+function b12Gleich(alt, neu, name) {
+  assert.equal(neu.signal, null, `${name}: Signal`);
+  assert.equal(neu.status, alt.status, `${name}: Exitcode`);
+  assert.ok(neu.stdout.equals(alt.stdout), `${name}: stdout weicht ab`);
+  assert.ok(neu.stderr.equals(alt.stderr), `${name}: stderr weicht ab (${JSON.stringify(neu.stderr.toString('latin1').slice(0, 200))})`);
+}
+
+const B12_STDERR = Object.freeze({
+  keine: Buffer.alloc(0),
+  eine: Buffer.from('A6-FEHLER abnahme-exitcode\n'),
+  zwei: Buffer.from('A6-FEHLER abnahme-exitcode\nA6-FEHLER abnahme-ausgabe\n'),
+  start: Buffer.from('A6-START anker\n'),
+  bytes: Buffer.concat([Buffer.from('vorher\r\nA6-FEHLER  doppelt\nA6-FEHLER abnahme-exitcode \n\0\xff\xfe\n', 'latin1'), Buffer.from('A6-FEHLER job-unbekannt\nÄ\n')]),
+  ohne_ende: Buffer.from('rauschen\nA6-FEHLER abnahme-ausgabe'),
+  gross: Buffer.concat([Buffer.from('A6-FEHLER abnahme-exitcode\n'), Buffer.alloc(1024 * 1024, 'x'), Buffer.from('\nA6-FEHLER abnahme-ausgabe\n')]),
+});
+const B12_FEHLER = Object.freeze({
+  keine: null, eine: 'A6-FEHLER abnahme-exitcode\n', zwei: 'A6-FEHLER abnahme-exitcode\nA6-FEHLER abnahme-ausgabe\n', start: null,
+  bytes: 'A6-FEHLER job-unbekannt\n', ohne_ende: 'A6-FEHLER abnahme-ausgabe\n', gross: 'A6-FEHLER abnahme-exitcode\n',
+});
+
+test('B1.2 T12: a6_container alt gegen neu mit Ersatz-docker: stdout, stderr und Exitcode byte-gleich, Fehlerdatei genau die passenden Zeilen', { skip: NUR_LINUX_B12 }, async () => {
+  const { logAuszug } = await import('../werkzeuge/zentrale/log-auszug.mjs');
+  const dir = b12Ordner();
+
+  try {
+    const aus = join(dir, 'stdout');
+    writeFileSync(aus, Buffer.from('ausgabe\0\xff\nzweite', 'latin1'));
+    let fall = 0;
+
+    for (const [name, bytes] of Object.entries(B12_STDERR)) {
+      for (const rc of [0, 1, 2, 137]) {
+        const err = join(dir, `stderr-${name}`);
+        writeFileSync(err, bytes);
+        const extra = { B12_STDOUT: aus, B12_STDERR: err, B12_RC: String(rc) };
+        const rtAlt = join(dir, `alt-${fall}`);
+        const rtNeu = join(dir, `neu-${fall}`);
+        fall += 1;
+        const alt = b12Container(FN_ALT_PFAD, dir, rtAlt, { extra });
+        const neu = b12Container(FN_ZIEL_PFAD, dir, rtNeu, { extra });
+        b12Gleich(alt, neu, `${name}/${rc}`);
+        assert.equal(neu.status, rc, `${name}/${rc}: Exitcode des Ersatz-docker`);
+        assert.ok(neu.stderr.equals(bytes), `${name}/${rc}: stderr nicht genau die Bytes des Containers`);
+        assert.deepEqual(logAuszug(neu.stderr.toString('utf8')), logAuszug(alt.stderr.toString('utf8')), `${name}/${rc}: logAuszug`);
+        assert.ok(!existsSync(join(rtAlt, 'a6-bericht')), 'der alte Stand legt nichts an');
+        assert.equal(b12Lies(join(rtNeu, 'a6-bericht', 'fehler')), B12_FEHLER[name], `${name}/${rc}: Fehlerdatei`);
+        assert.equal(b12Lies(join(rtNeu, 'a6-bericht', 'status')), name === 'gross' ? 'unvollstaendig\n' : 'erfasst\n', `${name}/${rc}: Status`);
+        assert.deepEqual(b12Rest(rtNeu), [], `${name}/${rc}: Rohr und Mitschnitt nicht entfernt`);
+      }
+    }
+
+    // Nach der Rueckkehr laeuft kein tee mehr: keine Kindprozesse der Shell, keine Hintergrundjobs.
+    const err = join(dir, 'stderr-eine');
+    const nachher = 'jobs -p > "$RUNNER_TEMP/jobs"\nfor p in /proc/[0-9]*; do f=(); read -r -a f < "$p/stat" 2> /dev/null || continue; [[ "${f[3]:-}" == "$$" ]] && printf "%s\\n" "${f[1]}"; done > "$RUNNER_TEMP/kinder"';
+    const rt = join(dir, 'prozesse');
+    const r = b12Container(FN_ZIEL_PFAD, dir, rt, { extra: { B12_STDERR: err, B12_RC: '1' }, nachher });
+    assert.equal(r.status, 1);
+    assert.equal(readFileSync(join(rt, 'jobs'), 'utf8'), '');
+    assert.equal(readFileSync(join(rt, 'kinder'), 'utf8'), '');
+    // Gegenprobe der Messung: ein absichtlich nicht abgewarteter Hintergrundprozess wird gefunden (vor seinem exec
+    // heisst er noch bash, danach sleep) und erscheint auch in jobs -p.
+    const g = b12Container(FN_ZIEL_PFAD, dir, join(dir, 'gegenprobe'), { extra: { B12_RC: '0' }, nachher: `sleep 5 &\n${nachher}\nkill %1` });
+    assert.equal(g.status, 0);
+    assert.match(readFileSync(join(dir, 'gegenprobe', 'kinder'), 'utf8'), /^\((sleep|bash)\)\n$/);
+    assert.match(readFileSync(join(dir, 'gegenprobe', 'jobs'), 'utf8'), /^[0-9]+\n$/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('B1.2 T23: privates Verzeichnis mit Modus 700, Rohr mit Modus 600, danach aufgeraeumt', { skip: NUR_LINUX_B12 }, () => {
+  const dir = b12Ordner();
+
+  try {
+    const rt = join(dir, 'rt');
+    const rechte = join(dir, 'rechte');
+    const r = b12Container(FN_ZIEL_PFAD, dir, rt, { extra: { B12_RECHTE: rechte } });
+    assert.equal(r.status, 0);
+    assert.equal(readFileSync(rechte, 'utf8'), '700 directory\n600 fifo\n');
+    assert.deepEqual(b12Rest(rt), []);
+    assert.deepEqual(readdirSync(join(rt, 'a6-bericht')).sort(), ['status']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Erfassungsfehler (T19, T24, K8, K9): der Einstieg bleibt byte-gleich, nie "erfasst", kein Haengen.
+const B12_STOERUNGEN = Object.freeze({
+  mkdir_scheitert: { vorbereiten: rt => chmodSync(rt, 0o555), status: null },
+  ordner_schreibgeschuetzt: { vorbereiten: rt => { mkdirSync(join(rt, 'a6-bericht')); chmodSync(join(rt, 'a6-bericht'), 0o555); }, status: null },
+  ordner_ist_datei: { vorbereiten: rt => writeFileSync(join(rt, 'a6-bericht'), 'x'), status: null },
+  link_statt_ordner: { vorbereiten: (rt, dir) => { mkdirSync(join(dir, 'fremd'), { recursive: true }); symlinkSync(join(dir, 'fremd'), join(rt, 'a6-bericht')); }, status: null, fremdLeer: true },
+  mktemp_scheitert: { vorspann: 'mktemp() { return 1; }', status: 'unvollstaendig\n' },
+  mktemp_falscher_modus: { vorspann: 'mktemp() { local d="$RUNNER_TEMP/a6-bericht/lauf.test0001"; command mkdir -m 755 "$d" && printf "%s\\n" "$d"; }', status: 'unvollstaendig\n' },
+  mktemp_ausserhalb: { vorspann: 'mktemp() { local d="$RUNNER_TEMP/lauf.aussen"; command mkdir -m 700 "$d" && printf "%s\\n" "$d"; }', status: 'unvollstaendig\n', bleibt: 'lauf.aussen' },
+  mkfifo_scheitert: { vorspann: 'mkfifo() { return 1; }', status: 'unvollstaendig\n' },
+  rohr_nicht_oeffenbar: { vorspann: 'mkfifo() { command mkdir "${@: -1}"; }', status: 'unvollstaendig\n' },
+  mitschnitt_voll: { vorspann: 'mktemp() { local d="$RUNNER_TEMP/a6-bericht/lauf.test0002"; command mkdir -m 700 "$d" && ln -s /dev/full "$d/mitschnitt" && printf "%s\\n" "$d"; }', status: 'unvollstaendig\n', teeFehler: true },
+  mitschnitt_nicht_beschreibbar: { vorspann: 'mktemp() { local d="$RUNNER_TEMP/a6-bericht/lauf.test0003"; command mkdir -m 700 "$d" && command mkdir "$d/mitschnitt" && printf "%s\\n" "$d"; }', status: 'unvollstaendig\n', teeFehler: true },
+  tee_fehlt: { vorspann: 'tee() { return 127; }', status: 'unvollstaendig\n' },
+  // tee meldet etwas, endet aber mit 0: die Meldung geht nach tee-fehler, nie ins Log, und der Status ist nicht erfasst.
+  tee_warnt: { vorspann: 'tee() { echo "tee: warnung" >&2; command tee "$@"; }', status: 'unvollstaendig\n' },
+  ueber_64kb: { stderr: Buffer.concat([Buffer.from('A6-FEHLER abnahme-exitcode\n'), Buffer.alloc(70 * 1024, 'y'), Buffer.from('\n')]), status: 'unvollstaendig\n', fehler: 'A6-FEHLER abnahme-exitcode\n' },
+  genau_64kb: { stderr: Buffer.concat([Buffer.from('A6-FEHLER abnahme-exitcode\n'), Buffer.alloc(65536 - 28, 'y'), Buffer.from('\n')]), status: 'erfasst\n', fehler: 'A6-FEHLER abnahme-exitcode\n' },
+});
+
+test('B1.2 T19, T24, K8: Erfassungsfehler lassen Ausgabe und Exitcode byte-gleich, Status nie "erfasst", keine tee-Meldung im Log', { skip: NUR_LINUX_B12 }, () => {
+  const dir = b12Ordner();
+
+  try {
+    for (const [name, f] of Object.entries(B12_STOERUNGEN)) {
+      for (const rc of [0, 1]) {
+        const err = join(dir, `stderr-${name}`);
+        writeFileSync(err, f.stderr ?? Buffer.from('A6-FEHLER abnahme-exitcode\nweiter\n'));
+        const extra = { B12_STDERR: err, B12_RC: String(rc) };
+        const rtAlt = join(dir, `${name}-${rc}-alt`);
+        const rtNeu = join(dir, `${name}-${rc}-neu`);
+        mkdirSync(rtNeu, { recursive: true });
+        f.vorbereiten?.(rtNeu, join(dir, `${name}-${rc}`));
+        const alt = b12Container(FN_ALT_PFAD, dir, rtAlt, { extra, vorspann: f.vorspann ?? '' });
+        const neu = b12Container(FN_ZIEL_PFAD, dir, rtNeu, { extra, vorspann: f.vorspann ?? '' });
+        chmodSync(rtNeu, 0o755);
+        if (existsSync(join(rtNeu, 'a6-bericht')) && !f.fremdLeer) chmodSync(join(rtNeu, 'a6-bericht'), 0o755);
+        if (f.haengtNicht) {
+          // Ohne funktionierendes tee kann die Weitergabe nicht gelingen; massgeblich: kein Haengen, Exitcode gleich.
+          assert.equal(neu.signal, null, `${name}: haengt`);
+          assert.equal(neu.status, alt.status, `${name}: Exitcode`);
+          assert.ok(neu.stdout.equals(alt.stdout), `${name}: stdout`);
+        } else {
+          b12Gleich(alt, neu, `${name}/${rc}`);
+        }
+        assert.ok(!neu.stderr.toString('latin1').includes('tee:'), `${name}: tee-Meldung im Log`);
+        const basis = join(rtNeu, 'a6-bericht');
+        const status = f.fremdLeer || !existsSync(basis) || !statSync(basis).isDirectory() ? null : b12Lies(join(basis, 'status'));
+        assert.equal(status, f.status, `${name}/${rc}: Status`);
+        assert.ok(status === null || !status.includes('erfasst\n') || f.status === 'erfasst\n', `${name}: erfasst trotz Fehler`);
+        if (f.fehler !== undefined) assert.equal(b12Lies(join(basis, 'fehler')), f.fehler, `${name}: Fehlerdatei`);
+        if (f.fremdLeer) assert.deepEqual(readdirSync(join(dir, `${name}-${rc}`, 'fremd')), [], `${name}: durch den Link geschrieben`);
+        // Ein Pfad ausserhalb des Berichtsordners wird nie geloescht, auch wenn mktemp ihn liefert.
+        if (f.bleibt) assert.ok(existsSync(join(rtNeu, f.bleibt)), `${name}: fremder Pfad geloescht`);
+        if (existsSync(basis) && statSync(basis).isDirectory() && !f.fremdLeer) assert.deepEqual(b12Rest(rtNeu), [], `${name}: Reste`);
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('B1.2 K9: Startfehler, docker fehlt oder ist nicht ausfuehrbar: kein Haengen, Exitcode wie heute, Status nicht erfasst', { skip: NUR_LINUX_B12 }, () => {
+  const dir = b12Ordner();
+
+  try {
+    // Eigener PATH nur mit den noetigen Werkzeugen, ohne docker (auf dem Runner liegt ein echtes docker in /usr/bin).
+    const bin = join(dir, 'nur-werkzeuge');
+    mkdirSync(bin);
+    for (const w of ['mkdir', 'mktemp', 'realpath', 'stat', 'mkfifo', 'tee', 'head', 'grep', 'rm', 'id', 'cat']) {
+      const quelle = spawnSync('bash', ['-c', `command -v ${w}`], { encoding: 'utf8' }).stdout.trim();
+      assert.ok(quelle.startsWith('/'), w);
+      symlinkSync(quelle, join(bin, w));
+    }
+
+    for (const [name, vorbereiten, rc] of [['fehlt', () => {}, 127], ['nicht_ausfuehrbar', () => writeFileSync(join(bin, 'docker'), '#!/bin/sh\n', { mode: 0o644 }), 126]]) {
+      vorbereiten();
+      const extra = { PATH: bin };
+      const alt = b12Container(FN_ALT_PFAD, dir, join(dir, `${name}-alt`), { extra });
+      const neu = b12Container(FN_ZIEL_PFAD, dir, join(dir, `${name}-neu`), { extra });
+      assert.equal(neu.signal, null, `${name}: haengt`);
+      assert.equal(neu.status, rc, name);
+      assert.equal(neu.status, alt.status, name);
+      assert.ok(neu.stdout.equals(alt.stdout), name);
+      assert.equal(ohneOrt(neu.stderr), ohneOrt(alt.stderr), name);
+      assert.ok(ohneOrt(neu.stderr).includes('docker: '), `${name}: Muss-Treffer`);
+      assert.equal(b12Lies(join(dir, `${name}-neu`, 'a6-bericht', 'status')), 'unvollstaendig\n', name);
+      assert.deepEqual(b12Rest(join(dir, `${name}-neu`)), []);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Startet a6_container im Hintergrund, liest stderr mit, wartet auf die Fehlerzeile und beendet die Shell.
+function b12Abbruch(signal) {
+  return new Promise((resolve, reject) => {
+    const dir = b12Ordner();
+    const rt = join(dir, 'rt');
+    mkdirSync(rt);
+    const marke = join(dir, 'marke');
+    const kind = spawn('bash', ['--noprofile', '--norc', '-c', 'set -euo pipefail\nsource "$1"\na6_container none "" agent-code-job-abnahme.mjs GITHUB_REPOSITORY', 'b12', FN_ZIEL_PFAD],
+      { env: b12Env(dir, rt, { B12_WARTEN: marke }), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let fehler = '';
+    let vorEnde = false;
+    const ende = (wert, problem) => {
+      clearTimeout(uhr);
+      try { process.kill(-kind.pid, 'SIGKILL'); } catch { /* schon beendet */ }
+      setTimeout(() => {
+        const status = b12Lies(join(rt, 'a6-bericht', 'status'));
+        const rest = b12Rest(rt);
+        rmSync(dir, { recursive: true, force: true });
+        problem ? reject(problem) : resolve({ ...wert, status, rest });
+      }, 200);
+    };
+    const uhr = setTimeout(() => ende(null, new Error(`Fehlerzeile kam nicht vor dem Ende des Ersatz-docker an: ${JSON.stringify(fehler)}`)), 10_000);
+    kind.stderr.on('data', d => {
+      fehler += d.toString('utf8');
+      if (!vorEnde && fehler.includes('A6-FEHLER abnahme-exitcode\n')) {
+        // Die Marke traegt die PID des Ersatz-docker und entsteht vor der Zeile; lebt er noch, lief der Container.
+        const pid = Number(readFileSync(marke, 'utf8'));
+        try { process.kill(pid, 0); vorEnde = pid > 0; } catch { vorEnde = false; }
+        const abbruch = kind;
+        abbruch.kill(signal);
+        abbruch.once('exit', (code, sig) => setTimeout(() => ende({ fehler, vorEnde, sig }), 100));
+      }
+    });
+  });
+}
+
+for (const signal of ['SIGTERM', 'SIGKILL']) {
+  test(`B1.2 T21 (5a): Fehlerzeile erreicht das Log vor dem Ende des Containers und bleibt nach ${signal} erhalten`, { skip: NUR_LINUX_B12 }, async () => {
+    const r = await b12Abbruch(signal);
+    assert.equal(r.sig, signal);
+    assert.ok(r.fehler.includes('A6-FEHLER abnahme-exitcode\n'));
+    // Der Ersatz-docker wartet nach der Zeile 30 Sekunden; die Zeile kam also, waehrend er noch lief.
+    assert.equal(r.vorEnde, true, 'Zeile kam erst nach dem Container an');
+    // Abbruch: keine Statuszeile, der private Ordner bleibt liegen; der Bericht meldet "unvollstaendig".
+    assert.equal(r.status, null);
+    assert.equal(r.rest.length, 1);
+  });
+}
+
+test('B1.2 T21: ein abgebrochener Aufruf wird im Bericht nie als erfasst gezeigt', { skip: NUR_LINUX_B12 }, async () => {
+  const { main } = await import('../scripts/agent-code-job-bericht.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'a6-b12-rest-'));
+
+  try {
+    mkdirSync(join(dir, 'bericht', 'lauf.abcdefgh'), { recursive: true });
+    writeFileSync(join(dir, 'bericht', 'status'), 'erfasst\n');
+    writeFileSync(join(dir, 'ziel'), '');
+    assert.equal(main({ A6_BERICHT_JOB: 'abnahme', A6_JOB_STATUS: 'failure' }, { ordner: join(dir, 'bericht'), ziel: join(dir, 'ziel') }), 0);
+    assert.ok(readFileSync(join(dir, 'ziel'), 'utf8').includes('- Fehlerdaten: unvollständig\n'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// a6_bericht mit Ersatz-docker: Ziel unter RUNNER_TEMP/_runner_file_commands wie auf dem Runner.
+function b12Bericht(job, { ziel, vorbereiten, extra = {}, rt: rtArg, lesen } = {}) {
+  const dir = b12Ordner();
+
+  try {
+    const rt = rtArg ?? join(dir, 'rt');
+    mkdirSync(join(rt, '_runner_file_commands'), { recursive: true });
+    const standard = join(rt, '_runner_file_commands', 'step_summary_0a1b2c3d-4e5f');
+    writeFileSync(standard, '');
+    const argv = join(dir, 'argv');
+    mkdirSync(argv);
+    const zielPfad = ziel === undefined ? standard : ziel(rt, dir);
+    vorbereiten?.(rt, dir);
+    const env = b12Env(dir, rt, { B12_ARGV: argv, GITHUB_STEP_SUMMARY: zielPfad, A6_JOB_STATUS: 'success', ANTHROPIC_API_KEY: 'sk-ant-geheim', A6_APP_TOKEN: 'ghs_geheim', GITHUB_TOKEN: 'ghp_geheim', ...extra });
+    if (zielPfad === null) delete env.GITHUB_STEP_SUMMARY;
+    const r = spawnSync('bash', ['--noprofile', '--norc', '-c', 'set -euo pipefail\nsource "$1"\nrc=0\na6_bericht "$2" || rc=$?\nexit "$rc"', 'b12', FN_ZIEL_PFAD, job], { env, encoding: 'utf8', timeout: 30_000 });
+    assert.equal(r.error, undefined);
+    const aufrufe = readdirSync(argv).sort((a, b) => Number(a) - Number(b)).map(n => readFileSync(join(argv, n), 'utf8').split('\0').slice(0, -1));
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, aufrufe, inhalt: existsSync(standard) ? readFileSync(standard, 'utf8') : null, rt, dir, gelesen: lesen?.(rt, dir) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const laeufe = r => r.aufrufe.filter(a => a[0] === 'run');
+const b12Optionen = (a, name) => a.flatMap((x, i) => (x === name ? [a[i + 1]] : []));
+
+test('B1.2 T14: a6_bericht startet genau einen Container ohne Netz mit genau drei Einhaengungen und nur den festen Umgebungsnamen', { skip: NUR_LINUX_B12 }, () => {
+  for (const job of B12_JOBS) {
+    const r = b12Bericht(job, { vorbereiten: rt => mkdirSync(join(rt, 'a6-bericht')), extra: { B12_SCHREIBE: '1' } });
+    assert.equal(r.status, 0, `${job}: ${r.stdout} ${r.stderr}`);
+    assert.equal(r.stdout, '');
+    assert.equal(r.inhalt, 'ersatz\n', `${job}: nicht in die Zusammenfassung geschrieben`);
+    const [a, ...weitere] = laeufe(r);
+    assert.equal(weitere.length, 0);
+    assert.deepEqual(b12Optionen(a, '--network'), ['none']);
+    assert.ok(a.includes('--read-only') && a.includes('--rm') && a.includes('--pull=never') && b12Optionen(a, '--cap-drop')[0] === 'ALL');
+    assert.deepEqual(b12Optionen(a, '--mount'), [
+      `type=bind,src=${join(r.dir, 'ws')},dst=${join(r.dir, 'ws')},readonly`,
+      `type=bind,src=${join(r.rt, 'a6-bericht')},dst=/a6/bericht,readonly`,
+      `type=bind,src=${join(r.rt, '_runner_file_commands', 'step_summary_0a1b2c3d-4e5f')},dst=/a6/zusammenfassung`,
+    ]);
+    assert.ok(!a.some(x => x.includes(`src=${r.rt},`)), 'ganz RUNNER_TEMP eingehaengt');
+    const namen = job === 'sammel' ? B12_ERGEBNISSE.map(([k]) => `A6_ERGEBNIS_${k}`) : [];
+    assert.deepEqual(b12Optionen(a, '--env'), ['PATH=/usr/local/bin:/usr/bin:/bin', 'A6_BERICHT_JOB', 'A6_JOB_STATUS', ...namen]);
+    assert.ok(!a.some(x => /geheim|TOKEN|ANTHROPIC/.test(x)) && !a.includes('-e') && !a.includes('--env-file'));
+    assert.deepEqual(a.slice(-3), ['a6', 'v0', 'a'.repeat(64)]);
+  }
+
+  // Ohne echten Berichtsordner (fehlt oder Link): nur zwei Einhaengungen, nie durch einen Link.
+  for (const [name, vorbereiten] of [['fehlt', null], ['link', (rt, dir) => { mkdirSync(join(dir, 'fremd')); symlinkSync(join(dir, 'fremd'), join(rt, 'a6-bericht')); }]]) {
+    const r = b12Bericht('abnahme', { vorbereiten });
+    assert.equal(r.status, 0, name);
+    assert.deepEqual(b12Optionen(laeufe(r)[0], '--mount').map(m => m.split(',dst=')[1]), [join(r.dir, 'ws').replaceAll('\\', '/') + ',readonly', '/a6/zusammenfassung'], name);
+  }
+
+  // Nur feste Jobnamen: sonst A6-START bericht-job, Warnung, Rueckgabe 1, kein Container.
+  for (const job of ['', 'probe_negativ', 'probe_sammel_pruefung', 'auftrag ', 'Auftrag', 'auftrag;id', '../x', 'sammel2']) {
+    const r = b12Bericht(job);
+    assert.equal(r.status, 1, job);
+    assert.equal(r.stderr, 'A6-START bericht-job\n', job);
+    assert.equal(r.stdout, '::warning title=A6-BERICHT::job-ungueltig\n', job);
+    assert.deepEqual(r.aufrufe, [], job);
+  }
+});
+
+test('B1.2 T20: ungueltiges Schreibziel ergibt A6-BERICHT ziel-ungueltig, Rueckgabe 1, nichts geschrieben, kein Container', { skip: NUR_LINUX_B12 }, () => {
+  const faelle = {
+    leer: () => '',
+    fehlt: () => null,
+    link: rt => { const l = join(rt, '_runner_file_commands', 'step_summary_link'); symlinkSync(join(rt, '_runner_file_commands', 'step_summary_0a1b2c3d-4e5f'), l); return l; },
+    verzeichnis: rt => { const d = join(rt, '_runner_file_commands', 'step_summary_ordner'); mkdirSync(d); return d; },
+    realpath_abweichend: rt => `${rt}/_runner_file_commands/../_runner_file_commands/step_summary_0a1b2c3d-4e5f`,
+    // Der Ordner selbst ist ein Link: Pfad und Name stimmen als Text, nur realpath weicht ab.
+    ordner_link: rt => {
+      renameSync(join(rt, '_runner_file_commands'), join(rt, 'echt'));
+      symlinkSync(join(rt, 'echt'), join(rt, '_runner_file_commands'));
+      return join(rt, '_runner_file_commands', 'step_summary_0a1b2c3d-4e5f');
+    },
+    doppelter_schraegstrich: rt => `${rt}/_runner_file_commands//step_summary_0a1b2c3d-4e5f`,
+    ausserhalb: rt => { const d = join(rt, 'anderswo'); mkdirSync(d); writeFileSync(join(d, 'step_summary_abc'), ''); return join(d, 'step_summary_abc'); },
+    unterordner: rt => { const d = join(rt, '_runner_file_commands', 'tiefer'); mkdirSync(d); writeFileSync(join(d, 'step_summary_abc'), ''); return join(d, 'step_summary_abc'); },
+    falscher_name: rt => { const p = join(rt, '_runner_file_commands', 'set_output_abc'); writeFileSync(p, ''); return p; },
+    name_zu_lang: rt => { const p = join(rt, '_runner_file_commands', `step_summary_${'a'.repeat(81)}`); writeFileSync(p, ''); return p; },
+    name_mit_punkt: rt => { const p = join(rt, '_runner_file_commands', 'step_summary_a.b'); writeFileSync(p, ''); return p; },
+    fehlende_datei: rt => join(rt, '_runner_file_commands', 'step_summary_gibtsnicht'),
+  };
+
+  for (const [name, ziel] of Object.entries(faelle)) {
+    const r = b12Bericht('auftrag', { ziel, extra: { B12_SCHREIBE: '1' } });
+    assert.equal(r.status, 1, name);
+    assert.equal(r.stdout, 'A6-BERICHT ziel-ungueltig\n::warning title=A6-BERICHT::ziel-ungueltig\n', name);
+    assert.equal(r.stderr, '', name);
+    assert.deepEqual(r.aufrufe, [], `${name}: Container gestartet`);
+    assert.equal(r.inhalt, '', `${name}: geschrieben`);
+  }
+
+  // Gegenprobe: gueltiger Name mit 80 Zeichen wird angenommen.
+  const ok = b12Bericht('auftrag', { ziel: rt => { const p = join(rt, '_runner_file_commands', `step_summary_${'a'.repeat(80)}`); writeFileSync(p, ''); return p; } });
+  assert.equal(ok.status, 0, ok.stdout);
+});
+
+test('B1.2 T22: jeder Berichtsfehler ergibt genau eine feste Warnung, nie einen Pfad oder Wert', { skip: NUR_LINUX_B12 }, () => {
+  for (const [rc, grund] of [[1, 'nicht-geschrieben'], [3, 'pruefung'], [4, 'integritaet'], [125, 'start'], [126, 'start'], [127, 'start'], [137, 'start'], [2, 'start']]) {
+    const r = b12Bericht('claude', { extra: { B12_RC: String(rc) } });
+    assert.equal(r.status, 1, String(rc));
+    assert.equal(r.stdout, `::warning title=A6-BERICHT::${grund}\n`, String(rc));
+  }
+
+  // Image fehlt: genau der feste Digest wird geladen; scheitert das, Warnung image und kein Container.
+  const geladen = b12Bericht('sammel', { extra: { B12_IMAGE_RC: '1', B12_PULL_RC: '0' } });
+  assert.equal(geladen.aufrufe.filter(a => a[0] === 'pull').length, 1);
+  assert.deepEqual(geladen.aufrufe.find(a => a[0] === 'pull'), ['pull', '--quiet', `node@sha256:${'0'.repeat(64)}`]);
+  const ohne = b12Bericht('sammel', { extra: { B12_IMAGE_RC: '1', B12_PULL_RC: '1' } });
+  assert.equal(ohne.status, 1);
+  assert.equal(ohne.stdout, '::warning title=A6-BERICHT::image\n');
+  assert.deepEqual(laeufe(ohne), []);
+
+  // Unbekannter Grund wird nie durchgereicht.
+  const w = spawnSync('bash', ['-c', 'source "$1"; a6_bericht_warnung "pfad/geheim"; a6_bericht_warnung start', 'b12', FN_ZIEL_PFAD], { encoding: 'utf8' });
+  assert.equal(w.stdout, '::warning title=A6-BERICHT::unbekannt\n::warning title=A6-BERICHT::start\n');
+
+  // Funktionen-Hash falsch: der Workflowschritt warnt und endet rot, laedt die Funktionsdatei nicht.
+  const schritt = b12Zeilen('abnahme').slice(b12Zeilen('abnahme').indexOf('        run: |') + 1).map(z => z.slice(10)).join('\n');
+  const dir = mkdtempSync(join(tmpdir(), 'a6-b12-hash-'));
+  try {
+    mkdirSync(join(dir, '.github', 'agent'), { recursive: true });
+    writeFileSync(join(dir, '.github', 'agent', 'a6-funktionen.sh'), 'echo GELADEN\n');
+    const r = spawnSync('bash', ['--noprofile', '--norc', '-c', schritt], { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH, A6_FUNKTIONEN_SHA256: '0'.repeat(64) } });
+    assert.equal(r.status, 1);
+    assert.equal(r.stdout, '::warning title=A6-BERICHT::funktionen-hash\n');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('B1.2 T10 und T22: der Startblock im Berichtscontainer endet mit festen Codes; Skript-Hash falsch ergibt 4 (integritaet)', { skip: NUR_LINUX_B12 }, () => {
+  const b = funktion(FN_ZIEL, 'a6_bericht');
+  const skript = b.slice(b.indexOf("/bin/sh -euc '") + "/bin/sh -euc '".length, b.indexOf("' a6 \"$A6_NODE_VERSION\" \"$A6_INTEGRITAET_SHA256\""));
+  assert.ok(skript.includes('exec node scripts/agent-code-job-bericht.mjs'));
+  const pruefer = createHash('sha256').update(readFileSync(join(ROOT, 'scripts', 'agent-code-integritaet.mjs'))).digest('hex');
+  const dir = mkdtempSync(join(tmpdir(), 'a6-b12-start-'));
+
+  try {
+    cpSync(join(ROOT, 'scripts'), join(dir, 'scripts'), { recursive: true });
+    mkdirSync(join(dir, '.github', 'agent'), { recursive: true });
+    cpSync(join(ROOT, '.github', 'agent', 'policy.json'), join(dir, '.github', 'agent', 'policy.json'));
+    const lauf = (version, anker, env = {}) => spawnSync('sh', ['-euc', skript, 'a6', version, anker], { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
+
+    // Alles stimmt: das Berichtsskript laeuft und scheitert nur am fehlenden /a6/zusammenfassung (Exitcode 1).
+    const ok = lauf(process.version, pruefer);
+    assert.equal(ok.status, 1, ok.stderr);
+    assert.equal(ok.stdout + ok.stderr, '');
+    assert.equal(lauf('v0.0.0', pruefer).status, 3);
+    assert.equal(lauf(process.version, '0'.repeat(64)).status, 3);
+    assert.equal(lauf(process.version, pruefer, { NODE_OPTIONS: '--no-warnings' }).status, 3);
+    // Berichtsskript veraendert, Policy unveraendert: der Integritaetspruefer lehnt ab.
+    writeFileSync(join(dir, 'scripts', 'agent-code-job-bericht.mjs'), `${readFileSync(join(dir, 'scripts', 'agent-code-job-bericht.mjs'), 'utf8')}\n// veraendert\n`);
+    const falsch = lauf(process.version, pruefer);
+    assert.equal(falsch.status, 4);
+    assert.match(falsch.stderr, /^A6-FEHLER integritaet-[a-z-]+\n$/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('B1.2 Runden und Kosten: genau ein result-Ereignis mit zwei Zahlen ergibt die Datei claude, sonst keine', { skip: NUR_LINUX_B12 || (spawnSync('bash', ['-c', 'command -v jq']).status !== 0 ? 'jq fehlt in dieser Umgebung; laeuft in CI' : false) }, () => {
+  const faelle = [
+    ['{"type":"system"}\n{"type":"result","num_turns":7,"total_cost_usd":0.0312,"is_error":false}\n', '7 0.0312\n'],
+    ['{"type":"result","num_turns":3,"total_cost_usd":0,"is_error":true}\n', '3 0\n'],
+    ['{"type":"result","num_turns":3,"total_cost_usd":"0.1"}\n', null],
+    ['{"type":"result","num_turns":3}\n', null],
+    ['{"type":"result","num_turns":3,"total_cost_usd":0.1}\n{"type":"result","num_turns":4,"total_cost_usd":0.2}\n', null],
+    ['{"type":"result","num_turns":3,"total_cost_usd":0.1}\n{kaputt\n', null],
+    ['', null],
+  ];
+
+  // Ueber a6_bericht: fuer claude wird die Datei aus RUNNER_TEMP/a6-claude-protokoll.jsonl erzeugt, fuer andere Jobs nie.
+  for (const job of ['claude', 'abnahme']) {
+    const r = b12Bericht(job, { vorbereiten: rt => { mkdirSync(join(rt, 'a6-bericht')); writeFileSync(join(rt, 'a6-claude-protokoll.jsonl'), faelle[0][0]); }, lesen: rt => b12Lies(join(rt, 'a6-bericht', 'claude')) });
+    assert.equal(r.status, 0, job);
+    assert.equal(r.gelesen, job === 'claude' ? '7 0.0312\n' : null, job);
+  }
+
+  // Inhalt der Datei je Fall (eigener Lauf, damit der Ordner nicht mit dem Ersatz geloescht wird).
+  for (const [protokoll, erwartet] of faelle) {
+    const dir = mkdtempSync(join(tmpdir(), 'a6-b12-kosten-'));
+    try {
+      writeFileSync(join(dir, 'p.jsonl'), protokoll);
+      writeFileSync(join(dir, 'claude'), 'alt\n');
+      const r = spawnSync('bash', ['-c', 'set -euo pipefail; source "$1"; a6_bericht_kosten "$2/p.jsonl" "$2/claude"', 'b12', FN_ZIEL_PFAD, dir], { encoding: 'utf8' });
+      assert.equal(r.status, 0);
+      assert.equal(b12Lies(join(dir, 'claude')), erwartet, protokoll);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Teil 2: Eigentuemerstand (bis zum Eigentuemer-Commit bewusst rot)
 // ---------------------------------------------------------------------------
 
+// B1.2: fuer Workflow und Funktionsdatei der Stand ohne genau die Berichtsteile (Ausschneide-Proben oben).
+const B12_OHNE = Object.freeze({
+  '.github/workflows/agent-auftrag.yml': text => workflowOhneBericht(text),
+  '.github/agent/a6-funktionen.sh': text => funktionenOhneBericht(text),
+});
+
 for (const [entwurf, ziel] of ZIELE) {
-  test(`Eigentuemerstand: ${ziel} ist byte-gleich mit ${entwurf}`, () => {
+  const ohne = B12_OHNE[ziel];
+  test(`Eigentuemerstand: ${ziel} ist${ohne ? ' ohne die Berichtsteile (B1.2)' : ''} byte-gleich mit ${entwurf}`, () => {
     assert.ok(existsSync(join(ROOT, ziel)), `${ziel} fehlt`);
-    assert.equal(sha256(lies(ziel)), sha256(lies(entwurf)));
+    assert.equal(sha256(ohne ? ohne(lies(ziel)) : lies(ziel)), sha256(lies(entwurf)));
   });
 }

@@ -112,9 +112,12 @@ let PR96_DIR;
 
 // main nach der Eigentuemer-Uebernahme: Policy aus dem Entwurf (neuer Hash fuer agent-code-dryrun.mjs),
 // dazu der Rechner aus PR #96. Nach der Uebernahme sind Entwurf und .github/agent/policy.json gleich.
+// B1.2: Die produktive Policy traegt zusaetzlich genau den Hash des Berichtsskripts, das unter scripts/ liegt
+// und vom Integritaetspruefer verlangt wird. Deshalb hier die produktive Policy; der Test unten belegt, dass
+// sie sich vom Entwurf nur um diesen einen Eintrag unterscheidet.
 // Erst bei Bedarf gebaut, damit ein Fehler hier nur die Tests trifft, die diese Quelle brauchen.
 function pr96Quelle() {
-  PR96_DIR ??= quelleMit('pr96', { ...pr96Dateien(), '.github/agent/policy.json': readFileSync(join(ROOT, 'entwurf', 'a6-p1', 'policy.json')) });
+  PR96_DIR ??= quelleMit('pr96', { ...pr96Dateien(), '.github/agent/policy.json': readFileSync(join(ROOT, '.github', 'agent', 'policy.json')) });
   return PR96_DIR;
 }
 
@@ -213,7 +216,7 @@ test('Vorlage manipuliert, fehlend, mit falschem Modus oder nur im Arbeitsordner
   baueRepo(pr96Quelle(), join(BASIS_DIR, 'repo-ok'));
 });
 
-test('Eigentuemer-Entwurf Policy: gegenueber .github/agent/policy.json nur der Hash von agent-code-dryrun.mjs', () => {
+test('Eigentuemer-Entwurf Policy: gegenueber .github/agent/policy.json nur der Hash von agent-code-dryrun.mjs und der neue Eintrag des Berichtsskripts (B1.2)', () => {
   const SKRIPT = 'scripts/agent-code-dryrun.mjs';
   const entwurfBytes = readFileSync(join(ROOT, 'entwurf', 'a6-p1', 'policy.json'));
   const entwurf = JSON.parse(entwurfBytes.toString('utf8'));
@@ -224,6 +227,10 @@ test('Eigentuemer-Entwurf Policy: gegenueber .github/agent/policy.json nur der H
   // Vor der Uebernahme genau eine Abweichung, danach keine.
   const abweichend = Object.keys(entwurf.skript_hashes).filter(k => entwurf.skript_hashes[k] !== produktiv.skript_hashes[k]);
   assert.ok(abweichend.length === 0 || (abweichend.length === 1 && abweichend[0] === SKRIPT), `abweichend: ${abweichend.join(', ')}`);
-  assert.deepEqual(Object.keys(entwurf.skript_hashes), Object.keys(produktiv.skript_hashes));
+  // B1.2: die produktive Policy hat genau einen Eintrag mehr, das Berichtsskript mit seinem echten Hash.
+  const BERICHT = 'scripts/agent-code-job-bericht.mjs';
+  assert.ok(!Object.hasOwn(entwurf.skript_hashes, BERICHT));
+  assert.equal(produktiv.skript_hashes[BERICHT], sha256(readFileSync(join(ROOT, BERICHT))), 'Berichtsskript ohne echten Hash in der Policy');
+  assert.deepEqual(Object.keys(entwurf.skript_hashes), Object.keys(produktiv.skript_hashes).filter(k => k !== BERICHT));
   assert.deepEqual({ ...entwurf, skript_hashes: null }, { ...produktiv, skript_hashes: null });
 });
