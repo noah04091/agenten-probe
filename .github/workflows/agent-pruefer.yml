@@ -1,0 +1,197 @@
+name: Agent-Vorpruefung
+
+# B2.1 Vorpruefung ohne KI. Ziel .github/workflows/agent-pruefer.yml.
+#
+# Nach einem erfolgreich abgeschlossenen Agenten-Auftrag (Workflow "Agent-Auftrag", Ereignis issues) prueft dieser
+# Workflow den erzeugten Draft-PR nur lesend und deterministisch. Ergebnis: eine Logzeile A6-PRUEFER und ein Bericht in
+# der Zusammenfassung. Der Bericht ist nie eine Freigabe; ein gruener Lauf heisst nur "Pruefung ausgefuehrt".
+# - Job vorpruefung: nur workflow_run (vom Auftrags-Workflow, issues, success) oder workflow_dispatch durch noah04091 auf
+#   main. Checkout genau github.sha (main), nie ein Ref des PR. Nur Leserechte, kein Environment, keine Secrets.
+# - Job probe_vorpruefung: nur pull_request, nur contents: read, ohne Netz gegen ein nachgebautes GitHub.
+# Container: festes Node-Image, zuerst aeusserer Anker und Integritaetspruefer fuer alle Skripte unter scripts/, erst
+# danach das Pruefskript. Root-Dateisystem nur lesbar, Checkout nur lesbar, genau eine beschreibbare Ergebnisdatei,
+# tmpfs nur /tmp mit noexec, keine Rechte, eigener Nutzer, nur feste Variablennamen, fester PATH.
+# Notabschaltung: diesen Workflow in GitHub deaktivieren.
+
+on:
+  workflow_run:
+    workflows: [Agent-Auftrag]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      lauf:
+        description: Lauf-ID des Agenten-Auftrags
+        required: true
+        type: string
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('agent-pruefer-probe-{0}', github.event.pull_request.number) || format('agent-pruefer-lauf-{0}', github.event.workflow_run.id || inputs.lauf) }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  A6_FUNKTIONEN_SHA256: 3d6011bc293643dedd81c26201a8f6a925520c31650c4895e7ee4856074673a3
+  A6_INTEGRITAET_SHA256: f345b7c75cd24670073d7462419290fae3f139e3c3e2fd8390a241a9c1ab003f
+  A6_PRUEFER_ATTRAPPE_SHA256: 7293424f8178dd94e5ac19e0efca924b8143f02e93a14e9008dd36fb9b6af78b
+  A6_NODE_IMAGE: node@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40
+  A6_NODE_VERSION: v24.22.2
+
+jobs:
+  vorpruefung:
+    name: Vorpruefung Agenten-PR
+    if: >-
+      github.repository == 'noah04091/agenten-probe' &&
+      github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'issues' &&
+        github.event.workflow_run.conclusion == 'success') ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.actor == 'noah04091' &&
+        github.triggering_actor == 'noah04091'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Vorpruefung im Container
+        env:
+          A6_LESE_TOKEN: ${{ github.token }}
+          A6_PRUEFER_LAUF: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.lauf }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$A6_PRUEFER_LAUF" =~ ^[1-9][0-9]{0,15}$ ]] || { echo "A6-START lauf" >&2; exit 1; }
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          a6_image_laden "$A6_NODE_IMAGE"
+          ordner="$RUNNER_TEMP/a6-pruefer"
+          ergebnis="$ordner/ergebnis.md"
+          mkdir -m 700 "$ordner"
+          install -m 600 /dev/null "$ergebnis"
+          rc=0
+          docker run --rm --pull=never --network bridge --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --pids-limit 64 --memory 512m --cpus 1 \
+            --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE,readonly" \
+            --mount "type=bind,src=$ergebnis,dst=/a6/ergebnis.md" \
+            --workdir "$GITHUB_WORKSPACE" --env PATH=/usr/local/bin:/usr/bin:/bin \
+            --env A6_LESE_TOKEN --env A6_PRUEFER_LAUF --env GITHUB_REPOSITORY \
+            "$A6_NODE_IMAGE" /bin/sh -euc '
+              unset NODE_VERSION YARN_VERSION
+              if env | grep -q "^NODE_"; then echo "A6-START node-umgebung" >&2; exit 3; fi
+              [ "$(node --version)" = "$1" ] || { echo "A6-START node-version" >&2; exit 3; }
+              printf "%s  %s\n" "$2" scripts/agent-code-integritaet.mjs | sha256sum -c --status || { echo "A6-START anker" >&2; exit 4; }
+              node scripts/agent-code-integritaet.mjs || exit 4
+              exec node scripts/agent-pruefer-vorpruefung.mjs
+            ' a6 "$A6_NODE_VERSION" "$A6_INTEGRITAET_SHA256" || rc=$?
+          if [[ "$rc" == "4" ]]; then
+            # Integritaet nicht belegt: nicht pruefbar, vor jeder Bewertung, Lauf rot.
+            echo "A6-PRUEFER repo noah04091/agenten-probe pr unbekannt kopf unbekannt basis unbekannt lauf $A6_PRUEFER_LAUF ergebnis nicht-pruefbar befunde 0 hinweise 0"
+            echo "A6-FEHLER integritaet"
+            printf '%s\n' '## Vorprüfung Agenten-PR (ohne Claude)' '' 'Ergebnis: nicht-pruefbar. Grund: integritaet. Der Prüfcode ist nicht belegt; es wurde nichts bewertet.' '' 'Dieser Bericht ist keine Freigabe. Über den Merge entscheidet Noah.' > "$ergebnis"
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: Bericht in die Zusammenfassung schreiben
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-PRUEFER::funktionen-hash"; exit 1; }
+          source .github/agent/a6-funktionen.sh
+          datei="$RUNNER_TEMP/a6-pruefer/ergebnis.md"
+          a6_bericht_ziel "${GITHUB_STEP_SUMMARY:-}" || { echo "::warning title=A6-PRUEFER::ziel-ungueltig"; exit 1; }
+          [[ -f "$datei" && ! -L "$datei" && -s "$datei" ]] || { echo "::warning title=A6-PRUEFER::kein-bericht"; exit 1; }
+          head -c 65536 -- "$datei" >> "$GITHUB_STEP_SUMMARY"
+
+  probe_vorpruefung:
+    name: Generalprobe Vorpruefung gegen nachgebautes GitHub
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Repository laden
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Vier Faelle gegen das nachgebaute GitHub
+        env:
+          A6_LESE_TOKEN: probe-ohne-geheimnis-0000000000
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status
+          source .github/agent/a6-funktionen.sh
+          a6_image_laden "$A6_NODE_IMAGE"
+          ordner="$RUNNER_TEMP/a6-pruefer-probe"
+          mkdir -m 700 "$ordner"
+          fehler=0
+          for fall in 45000000001:keine-auffaelligkeiten 45000000002:auffaelligkeiten 45000000003:ausstehend 45000000004:nicht-pruefbar; do
+            export A6_PRUEFER_LAUF="${fall%%:*}"
+            soll="${fall#*:}"
+            ergebnis="$ordner/ergebnis-$A6_PRUEFER_LAUF.md"
+            install -m 600 /dev/null "$ergebnis"
+            zeile="$(docker run --rm --pull=never --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges --pids-limit 64 --memory 512m --cpus 1 \
+              --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777 \
+              --mount "type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE,readonly" \
+              --mount "type=bind,src=$ergebnis,dst=/a6/ergebnis.md" \
+              --workdir "$GITHUB_WORKSPACE" --env PATH=/usr/local/bin:/usr/bin:/bin \
+              --env A6_LESE_TOKEN --env A6_PRUEFER_LAUF --env GITHUB_REPOSITORY \
+              "$A6_NODE_IMAGE" /bin/sh -euc '
+                unset NODE_VERSION YARN_VERSION
+                if env | grep -q "^NODE_"; then echo "A6-START node-umgebung" >&2; exit 3; fi
+                [ "$(node --version)" = "$1" ] || { echo "A6-START node-version" >&2; exit 3; }
+                printf "%s  %s\n" "$2" scripts/agent-code-integritaet.mjs | sha256sum -c --status || { echo "A6-START anker" >&2; exit 4; }
+                node scripts/agent-code-integritaet.mjs || exit 4
+                printf "%s  %s\n" "$3" pruefer-probe/github-attrappe.mjs | sha256sum -c --status || { echo "A6-START anker-attrappe" >&2; exit 3; }
+                exec node --import ./pruefer-probe/github-attrappe.mjs scripts/agent-pruefer-vorpruefung.mjs
+              ' a6 "$A6_NODE_VERSION" "$A6_INTEGRITAET_SHA256" "$A6_PRUEFER_ATTRAPPE_SHA256")" || { echo "::error title=A6-PRUEFER-PROBE::start-$soll"; fehler=1; continue; }
+            printf '%s\n' "$zeile"
+            if [[ ! "$zeile" =~ ^A6-PRUEFER\ repo\ noah04091/agenten-probe\ .*\ lauf\ $A6_PRUEFER_LAUF\ ergebnis\ $soll\ befunde\ [0-9]+\ hinweise\ [0-9]+$ ]]; then
+              echo "::error title=A6-PRUEFER-PROBE::fall-$soll"
+              fehler=1
+            fi
+          done
+          exit "$fehler"
+
+      - name: Berichte in die Zusammenfassung schreiben
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-PRUEFER::funktionen-hash"; exit 1; }
+          source .github/agent/a6-funktionen.sh
+          a6_bericht_ziel "${GITHUB_STEP_SUMMARY:-}" || { echo "::warning title=A6-PRUEFER::ziel-ungueltig"; exit 1; }
+          for datei in "$RUNNER_TEMP"/a6-pruefer-probe/ergebnis-45000000001.md "$RUNNER_TEMP"/a6-pruefer-probe/ergebnis-45000000002.md \
+            "$RUNNER_TEMP"/a6-pruefer-probe/ergebnis-45000000003.md "$RUNNER_TEMP"/a6-pruefer-probe/ergebnis-45000000004.md; do
+            [[ -f "$datei" && ! -L "$datei" && -s "$datei" ]] || { echo "::warning title=A6-PRUEFER::kein-bericht"; continue; }
+            head -c 65536 -- "$datei" >> "$GITHUB_STEP_SUMMARY"
+          done
