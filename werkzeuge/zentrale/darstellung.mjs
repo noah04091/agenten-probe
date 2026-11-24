@@ -174,6 +174,43 @@ function prText(pr) {
   return `${link(pr.url, `#${pr.nummer}`)} ${maskiere(pr.zustand)}${checks ? ` (${checks})` : ''}`;
 }
 
+// B2.1: Vorpruefung zum aktuellen PR-Kopf. Nie ein Wort fuer ein positives Pruefurteil; "keine Auffaelligkeiten" steht
+// immer mit dem Zusatz "keine Freigabe".
+const VORPRUEFUNG_TEXT = Object.freeze({
+  auffaelligkeiten: 'Auffälligkeiten',
+  'keine-auffaelligkeiten': 'keine Auffälligkeiten (keine Freigabe)',
+  ausstehend: 'ausstehend (Pflichtchecks nicht fertig)',
+  'nicht-pruefbar': 'nicht prüfbar',
+});
+
+export function vorpruefungText(pr) {
+  if (pr === null || typeof pr !== 'object') {
+    return 'kein PR';
+  }
+
+  const v = pr.vorpruefung;
+
+  if (v === null || typeof v !== 'object') {
+    return 'nicht ermittelt';
+  }
+
+  if (v.status === 'aktuell' && Object.hasOwn(VORPRUEFUNG_TEXT, v.ergebnis)) {
+    const zahl = x => (Number.isInteger(x) ? x : 'unbekannt');
+    const mehr = Number.isInteger(v.anzahl) && v.anzahl > 1 ? `, ${v.anzahl} Prüfläufe zu diesem Kopf, gezeigt der jüngste` : '';
+    return `${link(v.url, VORPRUEFUNG_TEXT[v.ergebnis])}: Befunde ${zahl(v.befunde)}, Hinweise ${zahl(v.hinweise)}${mehr}`;
+  }
+
+  if (v.status === 'veraltet') {
+    return 'veraltet (geprüft wurde ein älterer Kopf)';
+  }
+
+  if (v.status === 'nicht-geprueft') {
+    return 'nicht geprüft';
+  }
+
+  return `unbekannt (${maskiere(v.grund ?? 'unbekannter Wert')})`;
+}
+
 function laeufe(b, warnungen = []) {
   const teile = [];
 
@@ -183,8 +220,8 @@ function laeufe(b, warnungen = []) {
     const zeilen = b.eintraege.map(l => `<tr><td>${link(l.url, String(l.id))}</td>`
       + `<td>${l.issue ? link(l.issue.url, `#${l.issue.nummer}`) : 'Issue unbekannt'}</td><td>${datumZeit(l.start)}</td>`
       + `${[0, 1, 2, 3].map(n => `<td>${jobText(l.jobs[n])}</td>`).join('')}`
-      + `<td>${fehlerText(l.code)}</td><td>${Number.isFinite(l.kosten) ? dollar(l.kosten) : l.kostenOffen ? 'unbekannt' : 'keine'}</td><td>${prText(l.pr)}</td></tr>`);
-    teile.push(`<table><tr><th>Lauf</th><th>Issue</th><th>Start</th><th>Job 0</th><th>Job 1</th><th>Job 2</th><th>Job 3</th><th>Fehler laut Log</th><th>Kosten</th><th>Draft-PR</th></tr>${zeilen.join('')}</table>`);
+      + `<td>${fehlerText(l.code)}</td><td>${Number.isFinite(l.kosten) ? dollar(l.kosten) : l.kostenOffen ? 'unbekannt' : 'keine'}</td><td>${prText(l.pr)}</td><td>${vorpruefungText(l.pr)}</td></tr>`);
+    teile.push(`<table><tr><th>Lauf</th><th>Issue</th><th>Start</th><th>Job 0</th><th>Job 1</th><th>Job 2</th><th>Job 3</th><th>Fehler laut Log</th><th>Kosten</th><th>Draft-PR</th><th>Vorprüfung</th></tr>${zeilen.join('')}</table>`);
   }
 
   // B1.3c: Laufwarnungen am Lauf (dieselben Saetze wie oben auf der Seite).

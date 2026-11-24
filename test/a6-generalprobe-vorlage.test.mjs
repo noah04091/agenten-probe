@@ -231,6 +231,12 @@ test('Eigentuemer-Entwurf Policy: gegenueber .github/agent/policy.json nur der H
   const BERICHT = 'scripts/agent-code-job-bericht.mjs';
   assert.ok(!Object.hasOwn(entwurf.skript_hashes, BERICHT));
   assert.equal(produktiv.skript_hashes[BERICHT], sha256(readFileSync(join(ROOT, BERICHT))), 'Berichtsskript ohne echten Hash in der Policy');
-  assert.deepEqual(Object.keys(entwurf.skript_hashes), Object.keys(produktiv.skript_hashes).filter(k => k !== BERICHT));
+  // B2.1: dazu genau die beiden Skripte der Vorpruefung, je mit ihrem echten Hash.
+  const PRUEFER = ['scripts/agent-pruefer-gate.mjs', 'scripts/agent-pruefer-vorpruefung.mjs'];
+  for (const k of PRUEFER) {
+    assert.ok(!Object.hasOwn(entwurf.skript_hashes, k));
+    assert.equal(produktiv.skript_hashes[k], sha256(readFileSync(join(ROOT, k))), `${k} ohne echten Hash in der Policy`);
+  }
+  assert.deepEqual(Object.keys(entwurf.skript_hashes), Object.keys(produktiv.skript_hashes).filter(k => k !== BERICHT && !PRUEFER.includes(k)));
   assert.deepEqual({ ...entwurf, skript_hashes: null }, { ...produktiv, skript_hashes: null });
 });

@@ -97,19 +97,19 @@ test('Seiten: vollstaendig nur mit kurzer letzter Seite und passendem total_coun
   assert.ok(aufrufe[1].url.endsWith('per_page=100&page=2'));
 
   ({ l } = leser(() => antwort(200, { total_count: 999, jobs: seite(1, 10) })));
-  r = await l.holeAlleSeiten('/x/y', { feld: 'jobs' });
+  r = await l.holeAlleSeiten('/repos/noah04091/agenten-probe/pulls', { feld: 'jobs' });
   assert.equal(r.vollstaendig, false, 'total_count passt nicht');
 
   ({ l, aufrufe } = leser(() => antwort(200, seite(1, 100))));
-  r = await l.holeAlleSeiten('/x/y');
+  r = await l.holeAlleSeiten('/repos/noah04091/agenten-probe/pulls');
   assert.deepEqual([r.klasse, r.vollstaendig, aufrufe.length, r.daten.length], ['ok', false, MAX_SEITEN, 100 * MAX_SEITEN]);
 
   ({ l } = leser(u => (u.searchParams.get('page') === '1' ? antwort(200, seite(1, 100)) : antwort(500, {}))));
-  assert.equal((await l.holeAlleSeiten('/x/y')).klasse, 'unbekannt', 'Fehler auf Seite 2');
+  assert.equal((await l.holeAlleSeiten('/repos/noah04091/agenten-probe/pulls')).klasse, 'unbekannt', 'Fehler auf Seite 2');
   ({ l } = leser(() => antwort(404, { message: 'Not Found' })));
-  assert.equal((await l.holeAlleSeiten('/x/y')).klasse, 'unbekannt', 'Listen kennen kein fehlt');
+  assert.equal((await l.holeAlleSeiten('/repos/noah04091/agenten-probe/pulls')).klasse, 'unbekannt', 'Listen kennen kein fehlt');
   ({ l } = leser(() => antwort(200, { anders: [] })));
-  assert.equal((await l.holeAlleSeiten('/x/y', { feld: 'jobs' })).klasse, 'unbekannt');
+  assert.equal((await l.holeAlleSeiten('/repos/noah04091/agenten-probe/pulls', { feld: 'jobs' })).klasse, 'unbekannt');
 });
 
 test('Logs: 302 nur auf productionresultssa<n>.blob.core.windows.net per HTTPS, Download ohne Token', async () => {
@@ -154,7 +154,7 @@ test('Der Token-Wert steht in keinem Ergebnis und keiner Meldung', async () => {
 
   for (const r of [antwort(401, { message: TOKEN }), antwort(500, TOKEN), new Error(TOKEN), antwort(404, { message: TOKEN })]) {
     const { l } = leser(() => r);
-    ergebnisse.push(await l.holeJson('/x'), await l.holeLog(1));
+    ergebnisse.push(await l.holeJson('/repos/noah04091/agenten-probe/issues'), await l.holeLog(1));
   }
 
   assert.ok(!JSON.stringify(ergebnisse).includes(TOKEN));

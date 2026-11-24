@@ -18,8 +18,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
-  REPO, freigabenAus, fristenAusJson, fristenModell, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, laufwarnungen, monatsKosten, offeneAuftraege, pflichtchecks,
-  prZuLauf, restMinuten, startfreigaben, wartenderJob,
+  PRUEFER_ERGEBNISSE, PRUEFER_JOB, REPO, freigabenAus, fristenAusJson, fristenModell, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, laufwarnungen, monatsKosten,
+  offeneAuftraege, pflichtchecks, prZuLauf, prueferZeile, restMinuten, startfreigaben, vorpruefungFuerPr, wartenderJob,
 } from './daten.mjs';
 import { geheimnisTreffer, notseite, seite } from './darstellung.mjs';
 import { erzeugeLeser } from './github-lesen.mjs';
@@ -43,7 +43,53 @@ const ZEIT_MIN = Date.UTC(2000, 0, 1);
 const ZEIT_MAX = Date.UTC(2200, 0, 1);
 const zeitpunkt = x => Number.isInteger(x) && x >= ZEIT_MIN && x < ZEIT_MAX;
 
+// B2.1: eine Ergebniszeile aus prueferZeile; positiv gilt sie nur mit erfolg (Lauf und Pruefjob success).
+const istZeile = z => typeof z === 'object' && z !== null && PRUEFER_ERGEBNISSE.includes(z.ergebnis);
+const istErfolg = z => istZeile(z) && z.erfolg === true;
+// Fehlgeschlagener Pruefer-Lauf: nur die Zuordnung (PR und Kopf), nie ein Ergebnis.
+const fehlgeschlagen = z => ({ fehlgeschlagen: true, pr: z?.pr ?? null, kopf: z?.kopf ?? null });
+
+// B2.1 Zusatz: laufender Wiederholungsversuch eines Pruefer-Laufs. Die Zuordnung (PR und Kopf) stammt nur aus einem
+// frueheren Versuch desselben Laufs im Cache und nur aus einem Eintrag, der die strenge Pruefung von prueferEintrag
+// besteht und PR und Kopf traegt; sonst gilt der Lauf als ohne Zuordnung. Ein Ergebnis traegt er nie.
+function wiederholung(vp, id, versuch) {
+  for (let k = versuch - 1; k >= 1; k -= 1) {
+    const e = prueferEintrag(vp?.[`${id}-${k}`]);
+
+    if (typeof e === 'object' && e !== null && Number.isInteger(e.pr) && typeof e.kopf === 'string') {
+      return { wiederholt: true, pr: e.pr, kopf: e.kopf };
+    }
+  }
+
+  return { wiederholt: true, pr: null, kopf: null };
+}
+
+// B2.1: Eintrag eines Pruefer-Laufs im Cache, nur in drei Formen: 'keine' oder 'ungueltig'; ein Ergebnis eines
+// erfolgreichen Laufs mit genau den fuenf Feldern aus prueferZeile und erfolg: true; ein fehlgeschlagener Lauf mit genau
+// fehlgeschlagen, pr und kopf. Alles andere (auch Eintraege ohne erfolg aus aelteren Staenden) wird verworfen.
+function prueferEintrag(w) {
+  if (w === 'keine' || w === 'ungueltig') {
+    return w;
+  }
+
+  if (typeof w !== 'object' || w === null || Array.isArray(w)) {
+    return undefined;
+  }
+
+  const zahl = x => Number.isInteger(x) && x >= 0 && x < 10000;
+  const zuordnung = (w.pr === null || (Number.isInteger(w.pr) && w.pr > 0 && w.pr < 1e8)) && (w.kopf === null || (typeof w.kopf === 'string' && /^[0-9a-f]{40}$/.test(w.kopf)));
+
+  if (Object.keys(w).length === 3 && w.fehlgeschlagen === true && zuordnung) {
+    return { fehlgeschlagen: true, pr: w.pr, kopf: w.kopf };
+  }
+
+  const ok = Object.keys(w).length === 6 && w.erfolg === true && zuordnung && PRUEFER_ERGEBNISSE.includes(w.ergebnis) && zahl(w.befunde) && zahl(w.hinweise);
+  return ok ? { pr: w.pr, kopf: w.kopf, ergebnis: w.ergebnis, befunde: w.befunde, hinweise: w.hinweise, erfolg: true } : undefined;
+}
+
 // Cache: nur { jobId: { code, runden, kosten } } mit festen Formen; alles andere wird verworfen.
+// B2.1: dazu genau ein festes Feld vorpruefung: { "<laufId>-<versuch>": prueferEintrag } fuer abgeschlossene
+// Versuche von Prueflaeufen. Schluessel ohne Versuch (aeltere Staende) werden verworfen.
 // B1.3: dazu genau ein festes Feld leseTokenAblauf: { ablauf, gemeldetAm } (beides Millisekunden), das zuletzt von
 // GitHub gemeldete Ablaufdatum des Lese-Tokens. Nur das Datum, nie ein Tokenwert. Alte Cache-Dateien ohne das Feld
 // laden weiter; jede andere Form des Felds wird verworfen.
@@ -58,6 +104,22 @@ export function cacheBereinigt(roh) {
 
   if (typeof lt === 'object' && lt !== null && !Array.isArray(lt) && Object.keys(lt).length === 2 && zeitpunkt(lt.ablauf) && zeitpunkt(lt.gemeldetAm)) {
     sauber.leseTokenAblauf = { ablauf: lt.ablauf, gemeldetAm: lt.gemeldetAm };
+  }
+
+  const vp = roh.vorpruefung;
+
+  if (typeof vp === 'object' && vp !== null && !Array.isArray(vp)) {
+    const v = {};
+
+    for (const [id, w] of Object.entries(vp).slice(0, 5000)) {
+      const e = /^\d{1,16}-\d{1,3}$/.test(id) ? prueferEintrag(w) : undefined;
+
+      if (e !== undefined) {
+        v[id] = e;
+      }
+    }
+
+    sauber.vorpruefung = v;
   }
 
   for (const [id, w] of Object.entries(roh).slice(0, 5000)) {
@@ -75,6 +137,111 @@ export function cacheBereinigt(roh) {
   }
 
   return sauber;
+}
+
+// B2.1: abgeschlossene Laeufe des Pruefers (workflow_run, workflow_dispatch). Je Lauf genau der Job "Vorpruefung
+// Agenten-PR" und daraus nur die Zeile A6-PRUEFER. Ein laufender Pruefer hat noch keine Zeile und zaehlt nicht. Das
+// Ergebnis steht je Lauf im Cache; ein nicht lesbares Log (zeile null) wird nicht gespeichert.
+async function vorpruefungen(leser, seit, cache) {
+  const runs = await leser.holeAlleSeiten(`${R}/actions/workflows/agent-pruefer.yml/runs?per_page=100&created=%3E%3D${seit}`, { feld: 'workflow_runs' });
+
+  // 404 mit "Not Found" (holeAlleSeiten: Grund "HTTP 404") heisst: der Workflow ist auf GitHub nicht eingerichtet. Dann
+  // gibt es belegt keinen Pruefer-Lauf ("nicht geprueft"); jeder andere Fehler bleibt "unbekannt".
+  if (runs.klasse !== 'ok') {
+    return runs.grund === 'HTTP 404' ? { liste: [], vollstaendig: true } : { liste: null, vollstaendig: false };
+  }
+
+  cache.vorpruefung = { ...(cache.vorpruefung ?? {}) };
+  const liste = [];
+
+  for (const r of runs.daten) {
+    if (typeof r !== 'object' || r === null || !Number.isInteger(r.id) || r.id <= 0 || !['workflow_run', 'workflow_dispatch'].includes(r.event)) {
+      continue;
+    }
+
+    const versuch = Number.isInteger(r.run_attempt) && r.run_attempt >= 1 && r.run_attempt < 1000 ? r.run_attempt : null;
+    const laeuft = r.status !== 'completed';
+
+    // Ein laufender erster Versuch hat noch keine Zeile und zaehlt nicht (wie bisher).
+    if (laeuft && versuch === 1) {
+      continue;
+    }
+
+    // B2.1 Zusatz: Reihenfolge nach dem Beginn des aktuellen Versuchs (run_started_at), nicht nach created_at. Ein
+    // Wiederholungsversuch ohne gueltigen Beginn gilt als juengster, damit kein aelteres Ergebnis wieder vorn steht.
+    const erstellt = zeitpunkt(Date.parse(r.created_at)) ? Date.parse(r.created_at) : null;
+    const begonnen = zeitpunkt(Date.parse(r.run_started_at)) ? Date.parse(r.run_started_at) : null;
+    const start = versuch === 1 ? (begonnen ?? erstellt) : (begonnen ?? Number.MAX_SAFE_INTEGER);
+    const basis = { laufId: r.id, url: typeof r.html_url === 'string' ? r.html_url : null, start };
+
+    if (versuch === null) {
+      // Ohne gueltige Versuchsnummer ist der Lauf nicht sicher einzuordnen.
+      liste.push({ ...basis, zeile: null });
+      continue;
+    }
+
+    if (laeuft) {
+      // B2.1 Zusatz: laufende Wiederholung. Ihr frueheres Ergebnis gilt nicht mehr; nur eine gespeicherte Zuordnung
+      // desselben Laufs aus einem frueheren Versuch (gepruefte Cache-Form) darf die Reihenfolge bestimmen.
+      liste.push({ ...basis, zeile: wiederholung(cache.vorpruefung, r.id, versuch) });
+      continue;
+    }
+
+    // Ein uebersprungener Lauf hat keine Ergebniszeile.
+    if (r.conclusion === 'skipped') {
+      liste.push({ ...basis, zeile: 'keine' });
+      continue;
+    }
+
+    const laufOk = r.conclusion === 'success';
+    const schluessel = `${r.id}-${versuch}`;
+    // Nur ein Eintrag in gepruefter Form; alles andere wird neu gelesen.
+    const alt = prueferEintrag(cache.vorpruefung[schluessel]);
+
+    if (alt !== undefined) {
+      // Auch aus dem Cache: ein positives Ergebnis nur bei erfolgreichem Lauf; sonst nur noch die Zuordnung.
+      liste.push({ ...basis, zeile: istErfolg(alt) && !laufOk ? fehlgeschlagen(alt) : alt });
+      continue;
+    }
+
+    const jr = await leser.holeAlleSeiten(`${R}/actions/runs/${r.id}/jobs?per_page=100`, { feld: 'jobs' });
+    const jobs = jr.klasse === 'ok' && jr.vollstaendig === true && Array.isArray(jr.daten) ? jr.daten.filter(j => j && j.name === PRUEFER_JOB) : null;
+    let zeile = null;
+
+    if (jobs !== null && jobs.length === 1 && Number.isInteger(jobs[0].id)) {
+      if (jobs[0].conclusion === 'skipped') {
+        zeile = 'keine';
+      } else {
+        const log = await leser.holeLog(jobs[0].id);
+        const gelesen = log.klasse === 'ok' ? prueferZeile(log.text) : null;
+
+        if (laufOk && jobs[0].conclusion === 'success') {
+          zeile = gelesen === null ? null : istZeile(gelesen) ? { ...gelesen, erfolg: true } : gelesen;
+        } else {
+          // B2.1 Nachbesserung: Lauf oder Job nicht erfolgreich (failure, cancelled, timed_out, neutral, stale,
+          // action_required, null, unbekannt). Die Zeile dient hoechstens der Zuordnung, nie ihr Ergebnis. Ein nicht
+          // lesbares Log ergibt einen fehlgeschlagenen Lauf ohne Zuordnung, der nicht gecacht wird.
+          zeile = fehlgeschlagen(istZeile(gelesen) ? gelesen : null);
+
+          if (gelesen === null) {
+            liste.push({ ...basis, zeile });
+            continue;
+          }
+        }
+      }
+    } else if (!laufOk && jr.klasse === 'ok' && jr.vollstaendig === true) {
+      // Fehlgeschlagener Lauf ohne eindeutigen Pruefjob: fehlgeschlagen, ohne Zuordnung.
+      zeile = fehlgeschlagen(null);
+    }
+
+    if (zeile !== null) {
+      cache.vorpruefung[schluessel] = zeile;
+    }
+
+    liste.push({ ...basis, zeile });
+  }
+
+  return { liste, vollstaendig: runs.vollstaendig === true };
 }
 
 function seitDatum(jetzt) {
@@ -150,6 +317,7 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
 
     teil ||= !kandidatenVollstaendig;
     const pulls = await leser.holeAlleSeiten(`${R}/pulls?state=all&per_page=100`);
+    const vp = await vorpruefungen(leser, seit, neuerCache);
     const pullsVollstaendig = pulls.klasse === 'ok' && pulls.vollstaendig === true;
     const freigaben = [];
     const eintraege = [];
@@ -207,7 +375,9 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
         if (p !== null && typeof p === 'object') {
           const cr = p.sha ? await leser.holeAlleSeiten(`${R}/commits/${p.sha}/check-runs?per_page=100`, { feld: 'check_runs' }) : { klasse: 'unbekannt' };
           pr = { ...p, checks: cr.klasse === 'ok' ? pflichtchecks(cr.daten, cr.vollstaendig === true) : [{ name: 'Pflichtchecks', ergebnis: 'unbekannt' }] };
-          teil ||= cr.klasse !== 'ok' || cr.vollstaendig !== true;
+          // B2.1: Vorpruefung nur zum aktuellen Kopf, sonst veraltet oder nicht geprueft.
+          pr.vorpruefung = vorpruefungFuerPr(pr, vp.liste, vp.vollstaendig);
+          teil ||= cr.klasse !== 'ok' || cr.vollstaendig !== true || pr.vorpruefung?.status === 'unbekannt';
         } else {
           pr = p;
           teil ||= p !== null;

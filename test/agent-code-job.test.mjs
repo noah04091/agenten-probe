@@ -1604,6 +1604,9 @@ test('Laufzeit: ohne import.meta.main endet jeder Start mit job-umgebung-fehlt; 
 // B1.2: neuer Stand mit den Berichtsschritten. Ohne sie ist er byte-gleich mit dem bisherigen Stand
 // d5bb6eaa3d16e2bd964c2466b8c2befa343c751703d0c8961d0b7026700eb20f (Ausschneide-Probe in a6-auftrag-workflow.test.mjs).
 const A6_WORKFLOW_SHA256 = '1136d41a25c18ba06fb32fcfc591b5e20a0cf52d0fcf92f65c9c872a1d38133d';
+// B2.1: kontrollierte Ausnahme genau fuer agent-pruefer.yml mit genau diesem SHA-256 (Zeilenenden LF). Auch er
+// verweist auf keinen Job-Einstieg; jede andere Fassung ist rot.
+const A6_PRUEFER_WORKFLOW_SHA256 = '80dbc2cdfbe356531332ebfcf72185bc5bbcdc4368ffd52e13564fe7fd8fc493';
 
 test('Wache: ausser dem genehmigten agent-auftrag.yml ruft kein Workflow die Job-Einstiege auf; genau diese fuenf Einstiege, die Hilfsdatei und das Berichtsskript (B1.2), keine weitere Jobdatei', () => {
   const workflows = join(ROOT, '.github', 'workflows');
@@ -1614,6 +1617,10 @@ test('Wache: ausser dem genehmigten agent-auftrag.yml ruft kein Workflow die Job
 
   if (files.includes('agent-auftrag.yml')) {
     assert.equal(sha256(Buffer.from(text('agent-auftrag.yml'), 'utf8')), A6_WORKFLOW_SHA256, 'agent-auftrag.yml ist nicht der genehmigte Stand');
+  }
+
+  if (files.includes('agent-pruefer.yml')) {
+    assert.equal(sha256(Buffer.from(text('agent-pruefer.yml'), 'utf8')), A6_PRUEFER_WORKFLOW_SHA256, 'agent-pruefer.yml ist nicht der genehmigte Stand');
   }
 
   const genehmigt = name => name === 'agent-auftrag.yml';

@@ -622,3 +622,100 @@ export function laufwarnungen({ laeufe, laeufeVollstaendig, pulls, pullsVollstae
 
   return w;
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// B2.1 Vorpruefung: Logzeile des Pruefers und Zuordnung zum PR-Kopf
+// ---------------------------------------------------------------------------------------------------------------
+
+export const PRUEFER_WORKFLOW = 'agent-pruefer.yml';
+export const PRUEFER_JOB = 'Vorpruefung Agenten-PR';
+export const PRUEFER_ERGEBNISSE = Object.freeze(['auffaelligkeiten', 'keine-auffaelligkeiten', 'ausstehend', 'nicht-pruefbar']);
+const PRUEFER_ZEITSTEMPEL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z /;
+const PRUEFER_ZEILE = /^A6-PRUEFER repo noah04091\/agenten-probe pr ([1-9]\d{0,7}|unbekannt) kopf ([0-9a-f]{40}|unbekannt) basis ([0-9a-f]{40}|unbekannt) lauf ([1-9]\d{0,15}|unbekannt) ergebnis ([a-z-]{1,40}) befunde (\d{1,4}) hinweise (\d{1,4})$/;
+
+// Aus einem Job-Log nur die eine Zeile A6-PRUEFER. Ergebnis: Objekt, 'keine' (keine Zeile) oder 'ungueltig' (Zeile
+// in anderer Form, unbekannter Ergebniswert oder mehr als eine Zeile). Kein anderer Text verlaesst diese Funktion.
+export function prueferZeile(text) {
+  if (typeof text !== 'string' || text.length > 16 * 1024 * 1024) {
+    return 'ungueltig';
+  }
+
+  const kandidaten = text.replace(/^\uFEFF/, '').split('\n')
+    .map(z => z.replace(/\r$/, '').replace(PRUEFER_ZEITSTEMPEL, ''))
+    .filter(z => z.startsWith('A6-PRUEFER '));
+
+  if (kandidaten.length === 0) {
+    return 'keine';
+  }
+
+  const m = kandidaten.length === 1 ? PRUEFER_ZEILE.exec(kandidaten[0]) : null;
+
+  if (!m || !PRUEFER_ERGEBNISSE.includes(m[5])) {
+    // Auch "kein Agenten-Auftrag" (quelle-kein-auftrag) ist keine Ergebniszeile; sie gehoert zu keinem PR.
+    return kandidaten.length === 1 && /^A6-PRUEFER kein Agenten-Auftrag lauf ([1-9]\d{0,15}|unbekannt) code quelle-kein-auftrag$/.test(kandidaten[0]) ? 'keine' : 'ungueltig';
+  }
+
+  const zahl = x => (x === 'unbekannt' ? null : Number(x));
+  return Object.freeze({
+    pr: zahl(m[1]), kopf: m[2] === 'unbekannt' ? null : m[2], ergebnis: m[5], befunde: Number(m[6]), hinweise: Number(m[7]),
+  });
+}
+
+// Vorpruefung zu einem PR. pruefungen: [{ laufId, url, start, zeile }]. zeile ist 'keine', 'ungueltig', null (Log nicht
+// lesbar), ein Ergebnis eines erfolgreichen Laufs (erfolg: true) oder ein fehlgeschlagener Lauf ({ fehlgeschlagen, pr,
+// kopf }, nur Zuordnung). Massgeblich ist der juengste eindeutig zugeordnete Lauf zum aktuellen Kopf (Startzeit, dann
+// Lauf-ID). Ist er fehlgeschlagen: "unbekannt (Prüflauf fehlgeschlagen)", nie ein aelteres positives Ergebnis. Ein
+// fehlgeschlagener Lauf ohne Zuordnung, der juenger ist als das gezeigte Ergebnis, macht es ebenfalls unbekannt. Ein
+// Ergebnis gilt nur mit erfolg: true. Unvollstaendige Laufliste oder ein nicht lesbares Log: unbekannt, nie "nicht
+// geprueft".
+export function vorpruefungFuerPr(pr, pruefungen, vollstaendig) {
+  if (!istObjekt(pr) || !Number.isInteger(pr.nummer)) {
+    return null;
+  }
+
+  if (!Array.isArray(pruefungen) || vollstaendig !== true) {
+    return { status: 'unbekannt', grund: 'Prüfläufe nicht vollständig lesbar' };
+  }
+
+  const offen = pruefungen.some(p => p.zeile === null || p.zeile === 'ungueltig');
+
+  if (offen) {
+    return { status: 'unbekannt', grund: 'Log eines Prüflaufs nicht lesbar oder ungültig' };
+  }
+
+  const neuerZuerst = (a, b) => ((b.start ?? 0) - (a.start ?? 0)) || ((b.laufId ?? 0) - (a.laufId ?? 0));
+  const zugeordnet = p => istObjekt(p.zeile) && Number.isInteger(p.zeile.pr) && typeof p.zeile.kopf === 'string';
+  // B2.1 Zusatz: eine laufende Wiederholung ({ wiederholt, pr, kopf }) zaehlt fuer die Reihenfolge, traegt aber nie
+  // ein Ergebnis; ohne gespeicherte Zuordnung gilt sie wie ein fehlgeschlagener Lauf ohne Zuordnung.
+  const ohneErgebnis = p => p.zeile.fehlgeschlagen === true || p.zeile.wiederholt === true;
+  const ohneZuordnung = pruefungen.filter(p => istObjekt(p.zeile) && ohneErgebnis(p) && !zugeordnet(p)).sort(neuerZuerst);
+  const zuPr = pruefungen.filter(p => zugeordnet(p) && p.zeile.pr === pr.nummer);
+  const gleich = zuPr.filter(p => typeof pr.sha === 'string' && p.zeile.kopf === pr.sha).sort(neuerZuerst);
+  const fehlerOhneZuordnung = () => ({
+    status: 'unbekannt', grund: ohneZuordnung[0].zeile.wiederholt === true ? 'Prüflauf wird wiederholt, Zuordnung unbekannt' : 'Prüflauf fehlgeschlagen, Zuordnung unbekannt',
+  });
+
+  if (gleich.length > 0) {
+    const j = gleich[0];
+
+    if (ohneZuordnung.length > 0 && neuerZuerst(ohneZuordnung[0], j) < 0) {
+      return fehlerOhneZuordnung();
+    }
+
+    if (j.zeile.wiederholt === true) {
+      return { status: 'unbekannt', grund: 'Prüflauf wird wiederholt' };
+    }
+
+    if (j.zeile.erfolg !== true) {
+      return { status: 'unbekannt', grund: 'Prüflauf fehlgeschlagen' };
+    }
+
+    return { status: 'aktuell', ergebnis: j.zeile.ergebnis, befunde: j.zeile.befunde, hinweise: j.zeile.hinweise, url: j.url, anzahl: gleich.length };
+  }
+
+  if (ohneZuordnung.length > 0) {
+    return fehlerOhneZuordnung();
+  }
+
+  return zuPr.length > 0 ? { status: 'veraltet', anzahl: zuPr.length } : { status: 'nicht-geprueft' };
+}
