@@ -1712,3 +1712,62 @@ test('B1.3c P2 (10a): kein Text der Seite behauptet einen Vergleich von main mit
   // Gegenprobe: die Wache erkennt einen solchen Satz.
   assert.ok(VERBOTEN.test('Lauf 1: main weicht vom Ausgangscommit ab.'));
 });
+
+// B1.3c Nachbesserung (Befund ChatGPT, bestaetigt von T1).
+test('B1.3c P2 (10b): merged_at zaehlt nur bei geschlossenem PR; offen oder unbekannter Zustand mit merged_at: nicht pruefbar', async () => {
+  const spaet = '2026-11-21T10:05:00Z';
+
+  for (const state of ['open', 'seltsam', undefined, null]) {
+    const r = await lw(mitPulls(pr(120, { state, merged_at: spaet })));
+    nichtPruefbar(r, 'PRs nicht vollständig lesbar', String(state));
+    assert.ok(!r.eintraege.some(e => e.art === 'gemergt' || e.art === 'offen'), String(state));
+    assert.ok(!r.banner.includes('gemergt') && !r.amLauf.some(t => t.includes('gemergt')), String(state));
+  }
+
+  // Gegenprobe: geschlossen mit gueltigem merged_at bleibt gemergt.
+  const zu = await lw(mitPulls(pr(120, { state: 'closed', merged_at: spaet })));
+  assert.deepEqual(zu.eintraege, [{ art: 'gemergt', laufId: LW_LAUF, issue: 90, prs: [120] }]);
+});
+
+test('B1.3c (Gesamtablauf): Laufliste gelesen, aber unvollstaendig (total_count groesser): "Laufliste unvollständig"', async () => {
+  const unvollstaendig = (p, u) => {
+    if (p !== RUNS || u.searchParams.get('event') !== 'issues') {
+      return null;
+    }
+
+    const w = api('runs').workflow_runs;
+    return antwort(200, { total_count: w.length + 5, workflow_runs: (u.searchParams.get('page') ?? '1') === '1' ? w : [] });
+  };
+  const r = await lw(unvollstaendig);
+  assert.equal(r.eintraege[0]?.art, 'nicht-pruefbar');
+  nichtPruefbar(r, 'Laufliste unvollständig', 'runs');
+  assert.ok(r.banner.includes('Laufwarnungen nicht prüfbar (Laufliste unvollständig).'));
+  // Gegenprobe: dieselbe Liste mit passendem total_count ergibt keine Laufwarnung.
+  assert.deepEqual((await lw(laufAendern(x => x))).eintraege, []);
+});
+
+test('B1.3c (Gesamtablauf): PR-Liste gelesen, aber unvollstaendig (Seitengrenze erreicht): nicht pruefbar, keine Merge-Aussage', async () => {
+  // Jede Seite voll (100 PRs): holeAlleSeiten liefert klasse ok mit vollstaendig false. Auf Seite 1 ein Merge nach dem
+  // Laufstart und ein offener PR nach main.
+  const seitenAbrufe = [];
+  const voll = (p, u) => {
+    if (p !== `${P}/pulls`) {
+      return null;
+    }
+
+    const s = Number(u.searchParams.get('page') ?? '1');
+    seitenAbrufe.push(s);
+    const liste = Array.from({ length: 100 }, (_, i) => pr(1000 * s + i, { state: 'closed' }));
+    if (s === 1) {
+      liste[0] = pr(120, { state: 'closed', merged_at: '2026-11-21T10:05:00Z' });
+      liste[1] = pr(121);
+    }
+
+    return antwort(200, liste);
+  };
+  const r = await lw(voll);
+  assert.equal(Math.max(...seitenAbrufe), 10, 'Muss-Treffer: Seitengrenze erreicht');
+  nichtPruefbar(r, 'PRs nicht vollständig lesbar', 'pulls');
+  assert.ok(!r.eintraege.some(e => e.art === 'gemergt' || e.art === 'offen'));
+  assert.ok(!r.banner.includes('gemergt') && !r.banner.includes('Offene PRs'));
+});

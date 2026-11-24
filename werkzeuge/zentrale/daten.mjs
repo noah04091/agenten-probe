@@ -500,7 +500,8 @@ export function labelAenderungen(ereignisse, start) {
 }
 
 // P2: PRs mit Basis main. { ok: false }, wenn die Liste fehlt oder unvollstaendig ist oder ein PR keine verlaessliche
-// Basis, Nummer, keinen verlaesslichen Zustand oder kein verlaessliches merged_at hat (null oder gueltige Zeit).
+// Basis, Nummer, keinen verlaesslichen Zustand oder kein verlaessliches merged_at hat (null oder gueltige Zeit, nicht
+// null nur bei Zustand closed).
 // Sonst { ok: true, offen: [Nummern], gemergt: [{ nummer, zeit }] }.
 export function prsNachMain(pulls, vollstaendig) {
   if (!Array.isArray(pulls) || vollstaendig !== true) {
@@ -520,9 +521,11 @@ export function prsNachMain(pulls, vollstaendig) {
     }
 
     if (p.merged_at !== null) {
+      // Gemergt nur geschlossen und mit gueltiger Zeit; ein offener oder unbekannter Zustand mit merged_at widerspricht
+      // sich und ist nicht pruefbar.
       const ms = strengeZeit(p.merged_at);
 
-      if (ms === null) {
+      if (ms === null || p.state !== 'closed') {
         return { ok: false };
       }
 
