@@ -886,6 +886,10 @@ B4 Fehlerbehandlung und Neustart per Label, begrenzte Versuche · B5 Kosten: Kon
 Budget je Lauf, Monatsauswertung · B6 längere Läufe, Nachtbetrieb erst nach B4 und B5 ·
 B7 Übertrag auf ein echtes Projekt mit eigener App und eigenem Environment, nur nach Noahs Freigabe.
 
+| Baustein | Stand | Ort |
+|---|---|---|
+| B2.3a Freigabeschranke ohne KI-Aufruf (`agent-pruefer-ki.yml`, Environment `claude-pruefer`) | gebaut, nicht aktiv: offline getestet, keine Live-Probe, kein Schlüssel, kein KI-Aufruf | `docs/agent-auftrag-betrieb.md` Abschnitt 9 |
+
 ## 9. Fertig ist es, wenn
 
 **Ziel A:** drei verschiedene Code-Aufträge echt bis zum Draft-PR mit grüner CI, drei Negativfälle
