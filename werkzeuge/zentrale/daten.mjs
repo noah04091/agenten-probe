@@ -685,16 +685,25 @@ export function vorpruefungFuerPr(pr, pruefungen, vollstaendig) {
 
   const neuerZuerst = (a, b) => ((b.start ?? 0) - (a.start ?? 0)) || ((b.laufId ?? 0) - (a.laufId ?? 0));
   const zugeordnet = p => istObjekt(p.zeile) && Number.isInteger(p.zeile.pr) && typeof p.zeile.kopf === 'string';
-  const ohneZuordnung = pruefungen.filter(p => istObjekt(p.zeile) && p.zeile.fehlgeschlagen === true && !zugeordnet(p)).sort(neuerZuerst);
+  // B2.1 Zusatz: eine laufende Wiederholung ({ wiederholt, pr, kopf }) zaehlt fuer die Reihenfolge, traegt aber nie
+  // ein Ergebnis; ohne gespeicherte Zuordnung gilt sie wie ein fehlgeschlagener Lauf ohne Zuordnung.
+  const ohneErgebnis = p => p.zeile.fehlgeschlagen === true || p.zeile.wiederholt === true;
+  const ohneZuordnung = pruefungen.filter(p => istObjekt(p.zeile) && ohneErgebnis(p) && !zugeordnet(p)).sort(neuerZuerst);
   const zuPr = pruefungen.filter(p => zugeordnet(p) && p.zeile.pr === pr.nummer);
   const gleich = zuPr.filter(p => typeof pr.sha === 'string' && p.zeile.kopf === pr.sha).sort(neuerZuerst);
-  const fehlerOhneZuordnung = { status: 'unbekannt', grund: 'Prüflauf fehlgeschlagen, Zuordnung unbekannt' };
+  const fehlerOhneZuordnung = () => ({
+    status: 'unbekannt', grund: ohneZuordnung[0].zeile.wiederholt === true ? 'Prüflauf wird wiederholt, Zuordnung unbekannt' : 'Prüflauf fehlgeschlagen, Zuordnung unbekannt',
+  });
 
   if (gleich.length > 0) {
     const j = gleich[0];
 
     if (ohneZuordnung.length > 0 && neuerZuerst(ohneZuordnung[0], j) < 0) {
-      return fehlerOhneZuordnung;
+      return fehlerOhneZuordnung();
+    }
+
+    if (j.zeile.wiederholt === true) {
+      return { status: 'unbekannt', grund: 'Prüflauf wird wiederholt' };
     }
 
     if (j.zeile.erfolg !== true) {
@@ -705,7 +714,7 @@ export function vorpruefungFuerPr(pr, pruefungen, vollstaendig) {
   }
 
   if (ohneZuordnung.length > 0) {
-    return fehlerOhneZuordnung;
+    return fehlerOhneZuordnung();
   }
 
   return zuPr.length > 0 ? { status: 'veraltet', anzahl: zuPr.length } : { status: 'nicht-geprueft' };

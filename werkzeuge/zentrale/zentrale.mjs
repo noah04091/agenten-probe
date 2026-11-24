@@ -49,6 +49,21 @@ const istErfolg = z => istZeile(z) && z.erfolg === true;
 // Fehlgeschlagener Pruefer-Lauf: nur die Zuordnung (PR und Kopf), nie ein Ergebnis.
 const fehlgeschlagen = z => ({ fehlgeschlagen: true, pr: z?.pr ?? null, kopf: z?.kopf ?? null });
 
+// B2.1 Zusatz: laufender Wiederholungsversuch eines Pruefer-Laufs. Die Zuordnung (PR und Kopf) stammt nur aus einem
+// frueheren Versuch desselben Laufs im Cache und nur aus einem Eintrag, der die strenge Pruefung von prueferEintrag
+// besteht und PR und Kopf traegt; sonst gilt der Lauf als ohne Zuordnung. Ein Ergebnis traegt er nie.
+function wiederholung(vp, id, versuch) {
+  for (let k = versuch - 1; k >= 1; k -= 1) {
+    const e = prueferEintrag(vp?.[`${id}-${k}`]);
+
+    if (typeof e === 'object' && e !== null && Number.isInteger(e.pr) && typeof e.kopf === 'string') {
+      return { wiederholt: true, pr: e.pr, kopf: e.kopf };
+    }
+  }
+
+  return { wiederholt: true, pr: null, kopf: null };
+}
+
 // B2.1: Eintrag eines Pruefer-Laufs im Cache, nur in drei Formen: 'keine' oder 'ungueltig'; ein Ergebnis eines
 // erfolgreichen Laufs mit genau den fuenf Feldern aus prueferZeile und erfolg: true; ein fehlgeschlagener Lauf mit genau
 // fehlgeschlagen, pr und kopf. Alles andere (auch Eintraege ohne erfolg aus aelteren Staenden) wird verworfen.
@@ -73,7 +88,8 @@ function prueferEintrag(w) {
 }
 
 // Cache: nur { jobId: { code, runden, kosten } } mit festen Formen; alles andere wird verworfen.
-// B2.1: dazu genau ein festes Feld vorpruefung: { laufId: prueferEintrag } fuer abgeschlossene Pruefläufe.
+// B2.1: dazu genau ein festes Feld vorpruefung: { "<laufId>-<versuch>": prueferEintrag } fuer abgeschlossene
+// Versuche von Prueflaeufen. Schluessel ohne Versuch (aeltere Staende) werden verworfen.
 // B1.3: dazu genau ein festes Feld leseTokenAblauf: { ablauf, gemeldetAm } (beides Millisekunden), das zuletzt von
 // GitHub gemeldete Ablaufdatum des Lese-Tokens. Nur das Datum, nie ein Tokenwert. Alte Cache-Dateien ohne das Feld
 // laden weiter; jede andere Form des Felds wird verworfen.
@@ -96,7 +112,7 @@ export function cacheBereinigt(roh) {
     const v = {};
 
     for (const [id, w] of Object.entries(vp).slice(0, 5000)) {
-      const e = /^\d{1,16}$/.test(id) ? prueferEintrag(w) : undefined;
+      const e = /^\d{1,16}-\d{1,3}$/.test(id) ? prueferEintrag(w) : undefined;
 
       if (e !== undefined) {
         v[id] = e;
@@ -139,11 +155,37 @@ async function vorpruefungen(leser, seit, cache) {
   const liste = [];
 
   for (const r of runs.daten) {
-    if (typeof r !== 'object' || r === null || !Number.isInteger(r.id) || r.id <= 0 || !['workflow_run', 'workflow_dispatch'].includes(r.event) || r.status !== 'completed') {
+    if (typeof r !== 'object' || r === null || !Number.isInteger(r.id) || r.id <= 0 || !['workflow_run', 'workflow_dispatch'].includes(r.event)) {
       continue;
     }
 
-    const basis = { laufId: r.id, url: typeof r.html_url === 'string' ? r.html_url : null, start: Number.isFinite(Date.parse(r.created_at)) ? Date.parse(r.created_at) : null };
+    const versuch = Number.isInteger(r.run_attempt) && r.run_attempt >= 1 && r.run_attempt < 1000 ? r.run_attempt : null;
+    const laeuft = r.status !== 'completed';
+
+    // Ein laufender erster Versuch hat noch keine Zeile und zaehlt nicht (wie bisher).
+    if (laeuft && versuch === 1) {
+      continue;
+    }
+
+    // B2.1 Zusatz: Reihenfolge nach dem Beginn des aktuellen Versuchs (run_started_at), nicht nach created_at. Ein
+    // Wiederholungsversuch ohne gueltigen Beginn gilt als juengster, damit kein aelteres Ergebnis wieder vorn steht.
+    const erstellt = zeitpunkt(Date.parse(r.created_at)) ? Date.parse(r.created_at) : null;
+    const begonnen = zeitpunkt(Date.parse(r.run_started_at)) ? Date.parse(r.run_started_at) : null;
+    const start = versuch === 1 ? (begonnen ?? erstellt) : (begonnen ?? Number.MAX_SAFE_INTEGER);
+    const basis = { laufId: r.id, url: typeof r.html_url === 'string' ? r.html_url : null, start };
+
+    if (versuch === null) {
+      // Ohne gueltige Versuchsnummer ist der Lauf nicht sicher einzuordnen.
+      liste.push({ ...basis, zeile: null });
+      continue;
+    }
+
+    if (laeuft) {
+      // B2.1 Zusatz: laufende Wiederholung. Ihr frueheres Ergebnis gilt nicht mehr; nur eine gespeicherte Zuordnung
+      // desselben Laufs aus einem frueheren Versuch (gepruefte Cache-Form) darf die Reihenfolge bestimmen.
+      liste.push({ ...basis, zeile: wiederholung(cache.vorpruefung, r.id, versuch) });
+      continue;
+    }
 
     // Ein uebersprungener Lauf hat keine Ergebniszeile.
     if (r.conclusion === 'skipped') {
@@ -152,7 +194,9 @@ async function vorpruefungen(leser, seit, cache) {
     }
 
     const laufOk = r.conclusion === 'success';
-    const alt = cache.vorpruefung[String(r.id)];
+    const schluessel = `${r.id}-${versuch}`;
+    // Nur ein Eintrag in gepruefter Form; alles andere wird neu gelesen.
+    const alt = prueferEintrag(cache.vorpruefung[schluessel]);
 
     if (alt !== undefined) {
       // Auch aus dem Cache: ein positives Ergebnis nur bei erfolgreichem Lauf; sonst nur noch die Zuordnung.
@@ -191,7 +235,7 @@ async function vorpruefungen(leser, seit, cache) {
     }
 
     if (zeile !== null) {
-      cache.vorpruefung[String(r.id)] = zeile;
+      cache.vorpruefung[schluessel] = zeile;
     }
 
     liste.push({ ...basis, zeile });

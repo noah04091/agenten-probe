@@ -1817,7 +1817,10 @@ function mitPruefer(runs, logs = {}) {
   };
 }
 
-const prueferLauf = (id, event = 'workflow_run', status = 'completed', created_at = '2026-11-21T10:00:00Z', conclusion = status === 'completed' ? 'success' : null) => ({ id, event, status, conclusion, created_at });
+// B2.1 Zusatz: jeder Lauf traegt run_attempt (Standard 1) und run_started_at (Standard created_at).
+const prueferLauf = (id, event = 'workflow_run', status = 'completed', created_at = '2026-11-21T10:00:00Z', conclusion = status === 'completed' ? 'success' : null, weitere = {}) => ({
+  id, event, status, conclusion, created_at, run_attempt: 1, run_started_at: created_at, ...weitere,
+});
 const vp = r => eintrag(r, 44765669207).pr.vorpruefung;
 
 test('B2.1 prueferZeile: genau eine Zeile im festen Format; Echo, BOM und Zeitstempel; sonst keine oder ungueltig', () => {
@@ -1867,7 +1870,7 @@ test('B2.1 Gesamtablauf: Pruefergebnis zum aktuellen Kopf an PR #104, Link zum P
   assert.equal(r.modell.bereiche.laeufe.teilFehler, null);
   // Nur der abgeschlossene Lauf aus workflow_run wird gelesen; pull_request und laufende nicht.
   assert.deepEqual(r.aufrufe.filter(p => /\/actions\/runs\/4600000000\d\/jobs$/.test(p)), [`${P}/actions/runs/46000000001/jobs`]);
-  assert.deepEqual(r.cache.vorpruefung, { 46000000001: { pr: 104, kopf: KOPF_104, ergebnis: 'auffaelligkeiten', befunde: 1, hinweise: 2, erfolg: true } });
+  assert.deepEqual(r.cache.vorpruefung, { '46000000001-1': { pr: 104, kopf: KOPF_104, ergebnis: 'auffaelligkeiten', befunde: 1, hinweise: 2, erfolg: true } });
   assert.ok(!JSON.stringify(r.cache).includes('A6-PRUEFER'), 'kein Rohtext im Cache');
 
   const zweiter = await lauf(mitPruefer(runs, {}), cacheBereinigt(JSON.parse(JSON.stringify(r.cache))));
@@ -1919,7 +1922,7 @@ test('B2.1 Gesamtablauf: veraltet, mehrere Laeufe, nicht eingerichtet, nicht les
   r = await lauf(mitPruefer([prueferLauf(46000000001)], { 46000000001: antwort(403, '') }));
   assert.deepEqual(r.cache.vorpruefung, {});
   r = await lauf(mitPruefer([prueferLauf(46000000001)], { 46000000001: 'skipped' }));
-  assert.deepEqual([vp(r).status, r.cache.vorpruefung], ['nicht-geprueft', { 46000000001: 'keine' }]);
+  assert.deepEqual([vp(r).status, r.cache.vorpruefung], ['nicht-geprueft', { '46000000001-1': 'keine' }]);
 });
 
 test('B2.1 Cache: vorpruefung nur mit festen Formen; alles andere wird verworfen', () => {
@@ -1927,14 +1930,16 @@ test('B2.1 Cache: vorpruefung nur mit festen Formen; alles andere wird verworfen
   const fehl = { fehlgeschlagen: true, pr: 104, kopf: KOPF_104 };
   const { erfolg, ...ohneErfolg } = gut;
   assert.equal(erfolg, true);
+  // B2.1 Zusatz: Schluessel immer "<laufId>-<versuch>"; ein Schluessel ohne Versuch (alter Stand) wird verworfen.
   const c = cacheBereinigt({ vorpruefung: {
-    1: gut, 2: 'keine', 3: 'ungueltig', 4: { ...gut, ergebnis: 'bestanden' }, 5: { ...gut, roh: 'x' }, 6: { ...gut, kopf: 'x' }, 7: 'frei', x: gut, 8: { ...gut, pr: null, kopf: null },
+    '1-1': gut, '2-1': 'keine', '3-1': 'ungueltig', '4-1': { ...gut, ergebnis: 'bestanden' }, '5-1': { ...gut, roh: 'x' }, '6-1': { ...gut, kopf: 'x' }, '7-1': 'frei', x: gut, '8-2': { ...gut, pr: null, kopf: null },
+    16: gut, '17-': gut, '18-1-1': gut, '19-1000': gut,
     // B2.1 Nachbesserung: ohne erfolg (aelterer Stand) verworfen; erfolg nur als true; fehlgeschlagen nur mit pr und kopf,
     // nie zusammen mit einem Ergebnis.
-    9: ohneErfolg, 10: { ...gut, erfolg: 'ja' }, 11: fehl, 12: { fehlgeschlagen: true, pr: null, kopf: null }, 13: { ...fehl, ergebnis: 'keine-auffaelligkeiten' },
-    14: { ...gut, fehlgeschlagen: true }, 15: { fehlgeschlagen: false, pr: 104, kopf: KOPF_104 },
+    '9-1': ohneErfolg, '10-1': { ...gut, erfolg: 'ja' }, '11-1': fehl, '12-1': { fehlgeschlagen: true, pr: null, kopf: null }, '13-1': { ...fehl, ergebnis: 'keine-auffaelligkeiten' },
+    '14-1': { ...gut, fehlgeschlagen: true }, '15-1': { fehlgeschlagen: false, pr: 104, kopf: KOPF_104 }, '20-1': { wiederholt: true, pr: 104, kopf: KOPF_104 },
   } });
-  assert.deepEqual(c.vorpruefung, { 1: gut, 2: 'keine', 3: 'ungueltig', 8: { ...gut, pr: null, kopf: null }, 11: fehl, 12: { fehlgeschlagen: true, pr: null, kopf: null } });
+  assert.deepEqual(c.vorpruefung, { '1-1': gut, '2-1': 'keine', '3-1': 'ungueltig', '8-2': { ...gut, pr: null, kopf: null }, '11-1': fehl, '12-1': { fehlgeschlagen: true, pr: null, kopf: null } });
   assert.equal(cacheBereinigt({ vorpruefung: [gut] }).vorpruefung, undefined);
 });
 
@@ -2009,7 +2014,7 @@ test('B2.1 Nachbesserung (sammle): Ergebnis nur bei Lauf success und Job success
   const ok = await lauf(mitPruefer(runsOk, { [PL]: keineAuff }));
   assert.deepEqual([vp(ok).status, vp(ok).ergebnis], ['aktuell', 'keine-auffaelligkeiten']);
   assert.match(zelle104(ok), /keine Auffälligkeiten \(keine Freigabe\)<\/a>: Befunde 0, Hinweise 0$/);
-  assert.deepEqual(ok.cache.vorpruefung, { [PL]: { pr: 104, kopf: KOPF_104, ergebnis: 'keine-auffaelligkeiten', befunde: 0, hinweise: 0, erfolg: true } });
+  assert.deepEqual(ok.cache.vorpruefung, { [`${PL}-1`]: { pr: 104, kopf: KOPF_104, ergebnis: 'keine-auffaelligkeiten', befunde: 0, hinweise: 0, erfolg: true } });
   const okCache = await ausCache(runsOk, ok);
   assert.deepEqual([vp(okCache).status, jobAbrufe(okCache, PL)], ['aktuell', 0]);
 
@@ -2019,7 +2024,7 @@ test('B2.1 Nachbesserung (sammle): Ergebnis nur bei Lauf success und Job success
     const r = await lauf(mitPruefer(runs, { [PL]: { job: jobC, log: keineAuff } }));
     assert.deepEqual(vp(r), { status: 'unbekannt', grund: 'Prüflauf fehlgeschlagen' }, name);
     assert.equal(zelle104(r), FEHLGESCHLAGEN, name);
-    assert.deepEqual(r.cache.vorpruefung, { [PL]: { fehlgeschlagen: true, pr: 104, kopf: KOPF_104 } }, `${name}: Cache nur mit Zuordnung`);
+    assert.deepEqual(r.cache.vorpruefung, { [`${PL}-1`]: { fehlgeschlagen: true, pr: 104, kopf: KOPF_104 } }, `${name}: Cache nur mit Zuordnung`);
     assert.doesNotMatch(JSON.stringify(r.cache), /ergebnis|erfolg/, name);
     assert.equal(r.modell.bereiche.laeufe.teilFehler, JETZT, `${name}: Teilfehler`);
     // 8. Wiederherstellung aus dem Cache: dasselbe, ohne erneuten Abruf.
@@ -2029,7 +2034,7 @@ test('B2.1 Nachbesserung (sammle): Ergebnis nur bei Lauf success und Job success
 
   // 6. Job oder Lauf skipped: keine Ergebniszeile.
   let r = await lauf(mitPruefer(runsOk, { [PL]: { job: 'skipped', log: keineAuff } }));
-  assert.deepEqual([vp(r), zelle104(r), r.cache.vorpruefung], [{ status: 'nicht-geprueft' }, 'nicht geprüft', { [PL]: 'keine' }]);
+  assert.deepEqual([vp(r), zelle104(r), r.cache.vorpruefung], [{ status: 'nicht-geprueft' }, 'nicht geprüft', { [`${PL}-1`]: 'keine' }]);
   const laufSkip = [prueferLauf(PL, 'workflow_run', 'completed', '2026-11-21T10:00:00Z', 'skipped')];
   r = await lauf(mitPruefer(laufSkip, { [PL]: keineAuff }));
   assert.deepEqual([vp(r).status, jobAbrufe(r, PL)], ['nicht-geprueft', 0]);
@@ -2040,7 +2045,7 @@ test('B2.1 Nachbesserung (sammle): ein positiver Cache-Eintrag eines nicht erfol
 
   for (const laufC of ['failure', 'cancelled', null, 'irgendwas']) {
     const runs = [prueferLauf(PL, 'workflow_run', 'completed', '2026-11-21T10:00:00Z', laufC)];
-    const r = await lauf(mitPruefer(runs, {}), cacheBereinigt({ vorpruefung: { [PL]: positiv } }));
+    const r = await lauf(mitPruefer(runs, {}), cacheBereinigt({ vorpruefung: { [`${PL}-1`]: positiv } }));
     assert.deepEqual([vp(r), zelle104(r)], [{ status: 'unbekannt', grund: 'Prüflauf fehlgeschlagen' }, FEHLGESCHLAGEN], String(laufC));
   }
 
@@ -2048,7 +2053,7 @@ test('B2.1 Nachbesserung (sammle): ein positiver Cache-Eintrag eines nicht erfol
   const runs = [prueferLauf(PL, 'workflow_run', 'completed', '2026-11-21T10:00:00Z', 'failure')];
   const { erfolg, ...alt } = positiv;
   assert.equal(erfolg, true);
-  const r = await lauf(mitPruefer(runs, { [PL]: { job: 'failure', log: keineAuff } }), cacheBereinigt({ vorpruefung: { [PL]: alt } }));
+  const r = await lauf(mitPruefer(runs, { [PL]: { job: 'failure', log: keineAuff } }), cacheBereinigt({ vorpruefung: { [`${PL}-1`]: alt } }));
   assert.deepEqual([vp(r).grund, jobAbrufe(r, PL)], ['Prüflauf fehlgeschlagen', 1]);
 });
 
@@ -2093,7 +2098,7 @@ test('B2.1 Nachbesserung (sammle): fehlgeschlagener Lauf ohne Zuordnung macht nu
 
   let r = await lauf(mitPruefer([prueferLauf(46000000001, 'workflow_run', 'completed', alt), prueferLauf(46000000002, 'workflow_run', 'completed', neu, 'failure')],
     { 46000000001: keineAuff, 46000000002: ohne }));
-  assert.deepEqual([vp(r), r.cache.vorpruefung[46000000002]], [{ status: 'unbekannt', grund: 'Prüflauf fehlgeschlagen, Zuordnung unbekannt' }, { fehlgeschlagen: true, pr: null, kopf: null }]);
+  assert.deepEqual([vp(r), r.cache.vorpruefung['46000000002-1']], [{ status: 'unbekannt', grund: 'Prüflauf fehlgeschlagen, Zuordnung unbekannt' }, { fehlgeschlagen: true, pr: null, kopf: null }]);
 
   r = await lauf(mitPruefer([prueferLauf(46000000001, 'workflow_run', 'completed', alt, 'failure'), prueferLauf(46000000002, 'workflow_run', 'completed', neu)],
     { 46000000001: ohne, 46000000002: keineAuff }));
@@ -2106,4 +2111,123 @@ test('B2.1 Nachbesserung (sammle): fehlgeschlagener Lauf ohne Zuordnung macht nu
   // Log eines fehlgeschlagenen Laufs nicht lesbar: ohne Zuordnung, nicht gecacht, beim naechsten Mal neu gelesen.
   r = await lauf(mitPruefer([prueferLauf(46000000002, 'workflow_run', 'completed', neu, 'failure')], { 46000000002: { job: 'failure', log: antwort(403, '') } }));
   assert.deepEqual([vp(r).grund, r.cache.vorpruefung], ['Prüflauf fehlgeschlagen, Zuordnung unbekannt', {}]);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// B2.1 Zusatz: laufende Wiederholung (Re-run) darf kein aelteres positives Ergebnis wiederherstellen
+// ---------------------------------------------------------------------------------------------------------------
+
+const Y = 46000000001;
+const X = 46000000002;
+const WIEDERHOLT = 'unbekannt (Prüflauf wird wiederholt)';
+
+test('B2.1 Zusatz (sammle): Beispiel X und Y; laufender zweiter Versuch von X, danach Versuch 2 erfolgreich oder fehlgeschlagen', async () => {
+  // 1. Y frueher erfolgreich mit keine-auffaelligkeiten; 2. der juengere X fuer denselben Kopf fehlgeschlagen.
+  const yLauf = prueferLauf(Y, 'workflow_run', 'completed', '2026-11-21T09:00:00Z', 'success');
+  const x1 = prueferLauf(X, 'workflow_run', 'completed', '2026-11-21T09:30:00Z', 'failure');
+  const logs1 = { [Y]: keineAuff, [X]: { job: 'failure', log: keineAuff } };
+  const a = await lauf(mitPruefer([yLauf, x1], logs1));
+  assert.deepEqual([vp(a), zelle104(a)], [{ status: 'unbekannt', grund: 'Prüflauf fehlgeschlagen' }, FEHLGESCHLAGEN]);
+  assert.deepEqual(a.cache.vorpruefung, {
+    [`${Y}-1`]: { pr: 104, kopf: KOPF_104, ergebnis: 'keine-auffaelligkeiten', befunde: 0, hinweise: 0, erfolg: true },
+    [`${X}-1`]: { fehlgeschlagen: true, pr: 104, kopf: KOPF_104 },
+  });
+
+  // 3. X wird mit run_attempt 2 erneut gestartet und laeuft noch (created_at bleibt, run_started_at ist neu).
+  const x2laeuft = prueferLauf(X, 'workflow_run', 'in_progress', '2026-11-21T09:30:00Z', null, { run_attempt: 2, run_started_at: '2026-11-21T10:30:00Z' });
+  const cacheA = cacheBereinigt(JSON.parse(JSON.stringify(a.cache)));
+  const b = await lauf(mitPruefer([yLauf, x2laeuft], {}), cacheA);
+  // 4. Weder X ignorieren noch Y wieder zeigen.
+  assert.deepEqual([vp(b), zelle104(b)], [{ status: 'unbekannt', grund: 'Prüflauf wird wiederholt' }, WIEDERHOLT]);
+  assert.equal(jobAbrufe(b, X), 0, 'laufender Versuch: kein Abruf von Jobs oder Log');
+  assert.equal(b.cache.vorpruefung[`${X}-2`], undefined, 'kein Eintrag fuer den laufenden Versuch');
+  assert.ok(!Object.values(b.cache.vorpruefung).some(e => e?.wiederholt), 'Wiederholung nie im Cache');
+  assert.equal(b.modell.bereiche.laeufe.teilFehler, JETZT);
+
+  // Ohne gespeicherte Zuordnung (frischer Start der Zentrale): vorsichtig, nie das Ergebnis von Y.
+  const frisch = await lauf(mitPruefer([yLauf, x2laeuft], { [Y]: keineAuff }));
+  assert.deepEqual([vp(frisch).status, vp(frisch).grund], ['unbekannt', 'Prüflauf wird wiederholt, Zuordnung unbekannt']);
+
+  // Nach Abschluss von Versuch 2: erfolgreich ergibt das neue Ergebnis von X.
+  const x2ok = { ...x2laeuft, status: 'completed', conclusion: 'success' };
+  const c = await lauf(mitPruefer([yLauf, x2ok], { [X]: plog(pzeile(104, KOPF_104, 'auffaelligkeiten', 1, 0)) }), cacheBereinigt(JSON.parse(JSON.stringify(b.cache))));
+  assert.deepEqual([vp(c).status, vp(c).ergebnis, vp(c).url.endsWith(String(X)), vp(c).anzahl], ['aktuell', 'auffaelligkeiten', true, 2]);
+  assert.deepEqual(c.cache.vorpruefung[`${X}-2`], { pr: 104, kopf: KOPF_104, ergebnis: 'auffaelligkeiten', befunde: 1, hinweise: 0, erfolg: true });
+  assert.equal(jobAbrufe(c, X), 1, 'Versuch 2 wird neu gelesen, nicht aus dem Eintrag von Versuch 1');
+
+  // Nach Abschluss von Versuch 2: fehlgeschlagen ergibt unbekannt, nie das Ergebnis von Y.
+  const x2fehl = { ...x2laeuft, status: 'completed', conclusion: 'failure' };
+  const d = await lauf(mitPruefer([yLauf, x2fehl], { [X]: { job: 'failure', log: keineAuff } }), cacheBereinigt(JSON.parse(JSON.stringify(b.cache))));
+  assert.deepEqual([vp(d), zelle104(d), d.cache.vorpruefung[`${X}-2`]], [{ status: 'unbekannt', grund: 'Prüflauf fehlgeschlagen' }, FEHLGESCHLAGEN, { fehlgeschlagen: true, pr: 104, kopf: KOPF_104 }]);
+  // Und aus dem Cache wiederhergestellt bleibt es so.
+  const dCache = await lauf(mitPruefer([yLauf, x2fehl], {}), cacheBereinigt(JSON.parse(JSON.stringify(d.cache))));
+  assert.deepEqual([vp(dCache).grund, jobAbrufe(dCache, X)], ['Prüflauf fehlgeschlagen', 0]);
+});
+
+test('B2.1 Zusatz (sammle): Versuch 1 erfolgreich im Cache, Versuch 2 fehlgeschlagen: nie das Ergebnis von Versuch 1', async () => {
+  const x1 = prueferLauf(X, 'workflow_run', 'completed', '2026-11-21T09:30:00Z', 'success');
+  const a = await lauf(mitPruefer([x1], { [X]: keineAuff }));
+  assert.equal(vp(a).ergebnis, 'keine-auffaelligkeiten');
+  const x2 = prueferLauf(X, 'workflow_run', 'completed', '2026-11-21T09:30:00Z', 'failure', { run_attempt: 2, run_started_at: '2026-11-21T10:30:00Z' });
+  const b = await lauf(mitPruefer([x2], { [X]: { job: 'failure', log: keineAuff } }), cacheBereinigt(JSON.parse(JSON.stringify(a.cache))));
+  assert.deepEqual([vp(b), zelle104(b)], [{ status: 'unbekannt', grund: 'Prüflauf fehlgeschlagen' }, FEHLGESCHLAGEN]);
+  // Laufender Versuch 2 nach erfolgreichem Versuch 1: auch dann kein Ergebnis.
+  const x2laeuft = { ...x2, status: 'in_progress', conclusion: null };
+  const c = await lauf(mitPruefer([x2laeuft], {}), cacheBereinigt(JSON.parse(JSON.stringify(a.cache))));
+  assert.deepEqual([vp(c), zelle104(c)], [{ status: 'unbekannt', grund: 'Prüflauf wird wiederholt' }, WIEDERHOLT]);
+});
+
+test('B2.1 Zusatz (sammle): Reihenfolge nach dem Beginn des aktuellen Versuchs, nicht nach created_at', async () => {
+  // X zuerst angelegt und fehlgeschlagen, danach Y erfolgreich, danach X wiederholt: X ist der juengste Pruefversuch.
+  const x1 = prueferLauf(X, 'workflow_run', 'completed', '2026-11-21T09:00:00Z', 'failure');
+  const yLauf = prueferLauf(Y, 'workflow_dispatch', 'completed', '2026-11-21T09:30:00Z', 'success');
+  const a = await lauf(mitPruefer([x1, yLauf], { [X]: { job: 'failure', log: keineAuff }, [Y]: keineAuff }));
+  assert.equal(vp(a).ergebnis, 'keine-auffaelligkeiten', 'vor der Wiederholung: Y ist juenger');
+
+  const cacheA = () => cacheBereinigt(JSON.parse(JSON.stringify(a.cache)));
+  const weitere = { run_attempt: 2, run_started_at: '2026-11-21T10:30:00Z' };
+  const laeuft = await lauf(mitPruefer([prueferLauf(X, 'workflow_run', 'in_progress', '2026-11-21T09:00:00Z', null, weitere), yLauf], {}), cacheA());
+  assert.equal(vp(laeuft).grund, 'Prüflauf wird wiederholt');
+  const fehl = await lauf(mitPruefer([prueferLauf(X, 'workflow_run', 'completed', '2026-11-21T09:00:00Z', 'failure', weitere), yLauf], { [X]: { job: 'failure', log: keineAuff } }), cacheA());
+  assert.equal(vp(fehl).grund, 'Prüflauf fehlgeschlagen');
+
+  // Wiederholung ohne gueltigen Beginn: gilt als juengste, nie wieder Y.
+  const ohneBeginn = await lauf(mitPruefer([prueferLauf(X, 'workflow_run', 'in_progress', '2026-11-21T09:00:00Z', null, { run_attempt: 2, run_started_at: null }), yLauf], {}), cacheA());
+  assert.equal(vp(ohneBeginn).grund, 'Prüflauf wird wiederholt');
+  // Lauf ohne gueltige Versuchsnummer: nicht einzuordnen, unbekannt.
+  const ohneVersuch = await lauf(mitPruefer([{ ...yLauf, run_attempt: undefined }], { [Y]: keineAuff }));
+  assert.equal(vp(ohneVersuch).status, 'unbekannt');
+});
+
+test('B2.1 Zusatz (sammle): Zuordnung einer Wiederholung nur aus einem geprueften Eintrag desselben Laufs', async () => {
+  const yLauf = prueferLauf(Y, 'workflow_run', 'completed', '2026-11-21T09:00:00Z', 'success');
+  const x2laeuft = prueferLauf(X, 'workflow_run', 'in_progress', '2026-11-21T09:30:00Z', null, { run_attempt: 2, run_started_at: '2026-11-21T10:30:00Z' });
+  const positivY = { pr: 104, kopf: KOPF_104, ergebnis: 'keine-auffaelligkeiten', befunde: 0, hinweise: 0, erfolg: true };
+  const faelle = [
+    ['ungepruefte Form', { pr: 104, kopf: KOPF_104, roh: 'x' }],
+    ['erfolg als Text', { ...positivY, erfolg: 'ja' }],
+    ['Wiederholungseintrag', { wiederholt: true, pr: 104, kopf: KOPF_104 }],
+    ['keine', 'keine'],
+    ['ohne Kopf', { fehlgeschlagen: true, pr: 104, kopf: null }],
+  ];
+
+  for (const [was, eintrag] of faelle) {
+    // Ungepruefter Cache direkt an sammle, ohne cacheBereinigt.
+    const r = await lauf(mitPruefer([yLauf, x2laeuft], {}), { vorpruefung: { [`${Y}-1`]: positivY, [`${X}-1`]: eintrag } });
+    assert.deepEqual([vp(r).status, vp(r).grund], ['unbekannt', 'Prüflauf wird wiederholt, Zuordnung unbekannt'], was);
+  }
+
+  // Eintrag eines anderen Laufs gilt nicht als Zuordnung von X.
+  const fremd = await lauf(mitPruefer([yLauf, x2laeuft], {}), { vorpruefung: { [`${Y}-1`]: positivY, '46000000009-1': { fehlgeschlagen: true, pr: 104, kopf: KOPF_104 } } });
+  assert.equal(vp(fremd).grund, 'Prüflauf wird wiederholt, Zuordnung unbekannt');
+  // Gegenprobe: gepruefter Eintrag von X liefert die Zuordnung.
+  const gut = await lauf(mitPruefer([yLauf, x2laeuft], {}), { vorpruefung: { [`${Y}-1`]: positivY, [`${X}-1`]: { fehlgeschlagen: true, pr: 104, kopf: KOPF_104 } } });
+  assert.equal(vp(gut).grund, 'Prüflauf wird wiederholt');
+});
+
+test('B2.1 Zusatz (sammle): ein ungepruefter Cache-Eintrag eines abgeschlossenen Laufs wird nicht uebernommen, sondern neu gelesen', async () => {
+  const yLauf = prueferLauf(Y, 'workflow_run', 'completed', '2026-11-21T09:00:00Z', 'failure');
+  const roh = { pr: 104, kopf: KOPF_104, ergebnis: 'keine-auffaelligkeiten', befunde: 0, hinweise: 0, erfolg: 'ja' };
+  const r = await lauf(mitPruefer([yLauf], { [Y]: { job: 'failure', log: keineAuff } }), { vorpruefung: { [`${Y}-1`]: roh } });
+  assert.deepEqual([vp(r).grund, jobAbrufe(r, Y)], ['Prüflauf fehlgeschlagen', 1]);
 });
