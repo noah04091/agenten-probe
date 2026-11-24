@@ -2,7 +2,7 @@
 
 Eine lokale Seite mit fünf Bereichen, darüber seit B1.3 der Bereich „0 Fristen“ und seit B1.3c die Laufwarnungen:
 1. offene Agenten-Aufträge;
-2. Agentenläufe mit Fehlergrund und Draft-PR;
+2. Agentenläufe mit Fehlergrund, Draft-PR und (seit B2.1) Vorprüfung;
 3. wartende Freigaben mit Frist;
 4. Kosten;
 5. laufende Claude-Code-Sitzungen.
@@ -116,6 +116,18 @@ Fehlen dem Token Rechte, steht im betroffenen Bereich „keine Berechtigung (403
     Status unbekannt, Laufstart fehlt, keine eindeutige Zuordnung, Ereignisse oder PR-Liste nicht vollständig lesbar,
     Zeit, Basis oder `merged_at` ungültig), steht „Laufwarnungen nicht prüfbar (…)“ da, nie eine Entwarnung. Ohne
     laufenden Lauf erscheint nichts.
+- **Vorprüfung (B2.1):** Die Lauftabelle hat die Spalte „Vorprüfung“. Gelesen werden die abgeschlossenen Läufe von
+  `agent-pruefer.yml` (Ereignis `workflow_run` oder `workflow_dispatch`), je Lauf genau der Job „Vorpruefung
+  Agenten-PR“ und aus seinem Log nur die eine Zeile `A6-PRUEFER …` im festen Format. Gezeigt wird das Ergebnis nur,
+  wenn `kopf` gleich dem aktuellen Kopf des PR ist, mit Befunden, Hinweisen und Link zum Prüflauf; bei mehreren Läufen
+  zum selben Kopf der jüngste mit Anzahl. Ein Ergebnis zu einem älteren Kopf heißt „veraltet“, kein Lauf „nicht
+  geprüft“. „keine Auffälligkeiten“ steht immer mit „(keine Freigabe)“; „bestanden“ oder „freigegeben“ zeigt die
+  Spalte nie. Ist die Laufliste unvollständig, ein Log nicht lesbar oder eine Zeile ungültig, steht „unbekannt (…)“, nie
+  „nicht geprüft“. Ist der Workflow auf GitHub nicht eingerichtet (404), gibt es belegt keinen Prüflauf. Im Cache steht
+  je abgeschlossenem Prüflauf nur das Ergebnis in fester Form, nie Logtext.
+- **GET-Wache (B2.1):** `github-lesen.mjs` ruft nur Pfade aus der festen Liste `ERLAUBTE_PFADE` ab (die Pfade aus
+  `zentrale.mjs` und `echtprobe.mjs`, neu nur die Laufliste von `agent-pruefer.yml`). Jeder andere Pfad ergibt
+  „unbekannt“ ohne Netzabruf.
 - **Notseite (B1.3):** Scheitert die Startprüfung oder fehlt die Token-Datei, ersetzt eine Notseite ohne GitHub-Daten
   und ohne Neuladen die alte Seite; der Exitcode bleibt 1. Bei 401 heißt es „abgelehnt“, nie pauschal „abgelaufen“: je
   nach letzter Meldung „wahrscheinlich abgelaufen am …“, „abgelehnt, obwohl laut letzter Meldung gültig bis …“ oder

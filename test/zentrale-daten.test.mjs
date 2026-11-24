@@ -11,13 +11,13 @@ import { fileURLToPath } from 'node:url';
 
 import {
   CLAUDE_NICHT_GESTARTET, freigabenAus, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, monatsKosten, offeneAuftraege, pflichtchecks, prZuLauf,
-  restMinuten, startfreigaben, fristStufe, fristenAusJson, fristDatum, laufwarnungen,
+  restMinuten, startfreigaben, fristStufe, fristenAusJson, fristDatum, laufwarnungen, prueferZeile, vorpruefungFuerPr,
 } from '../werkzeuge/zentrale/daten.mjs';
 import {
   ECHTPROBE_SOLL, KOSTEN_TOLERANZ, MONAT_SOLL, REFERENZ_JETZT, SOLL, echtprobe, historischerAbruf, ladeSoll, referenzLeser, sollAusJson, unbelegteLaeufe, vergleicheLauf, vergleicheMonat,
 } from '../werkzeuge/zentrale/echtprobe.mjs';
-import { CSP, laufwarnungText, seite } from '../werkzeuge/zentrale/darstellung.mjs';
-import { erzeugeLeser } from '../werkzeuge/zentrale/github-lesen.mjs';
+import { CSP, laufwarnungText, seite, vorpruefungText } from '../werkzeuge/zentrale/darstellung.mjs';
+import { ERLAUBTE_PFADE, erzeugeLeser, pfadErlaubt } from '../werkzeuge/zentrale/github-lesen.mjs';
 import { cacheBereinigt, durchlauf, ladeFristen, main, notseiteSchreiben, sammle, schleifeBeenden, zusammenfuehren } from '../werkzeuge/zentrale/zentrale.mjs';
 
 const FIX = join(fileURLToPath(new URL('.', import.meta.url)), 'fixtures', 'zentrale');
@@ -1770,4 +1770,201 @@ test('B1.3c (Gesamtablauf): PR-Liste gelesen, aber unvollstaendig (Seitengrenze 
   nichtPruefbar(r, 'PRs nicht vollständig lesbar', 'pulls');
   assert.ok(!r.eintraege.some(e => e.art === 'gemergt' || e.art === 'offen'));
   assert.ok(!r.banner.includes('gemergt') && !r.banner.includes('Offene PRs'));
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// B2.1: Spalte Vorpruefung (Laeufe von agent-pruefer.yml, nur die Zeile A6-PRUEFER) und GET-Wache mit Pfadliste
+// ---------------------------------------------------------------------------------------------------------------
+
+const KOPF_104 = '32e7691ba585e4a2d74cc975f6117971f2933a9b';
+const PRUEFER_RUNS = `${P}/actions/workflows/agent-pruefer.yml/runs`;
+const pzeile = (pr, kopf, ergebnis = 'auffaelligkeiten', befunde = 1, hinweise = 2) => `A6-PRUEFER repo noah04091/agenten-probe pr ${pr} kopf ${kopf} basis ${'b'.repeat(40)} lauf 44765669207 ergebnis ${ergebnis} befunde ${befunde} hinweise ${hinweise}`;
+const plog = zeile => `\uFEFF2026-11-21T10:01:00.0000000Z ##[group]Run set -euo pipefail\n2026-11-21T10:01:00.1000000Z \u001b[36;1mecho "A6-PRUEFER repo noah04091/agenten-probe pr unbekannt kopf unbekannt basis unbekannt lauf $A6_PRUEFER_LAUF ergebnis nicht-pruefbar befunde 0 hinweise 0"\u001b[0m\n2026-11-21T10:02:00.0000000Z ${zeile}\n`;
+
+// Nachgebaute Pruefer-Laeufe: runs [{ id, event, status, created_at }], logs { laufId: Logtext | Antwort }.
+function mitPruefer(runs, logs = {}) {
+  const jobId = id => 140000000000 + (id % 1000);
+  return (p, u) => {
+    if (p === PRUEFER_RUNS) {
+      return (u.searchParams.get('page') ?? '1') === '1' ? antwort(200, { total_count: runs.length, workflow_runs: runs.map(r => ({ html_url: `https://github.com/noah04091/agenten-probe/actions/runs/${r.id}`, ...r })) }) : antwort(200, { total_count: runs.length, workflow_runs: [] });
+    }
+
+    const m = /\/actions\/runs\/(\d+)\/jobs$/.exec(p);
+
+    if (m && runs.some(r => String(r.id) === m[1])) {
+      const id = Number(m[1]);
+      return antwort(200, { total_count: 2, jobs: [
+        { id: jobId(id), name: 'Vorpruefung Agenten-PR', status: 'completed', conclusion: logs[id] === 'skipped' ? 'skipped' : 'success' },
+        { id: jobId(id) + 500, name: 'Generalprobe Vorpruefung gegen nachgebautes GitHub', status: 'completed', conclusion: 'skipped' },
+      ] });
+    }
+
+    const l = /\/actions\/jobs\/(\d+)\/logs$/.exec(p);
+
+    if (l && Number(l[1]) >= 140000000000 && Number(l[1]) < 140000001000) {
+      return antwort(302, '', { location: `https://productionresultssa1.blob.core.windows.net/pruefer/${l[1]}` });
+    }
+
+    if (u.hostname === 'productionresultssa1.blob.core.windows.net' && p.startsWith('/pruefer/')) {
+      const id = runs.find(r => jobId(r.id) === Number(p.split('/').at(-1)))?.id;
+      const inhalt = logs[id];
+      return typeof inhalt === 'string' ? antwort(200, inhalt) : inhalt ?? antwort(404, '');
+    }
+
+    return null;
+  };
+}
+
+const prueferLauf = (id, event = 'workflow_run', status = 'completed', created_at = '2026-11-21T10:00:00Z') => ({ id, event, status, conclusion: status === 'completed' ? 'success' : null, created_at });
+const vp = r => eintrag(r, 44765669207).pr.vorpruefung;
+
+test('B2.1 prueferZeile: genau eine Zeile im festen Format; Echo, BOM und Zeitstempel; sonst keine oder ungueltig', () => {
+  assert.deepEqual(prueferZeile(plog(pzeile(104, KOPF_104))), { pr: 104, kopf: KOPF_104, ergebnis: 'auffaelligkeiten', befunde: 1, hinweise: 2 });
+  assert.deepEqual(prueferZeile(`${pzeile(104, KOPF_104, 'keine-auffaelligkeiten', 0, 0)}\r\n`), { pr: 104, kopf: KOPF_104, ergebnis: 'keine-auffaelligkeiten', befunde: 0, hinweise: 0 });
+  assert.deepEqual(prueferZeile(pzeile('unbekannt', 'unbekannt', 'nicht-pruefbar', 0, 0)), { pr: null, kopf: null, ergebnis: 'nicht-pruefbar', befunde: 0, hinweise: 0 });
+  assert.equal(prueferZeile('2026-11-21T10:00:00Z nichts\n'), 'keine');
+  assert.equal(prueferZeile('A6-PRUEFER kein Agenten-Auftrag lauf 45 code quelle-kein-auftrag\n'), 'keine');
+  // Ungueltig: zwei Zeilen, unbekannter Wert, Anhang, andere Schreibweise, fremdes Repository.
+  for (const t of [
+    `${pzeile(104, KOPF_104)}\n${pzeile(104, KOPF_104)}`,
+    pzeile(104, KOPF_104, 'bestanden'),
+    pzeile(104, KOPF_104, 'freigegeben'),
+    `${pzeile(104, KOPF_104)} x`,
+    pzeile(104, KOPF_104).replace('kopf ', 'kopf  '),
+    pzeile(104, KOPF_104).replace('noah04091/agenten-probe', 'fremd/agenten-probe'),
+    pzeile(104, 'ABC'),
+    'A6-PRUEFER irgendwas',
+  ]) {
+    assert.equal(prueferZeile(t), 'ungueltig', t);
+  }
+  assert.equal(prueferZeile(null), 'ungueltig');
+});
+
+test('B2.1 vorpruefungFuerPr: aktuell nur zum Kopf, juengster mit Anzahl; sonst veraltet, nicht geprueft oder unbekannt', () => {
+  const pr = { nummer: 104, sha: KOPF_104 };
+  const z = (ergebnis, kopf = KOPF_104, nr = 104) => ({ pr: nr, kopf, ergebnis, befunde: 0, hinweise: 1 });
+  const alt = { laufId: 1, url: 'u1', start: 1000, zeile: z('ausstehend') };
+  const neu = { laufId: 2, url: 'u2', start: 2000, zeile: z('auffaelligkeiten') };
+  assert.deepEqual(vorpruefungFuerPr(pr, [alt, neu], true), { status: 'aktuell', ergebnis: 'auffaelligkeiten', befunde: 0, hinweise: 1, url: 'u2', anzahl: 2 });
+  assert.deepEqual(vorpruefungFuerPr(pr, [neu, alt], true).url, 'u2', 'Reihenfolge der Liste egal');
+  assert.deepEqual(vorpruefungFuerPr(pr, [{ ...alt, zeile: z('auffaelligkeiten', 'c'.repeat(40)) }], true), { status: 'veraltet', anzahl: 1 });
+  assert.deepEqual(vorpruefungFuerPr(pr, [{ ...alt, zeile: z('auffaelligkeiten', KOPF_104, 105) }, { ...neu, zeile: 'keine' }], true), { status: 'nicht-geprueft' });
+  assert.deepEqual(vorpruefungFuerPr(pr, [], true), { status: 'nicht-geprueft' });
+  // Unvollstaendig oder ein nicht lesbares bzw. ungueltiges Log: nie "nicht geprueft", auch nicht neben einem Treffer.
+  assert.equal(vorpruefungFuerPr(pr, [], false).status, 'unbekannt');
+  assert.equal(vorpruefungFuerPr(pr, null, true).status, 'unbekannt');
+  assert.equal(vorpruefungFuerPr(pr, [neu, { ...alt, zeile: null }], true).status, 'unbekannt');
+  assert.equal(vorpruefungFuerPr(pr, [neu, { ...alt, zeile: 'ungueltig' }], true).status, 'unbekannt');
+  assert.equal(vorpruefungFuerPr(null, [neu], true), null);
+});
+
+test('B2.1 Gesamtablauf: Pruefergebnis zum aktuellen Kopf an PR #104, Link zum Pruefer-Lauf, danach aus dem Cache', async () => {
+  const runs = [prueferLauf(46000000001), prueferLauf(46000000002, 'pull_request'), prueferLauf(46000000003, 'workflow_dispatch', 'in_progress')];
+  const r = await lauf(mitPruefer(runs, { 46000000001: plog(pzeile(104, KOPF_104)) }));
+  assert.deepEqual(vp(r), { status: 'aktuell', ergebnis: 'auffaelligkeiten', befunde: 1, hinweise: 2, url: 'https://github.com/noah04091/agenten-probe/actions/runs/46000000001', anzahl: 1 });
+  assert.equal(r.modell.bereiche.laeufe.teilFehler, null);
+  // Nur der abgeschlossene Lauf aus workflow_run wird gelesen; pull_request und laufende nicht.
+  assert.deepEqual(r.aufrufe.filter(p => /\/actions\/runs\/4600000000\d\/jobs$/.test(p)), [`${P}/actions/runs/46000000001/jobs`]);
+  assert.deepEqual(r.cache.vorpruefung, { 46000000001: { pr: 104, kopf: KOPF_104, ergebnis: 'auffaelligkeiten', befunde: 1, hinweise: 2 } });
+  assert.ok(!JSON.stringify(r.cache).includes('A6-PRUEFER'), 'kein Rohtext im Cache');
+
+  const zweiter = await lauf(mitPruefer(runs, {}), cacheBereinigt(JSON.parse(JSON.stringify(r.cache))));
+  assert.equal(vp(zweiter).status, 'aktuell');
+  assert.equal(zweiter.aufrufe.filter(p => /\/actions\/runs\/46000000001\/jobs$|\/pruefer\//.test(p)).length, 0, 'abgeschlossener Pruefer aus dem Cache');
+
+  // Seite: Spalte Vorpruefung mit Link, Pflichtsatz-Zusatz, nie "bestanden" oder "freigegeben".
+  const html = seite(r.modell, JETZT);
+  assert.ok(html.includes('<th>Vorprüfung</th>'));
+  const zelle = vorpruefungText(eintrag(r, 44765669207).pr);
+  assert.equal(zelle, '<a href="https://github.com/noah04091/agenten-probe/actions/runs/46000000001" rel="noopener noreferrer">Auffälligkeiten</a>: Befunde 1, Hinweise 2');
+  assert.ok(html.includes(`<td>${zelle}</td></tr>`));
+  // Die Seite zeigt an anderer Stelle Klartexte aus fehlercodes.mjs; die Wache gilt fuer jede Vorpruefungs-Zelle.
+  assert.ok(r.modell.bereiche.laeufe.eintraege.every(l => !/bestanden|freigegeben/i.test(vorpruefungText(l.pr))));
+});
+
+test('B2.1 Gesamtablauf: veraltet, mehrere Laeufe, nicht eingerichtet, nicht lesbar, ungueltig, uebersprungen', async () => {
+  const zwei = [prueferLauf(46000000001, 'workflow_run', 'completed', '2026-11-21T09:00:00Z'), prueferLauf(46000000004, 'workflow_dispatch', 'completed', '2026-11-21T10:00:00Z')];
+  let r = await lauf(mitPruefer(zwei, { 46000000001: plog(pzeile(104, KOPF_104, 'ausstehend', 0, 0)), 46000000004: plog(pzeile(104, KOPF_104, 'keine-auffaelligkeiten', 0, 0)) }));
+  assert.deepEqual([vp(r).status, vp(r).ergebnis, vp(r).anzahl, vp(r).url.endsWith('46000000004')], ['aktuell', 'keine-auffaelligkeiten', 2, true]);
+  assert.ok(seite(r.modell, JETZT).includes('keine Auffälligkeiten (keine Freigabe)</a>: Befunde 0, Hinweise 0, 2 Prüfläufe zu diesem Kopf, gezeigt der jüngste'));
+
+  r = await lauf(mitPruefer([prueferLauf(46000000001)], { 46000000001: plog(pzeile(104, 'c'.repeat(40))) }));
+  assert.deepEqual(vp(r), { status: 'veraltet', anzahl: 1 });
+  assert.ok(seite(r.modell, JETZT).includes('veraltet (geprüft wurde ein älterer Kopf)'));
+
+  // Workflow nicht eingerichtet (404 Not Found): belegt kein Pruefer-Lauf, kein Teilfehler.
+  r = await lauf();
+  assert.deepEqual(vp(r), { status: 'nicht-geprueft' });
+  assert.equal(r.modell.bereiche.laeufe.teilFehler, null);
+  assert.ok(seite(r.modell, JETZT).includes('<td>nicht geprüft</td>'));
+  assert.ok(r.aufrufe.includes(PRUEFER_RUNS), 'Muss-Treffer: die Laufliste wurde abgefragt');
+
+  // Jeder andere Fehler der Laufliste, ein nicht lesbares Log, eine ungueltige Zeile: unbekannt mit Teilfehler.
+  for (const [was, stoerung] of [
+    ['Liste 500', p => (p === PRUEFER_RUNS ? antwort(500, {}) : null)],
+    ['Liste 404 ohne Not Found', p => (p === PRUEFER_RUNS ? antwort(404, { message: 'anders' }) : null)],
+    ['Liste unvollstaendig', p => (p === PRUEFER_RUNS ? antwort(200, { total_count: 5, workflow_runs: [] }) : null)],
+    ['Log nicht lesbar', mitPruefer([prueferLauf(46000000001)], { 46000000001: antwort(403, '') })],
+    ['Zeile ungueltig', mitPruefer([prueferLauf(46000000001)], { 46000000001: plog(pzeile(104, KOPF_104, 'bestanden')) })],
+  ]) {
+    r = await lauf(stoerung);
+    assert.equal(vp(r).status, 'unbekannt', was);
+    assert.equal(r.modell.bereiche.laeufe.teilFehler, JETZT, was);
+    assert.match(seite(r.modell, JETZT), /<td>unbekannt \(/, was);
+  }
+
+  // Ein nicht lesbares Log wird nicht gecacht; ein uebersprungener Pruefjob zaehlt als "keine Zeile".
+  r = await lauf(mitPruefer([prueferLauf(46000000001)], { 46000000001: antwort(403, '') }));
+  assert.deepEqual(r.cache.vorpruefung, {});
+  r = await lauf(mitPruefer([prueferLauf(46000000001)], { 46000000001: 'skipped' }));
+  assert.deepEqual([vp(r).status, r.cache.vorpruefung], ['nicht-geprueft', { 46000000001: 'keine' }]);
+});
+
+test('B2.1 Cache: vorpruefung nur mit festen Formen; alles andere wird verworfen', () => {
+  const gut = { pr: 104, kopf: KOPF_104, ergebnis: 'ausstehend', befunde: 0, hinweise: 0 };
+  const c = cacheBereinigt({ vorpruefung: {
+    1: gut, 2: 'keine', 3: 'ungueltig', 4: { ...gut, ergebnis: 'bestanden' }, 5: { ...gut, roh: 'x' }, 6: { ...gut, kopf: 'x' }, 7: 'frei', x: gut, 8: { ...gut, pr: null, kopf: null },
+  } });
+  assert.deepEqual(c.vorpruefung, { 1: gut, 2: 'keine', 3: 'ungueltig', 8: { ...gut, pr: null, kopf: null } });
+  assert.equal(cacheBereinigt({ vorpruefung: [gut] }).vorpruefung, undefined);
+});
+
+test('B2.1 Darstellung: jeder Zustand mit festem Text, unbekannter Wert sichtbar, nie ein positives Pruefurteil', () => {
+  const pr = v => ({ nummer: 1, url: 'x', zustand: 'Draft offen', checks: [], vorpruefung: v });
+  const faelle = [
+    [{ status: 'aktuell', ergebnis: 'nicht-pruefbar', befunde: 0, hinweise: 0, url: 'https://evil.example/x', anzahl: 1 }, 'nicht prüfbar: Befunde 0, Hinweise 0'],
+    [{ status: 'aktuell', ergebnis: 'ausstehend', befunde: 0, hinweise: 0, url: null, anzahl: 1 }, 'ausstehend (Pflichtchecks nicht fertig): Befunde 0, Hinweise 0'],
+    [{ status: 'aktuell', ergebnis: 'gruen', befunde: 0, hinweise: 0 }, 'unbekannt (unbekannter Wert)'],
+    [{ status: 'nicht-geprueft' }, 'nicht geprüft'],
+    [{ status: 'veraltet', anzahl: 3 }, 'veraltet (geprüft wurde ein älterer Kopf)'],
+    [{ status: 'unbekannt', grund: '<b>x</b>' }, 'unbekannt (&lt;b&gt;x&lt;/b&gt;)'],
+    [undefined, 'nicht ermittelt'],
+  ];
+  for (const [v, text] of faelle) {
+    assert.equal(vorpruefungText(pr(v)), text);
+  }
+  assert.equal(vorpruefungText(null), 'kein PR');
+  assert.equal(vorpruefungText('unbekannt'), 'kein PR');
+  assert.ok(!faelle.some(([v]) => /bestanden|freigegeben/i.test(vorpruefungText(pr(v)))));
+});
+
+test('B2.1 GET-Wache: nur Pfade der festen Liste gehen ins Netz; jeder Pfad des Gesamtablaufs ist erlaubt (Muss-Treffer)', async () => {
+  const r = await lauf(mitPruefer([prueferLauf(46000000001)], { 46000000001: plog(pzeile(104, KOPF_104)) }));
+  const api = r.aufrufe.filter(p => !p.startsWith('/log/') && !p.startsWith('/pruefer/'));
+  assert.ok(api.length > 20);
+  assert.deepEqual(api.filter(p => !pfadErlaubt(p)), []);
+  // Jeder Eintrag der Liste wird gebraucht: vom Gesamtablauf, der Startpruefung (durchlauf) oder der Echt-Probe (Zweig,
+  // fremdes Repository, Rate-Limit).
+  const echtprobe = ['/repos/noah04091/agenten-probe', '/repos/noah04091/agenten-probe/branches/wp/78-agent-44536520447-1', '/repos/noah04091/gibt-es-nicht-b1-zentrale', '/rate_limit'];
+  assert.deepEqual(ERLAUBTE_PFADE.map(re => [...api, ...echtprobe].some(p => re.test(p))), ERLAUBTE_PFADE.map(() => true));
+
+  let abrufe = 0;
+  const l = erzeugeLeser({ token: TOKEN, fetchImpl: async () => { abrufe += 1; return antwort(200, {}); } });
+  for (const p of [`${P}/git/refs`, `${P}/pulls/1/merge`, '/user', `${P}/actions/workflows/tests.yml/runs`, `${P}/issues/1/comments`, `${P}/contents/src/rechne.js`, `${P}/actions/runs/1/rerun`, '/repos/fremd/agenten-probe']) {
+    assert.equal((await l.holeJson(p)).klasse, 'unbekannt', p);
+    assert.equal((await l.holeAlleSeiten(p)).klasse, 'unbekannt', p);
+  }
+  assert.equal(abrufe, 0);
+  assert.equal((await l.holeJson(`${P}/pulls`)).klasse, 'ok', 'Gegenprobe: erlaubter Pfad geht durch');
+  assert.equal(abrufe, 1);
 });

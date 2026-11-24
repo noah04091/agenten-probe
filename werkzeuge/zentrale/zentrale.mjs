@@ -18,8 +18,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
-  REPO, freigabenAus, fristenAusJson, fristenModell, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, laufwarnungen, monatsKosten, offeneAuftraege, pflichtchecks,
-  prZuLauf, restMinuten, startfreigaben, wartenderJob,
+  PRUEFER_ERGEBNISSE, PRUEFER_JOB, REPO, freigabenAus, fristenAusJson, fristenModell, issueZuLauf, jobsAus, kostenAusJob1, laeufeAus, laufwarnungen, monatsKosten,
+  offeneAuftraege, pflichtchecks, prZuLauf, prueferZeile, restMinuten, startfreigaben, vorpruefungFuerPr, wartenderJob,
 } from './daten.mjs';
 import { geheimnisTreffer, notseite, seite } from './darstellung.mjs';
 import { erzeugeLeser } from './github-lesen.mjs';
@@ -43,7 +43,24 @@ const ZEIT_MIN = Date.UTC(2000, 0, 1);
 const ZEIT_MAX = Date.UTC(2200, 0, 1);
 const zeitpunkt = x => Number.isInteger(x) && x >= ZEIT_MIN && x < ZEIT_MAX;
 
+// B2.1: Zeile eines Pruefers im Cache: 'keine', 'ungueltig' oder genau die fuenf Felder aus prueferZeile.
+function prueferEintrag(w) {
+  if (w === 'keine' || w === 'ungueltig') {
+    return w;
+  }
+
+  if (typeof w !== 'object' || w === null || Array.isArray(w) || Object.keys(w).length !== 5) {
+    return undefined;
+  }
+
+  const zahl = x => Number.isInteger(x) && x >= 0 && x < 10000;
+  const ok = (w.pr === null || (Number.isInteger(w.pr) && w.pr > 0 && w.pr < 1e8)) && (w.kopf === null || (typeof w.kopf === 'string' && /^[0-9a-f]{40}$/.test(w.kopf)))
+    && PRUEFER_ERGEBNISSE.includes(w.ergebnis) && zahl(w.befunde) && zahl(w.hinweise);
+  return ok ? { pr: w.pr, kopf: w.kopf, ergebnis: w.ergebnis, befunde: w.befunde, hinweise: w.hinweise } : undefined;
+}
+
 // Cache: nur { jobId: { code, runden, kosten } } mit festen Formen; alles andere wird verworfen.
+// B2.1: dazu genau ein festes Feld vorpruefung: { laufId: prueferEintrag } fuer abgeschlossene Pruefläufe.
 // B1.3: dazu genau ein festes Feld leseTokenAblauf: { ablauf, gemeldetAm } (beides Millisekunden), das zuletzt von
 // GitHub gemeldete Ablaufdatum des Lese-Tokens. Nur das Datum, nie ein Tokenwert. Alte Cache-Dateien ohne das Feld
 // laden weiter; jede andere Form des Felds wird verworfen.
@@ -58,6 +75,22 @@ export function cacheBereinigt(roh) {
 
   if (typeof lt === 'object' && lt !== null && !Array.isArray(lt) && Object.keys(lt).length === 2 && zeitpunkt(lt.ablauf) && zeitpunkt(lt.gemeldetAm)) {
     sauber.leseTokenAblauf = { ablauf: lt.ablauf, gemeldetAm: lt.gemeldetAm };
+  }
+
+  const vp = roh.vorpruefung;
+
+  if (typeof vp === 'object' && vp !== null && !Array.isArray(vp)) {
+    const v = {};
+
+    for (const [id, w] of Object.entries(vp).slice(0, 5000)) {
+      const e = /^\d{1,16}$/.test(id) ? prueferEintrag(w) : undefined;
+
+      if (e !== undefined) {
+        v[id] = e;
+      }
+    }
+
+    sauber.vorpruefung = v;
   }
 
   for (const [id, w] of Object.entries(roh).slice(0, 5000)) {
@@ -75,6 +108,57 @@ export function cacheBereinigt(roh) {
   }
 
   return sauber;
+}
+
+// B2.1: abgeschlossene Laeufe des Pruefers (workflow_run, workflow_dispatch). Je Lauf genau der Job "Vorpruefung
+// Agenten-PR" und daraus nur die Zeile A6-PRUEFER. Ein laufender Pruefer hat noch keine Zeile und zaehlt nicht. Das
+// Ergebnis steht je Lauf im Cache; ein nicht lesbares Log (zeile null) wird nicht gespeichert.
+async function vorpruefungen(leser, seit, cache) {
+  const runs = await leser.holeAlleSeiten(`${R}/actions/workflows/agent-pruefer.yml/runs?per_page=100&created=%3E%3D${seit}`, { feld: 'workflow_runs' });
+
+  // 404 mit "Not Found" (holeAlleSeiten: Grund "HTTP 404") heisst: der Workflow ist auf GitHub nicht eingerichtet. Dann
+  // gibt es belegt keinen Pruefer-Lauf ("nicht geprueft"); jeder andere Fehler bleibt "unbekannt".
+  if (runs.klasse !== 'ok') {
+    return runs.grund === 'HTTP 404' ? { liste: [], vollstaendig: true } : { liste: null, vollstaendig: false };
+  }
+
+  cache.vorpruefung = { ...(cache.vorpruefung ?? {}) };
+  const liste = [];
+
+  for (const r of runs.daten) {
+    if (typeof r !== 'object' || r === null || !Number.isInteger(r.id) || r.id <= 0 || !['workflow_run', 'workflow_dispatch'].includes(r.event) || r.status !== 'completed') {
+      continue;
+    }
+
+    const basis = { laufId: r.id, url: typeof r.html_url === 'string' ? r.html_url : null, start: Number.isFinite(Date.parse(r.created_at)) ? Date.parse(r.created_at) : null };
+    const alt = cache.vorpruefung[String(r.id)];
+
+    if (alt !== undefined) {
+      liste.push({ ...basis, zeile: alt });
+      continue;
+    }
+
+    const jr = await leser.holeAlleSeiten(`${R}/actions/runs/${r.id}/jobs?per_page=100`, { feld: 'jobs' });
+    const jobs = jr.klasse === 'ok' && jr.vollstaendig === true && Array.isArray(jr.daten) ? jr.daten.filter(j => j && j.name === PRUEFER_JOB) : null;
+    let zeile = null;
+
+    if (jobs !== null && jobs.length === 1 && Number.isInteger(jobs[0].id)) {
+      if (jobs[0].conclusion === 'skipped') {
+        zeile = 'keine';
+      } else {
+        const log = await leser.holeLog(jobs[0].id);
+        zeile = log.klasse === 'ok' ? prueferZeile(log.text) : null;
+      }
+    }
+
+    if (zeile !== null) {
+      cache.vorpruefung[String(r.id)] = zeile;
+    }
+
+    liste.push({ ...basis, zeile });
+  }
+
+  return { liste, vollstaendig: runs.vollstaendig === true };
 }
 
 function seitDatum(jetzt) {
@@ -150,6 +234,7 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
 
     teil ||= !kandidatenVollstaendig;
     const pulls = await leser.holeAlleSeiten(`${R}/pulls?state=all&per_page=100`);
+    const vp = await vorpruefungen(leser, seit, neuerCache);
     const pullsVollstaendig = pulls.klasse === 'ok' && pulls.vollstaendig === true;
     const freigaben = [];
     const eintraege = [];
@@ -207,7 +292,9 @@ export async function sammle({ leser, jetzt, cache = {}, sitzungen }) {
         if (p !== null && typeof p === 'object') {
           const cr = p.sha ? await leser.holeAlleSeiten(`${R}/commits/${p.sha}/check-runs?per_page=100`, { feld: 'check_runs' }) : { klasse: 'unbekannt' };
           pr = { ...p, checks: cr.klasse === 'ok' ? pflichtchecks(cr.daten, cr.vollstaendig === true) : [{ name: 'Pflichtchecks', ergebnis: 'unbekannt' }] };
-          teil ||= cr.klasse !== 'ok' || cr.vollstaendig !== true;
+          // B2.1: Vorpruefung nur zum aktuellen Kopf, sonst veraltet oder nicht geprueft.
+          pr.vorpruefung = vorpruefungFuerPr(pr, vp.liste, vp.vollstaendig);
+          teil ||= cr.klasse !== 'ok' || cr.vollstaendig !== true || pr.vorpruefung?.status === 'unbekannt';
         } else {
           pr = p;
           teil ||= p !== null;

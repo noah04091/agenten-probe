@@ -728,6 +728,9 @@ test('Vertrag: Job 3 liest nur die festen Namen, kennt keine Ausgabedatei und ke
 // B1.2: neuer Stand mit den Berichtsschritten. Ohne sie ist er byte-gleich mit dem bisherigen Stand
 // d5bb6eaa3d16e2bd964c2466b8c2befa343c751703d0c8961d0b7026700eb20f (Ausschneide-Probe in a6-auftrag-workflow.test.mjs).
 const A6_WORKFLOW_SHA256 = '1136d41a25c18ba06fb32fcfc591b5e20a0cf52d0fcf92f65c9c872a1d38133d';
+// B2.1: kontrollierte Ausnahme genau fuer agent-pruefer.yml mit genau diesem SHA-256 (Zeilenenden LF). Er ruft den
+// Integritaetspruefer auf, aber nie einen Job-Einstieg, kein App-Token und keinen Vergleichsschluessel.
+const A6_PRUEFER_WORKFLOW_SHA256 = '80dbc2cdfbe356531332ebfcf72185bc5bbcdc4368ffd52e13564fe7fd8fc493';
 
 test('Regression: Policy vorhanden, ausser dem genehmigten agent-auftrag.yml ruft kein Workflow Job-Einstieg oder Integritaetspruefer auf', () => {
   const workflows = join(ROOT, '.github', 'workflows');
@@ -741,7 +744,16 @@ test('Regression: Policy vorhanden, ausser dem genehmigten agent-auftrag.yml ruf
   }
 
   const genehmigt = name => name === 'agent-auftrag.yml';
-  const andere = files.filter(name => !genehmigt(name));
+  // B2.1: agent-pruefer.yml nur im genehmigten Stand; dann darf er den Integritaetspruefer aufrufen, sonst nichts davon.
+  const pruefer = name => name === 'agent-pruefer.yml' && sha256(Buffer.from(text(name), 'utf8')) === A6_PRUEFER_WORKFLOW_SHA256;
+
+  if (files.includes('agent-pruefer.yml')) {
+    assert.ok(pruefer('agent-pruefer.yml'), 'agent-pruefer.yml ist nicht der genehmigte Stand');
+    assert.ok(/agent-code-integritaet\.mjs/.test(text('agent-pruefer.yml')), 'Muss-Treffer: Integritaetspruefer im Pruefer');
+    assert.ok(!/agent-code-job|A6_APP_TOKEN|A6_VERGLEICH/.test(text('agent-pruefer.yml')));
+  }
+
+  const andere = files.filter(name => !genehmigt(name) && !pruefer(name));
   assert.ok(andere.every(name => !/agent-code-job|agent-code-integritaet|A6_APP_TOKEN|A6_VERGLEICH/.test(text(name))));
   assert.ok(files.some(name => readFileSync(join(workflows, name), 'utf8').includes('agent-code-job')), 'Muss-Treffer der Suche');
   assert.equal(existsSync(join(ROOT, '.github', 'agent', 'policy.json')), true);

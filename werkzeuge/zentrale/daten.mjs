@@ -622,3 +622,69 @@ export function laufwarnungen({ laeufe, laeufeVollstaendig, pulls, pullsVollstae
 
   return w;
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// B2.1 Vorpruefung: Logzeile des Pruefers und Zuordnung zum PR-Kopf
+// ---------------------------------------------------------------------------------------------------------------
+
+export const PRUEFER_WORKFLOW = 'agent-pruefer.yml';
+export const PRUEFER_JOB = 'Vorpruefung Agenten-PR';
+export const PRUEFER_ERGEBNISSE = Object.freeze(['auffaelligkeiten', 'keine-auffaelligkeiten', 'ausstehend', 'nicht-pruefbar']);
+const PRUEFER_ZEITSTEMPEL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z /;
+const PRUEFER_ZEILE = /^A6-PRUEFER repo noah04091\/agenten-probe pr ([1-9]\d{0,7}|unbekannt) kopf ([0-9a-f]{40}|unbekannt) basis ([0-9a-f]{40}|unbekannt) lauf ([1-9]\d{0,15}|unbekannt) ergebnis ([a-z-]{1,40}) befunde (\d{1,4}) hinweise (\d{1,4})$/;
+
+// Aus einem Job-Log nur die eine Zeile A6-PRUEFER. Ergebnis: Objekt, 'keine' (keine Zeile) oder 'ungueltig' (Zeile
+// in anderer Form, unbekannter Ergebniswert oder mehr als eine Zeile). Kein anderer Text verlaesst diese Funktion.
+export function prueferZeile(text) {
+  if (typeof text !== 'string' || text.length > 16 * 1024 * 1024) {
+    return 'ungueltig';
+  }
+
+  const kandidaten = text.replace(/^\uFEFF/, '').split('\n')
+    .map(z => z.replace(/\r$/, '').replace(PRUEFER_ZEITSTEMPEL, ''))
+    .filter(z => z.startsWith('A6-PRUEFER '));
+
+  if (kandidaten.length === 0) {
+    return 'keine';
+  }
+
+  const m = kandidaten.length === 1 ? PRUEFER_ZEILE.exec(kandidaten[0]) : null;
+
+  if (!m || !PRUEFER_ERGEBNISSE.includes(m[5])) {
+    // Auch "kein Agenten-Auftrag" (quelle-kein-auftrag) ist keine Ergebniszeile; sie gehoert zu keinem PR.
+    return kandidaten.length === 1 && /^A6-PRUEFER kein Agenten-Auftrag lauf ([1-9]\d{0,15}|unbekannt) code quelle-kein-auftrag$/.test(kandidaten[0]) ? 'keine' : 'ungueltig';
+  }
+
+  const zahl = x => (x === 'unbekannt' ? null : Number(x));
+  return Object.freeze({
+    pr: zahl(m[1]), kopf: m[2] === 'unbekannt' ? null : m[2], ergebnis: m[5], befunde: Number(m[6]), hinweise: Number(m[7]),
+  });
+}
+
+// Vorpruefung zu einem PR. pruefungen: [{ laufId, url, start, zeile }] mit zeile aus prueferZeile oder null (Log nicht
+// lesbar). Nur ein Ergebnis zum aktuellen Kopf gilt; sonst "veraltet". Mehrere zum selben Kopf: der juengste, mit
+// Anzahl. Unvollstaendige Laufliste oder ein nicht lesbares Log: unbekannt, nie "nicht geprueft".
+export function vorpruefungFuerPr(pr, pruefungen, vollstaendig) {
+  if (!istObjekt(pr) || !Number.isInteger(pr.nummer)) {
+    return null;
+  }
+
+  if (!Array.isArray(pruefungen) || vollstaendig !== true) {
+    return { status: 'unbekannt', grund: 'Prüfläufe nicht vollständig lesbar' };
+  }
+
+  const zuPr = pruefungen.filter(p => istObjekt(p.zeile) && p.zeile.pr === pr.nummer);
+  const gleich = zuPr.filter(p => typeof pr.sha === 'string' && p.zeile.kopf === pr.sha).sort((a, b) => (b.start ?? 0) - (a.start ?? 0));
+  const offen = pruefungen.some(p => p.zeile === null || p.zeile === 'ungueltig');
+
+  if (offen) {
+    return { status: 'unbekannt', grund: 'Log eines Prüflaufs nicht lesbar oder ungültig' };
+  }
+
+  if (gleich.length > 0) {
+    const j = gleich[0];
+    return { status: 'aktuell', ergebnis: j.zeile.ergebnis, befunde: j.zeile.befunde, hinweise: j.zeile.hinweise, url: j.url, anzahl: gleich.length };
+  }
+
+  return zuPr.length > 0 ? { status: 'veraltet', anzahl: zuPr.length } : { status: 'nicht-geprueft' };
+}

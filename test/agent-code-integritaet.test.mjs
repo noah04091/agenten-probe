@@ -54,13 +54,15 @@ const SETTINGS_ENTWURF_BYTES = readFileSync(join(ROOT, 'test', 'fixtures', 'clau
 // Stand nach dem Tokenformat-Fix: nur die Hashes von Transport- und Paketmodul sind neu.
 // B1.2: dazu genau der neue Eintrag scripts/agent-code-job-bericht.mjs (bisher 2012009abe81965866c9c11c2a0ad8b08fd4f32ee23c41d3ffdf95546e94f1ae).
 // B1.3c: nur der Hash von scripts/agent-code-job-bericht.mjs ist neu (bisher 83d9f815a28096183a69fb7ab99de6a6e8fe0bf9815aba07b659c84346bd2f03).
-const POLICY_SHA256 = '8f6d617a45d50eca09a955a5972449b03d72fb53fac67a87844f85deb1b5cf3b';
+// B2.1: dazu genau die beiden neuen Eintraege scripts/agent-pruefer-gate.mjs und scripts/agent-pruefer-vorpruefung.mjs.
+const POLICY_SHA256 = 'ef31c01078f32e03463094f78f6cc9173346785ee9ced99ae692c4fbe297880b';
 
 const IST_WINDOWS = process.platform === 'win32';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const canon = value => JSON.stringify(value, null, 2) + '\n';
 
-// Freigegebener Stand nach A6.4-2d: genau diese 26 Dateien. B1.2: dazu das Berichtsskript, also 27.
+// Freigegebener Stand nach A6.4-2d: genau diese 26 Dateien. B1.2: dazu das Berichtsskript, also 27. B2.1: dazu die
+// beiden Skripte der Vorpruefung, also 29.
 const SKRIPTE = Object.freeze([
   'scripts/agent-code-acceptance.mjs',
   'scripts/agent-code-activation-check.mjs',
@@ -89,6 +91,8 @@ const SKRIPTE = Object.freeze([
   'scripts/agent-issue-live-check.mjs',
   'scripts/agent-issue-route.mjs',
   'scripts/agent-profile.mjs',
+  'scripts/agent-pruefer-gate.mjs',
+  'scripts/agent-pruefer-vorpruefung.mjs',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -194,9 +198,9 @@ const NUR_LINUX = process.platform === 'linux' ? false : 'FIFO und Socket nur un
 // Inventar und Driftfixture
 // ---------------------------------------------------------------------------
 
-test('Inventar: scripts/ enthaelt genau die 27 freigegebenen Dateien, alle mit gueltigem Namen', () => {
+test('Inventar: scripts/ enthaelt genau die 29 freigegebenen Dateien, alle mit gueltigem Namen', () => {
   const ist = readdirSync(join(ROOT, 'scripts')).map(name => `scripts/${name}`).sort();
-  assert.equal(SKRIPTE.length, 27);
+  assert.equal(SKRIPTE.length, 29);
   assert.deepEqual(ist, [...SKRIPTE].sort());
   assert.ok(ist.every(path => integritaet.SKRIPT_PFAD_RE.test(path)));
 
@@ -205,9 +209,9 @@ test('Inventar: scripts/ enthaelt genau die 27 freigegebenen Dateien, alle mit g
   }
 });
 
-test('Driftfixture: kanonisch, genau 27 Eintraege, jeder Hash gleich den tatsaechlichen Rohbytes', () => {
+test('Driftfixture: kanonisch, genau 29 Eintraege, jeder Hash gleich den tatsaechlichen Rohbytes', () => {
   assert.equal(canon(FIXTURE), FIXTURE_BYTES.toString('utf8'), 'Fixture nicht kanonisch');
-  assert.deepEqual(Object.keys(FIXTURE), [...SKRIPTE].sort(), 'Fixture deckt nicht genau die 27 Dateien ab');
+  assert.deepEqual(Object.keys(FIXTURE), [...SKRIPTE].sort(), 'Fixture deckt nicht genau die 29 Dateien ab');
 
   for (const [path, erwartet] of Object.entries(FIXTURE)) {
     assert.match(erwartet, /^[0-9a-f]{64}$/);
@@ -572,9 +576,9 @@ test('Laufzeit: ohne import.meta.main endet der Start mit umgebung-fehlt; der al
 // Positive Faelle
 // ---------------------------------------------------------------------------
 
-test('Positiv: 27 Dateien, vollstaendige Policy, Erfolg ohne Ausgabe und ohne Schreibzugriff', () => {
+test('Positiv: 29 Dateien, vollstaendige Policy, Erfolg ohne Ausgabe und ohne Schreibzugriff', () => {
   const { root, policy } = baum();
-  assert.equal(Object.keys(policy.skript_hashes).length, 27);
+  assert.equal(Object.keys(policy.skript_hashes).length, 29);
   assert.deepEqual(Object.keys(policy.skript_hashes), [...SKRIPTE].sort());
   // Die synthetische Policy besteht auch die volle Pruefung des Profilmoduls (mit neuer Pfadregel).
   assert.deepEqual(loadPolicy(readFileSync(policyPfad(root))), policy);
@@ -622,7 +626,7 @@ test('Echtes Repository: produktive Policy und Claude-Basis gueltig, Pruefer bes
   assert.deepEqual(loadPolicy(bytes), policy);
   // Alle uebrigen Werte entsprechen dem geprueften Entwurf; nur skript_hashes ist befuellt.
   assert.deepEqual({ ...policy, skript_hashes: POLICY_ENTWURF.skript_hashes }, POLICY_ENTWURF);
-  assert.equal(Object.keys(policy.skript_hashes).length, 27);
+  assert.equal(Object.keys(policy.skript_hashes).length, 29);
   assert.deepEqual(policy.skript_hashes, FIXTURE);
 
   for (const [skript, hash] of Object.entries(policy.skript_hashes)) {

@@ -25,5 +25,7 @@
   "scripts/agent-code-release-plan.mjs": "614773a409bfa1b40ecc6dae7c738dc968317bbda28ae37fe03a64f5f03880cc",
   "scripts/agent-issue-live-check.mjs": "aa59c496693620a650cbbba89f2cfcf562fd4a6547b7887a402c48f1ae3fea2b",
   "scripts/agent-issue-route.mjs": "5e248f1481fea2ef6eecfd0de65b6d33d93255577fc8bed46beb99b8111a91ea",
-  "scripts/agent-profile.mjs": "4485a12445c61a1512c372dfc27b6c0944d5c6f8eb9aaadd96af7bb5442c3c7a"
+  "scripts/agent-profile.mjs": "4485a12445c61a1512c372dfc27b6c0944d5c6f8eb9aaadd96af7bb5442c3c7a",
+  "scripts/agent-pruefer-gate.mjs": "b01c7edbd8766b92d2c75cc6b523e26ede7a5e79e0ba0d144efc601af03e1332",
+  "scripts/agent-pruefer-vorpruefung.mjs": "7d39457bb286cce6d84e9be58beb9b330ed3b08f1f22529a0bf69557bfad410d"
 }

@@ -1,0 +1,5 @@
+{
+  "number": 111,
+  "title": "Rechner: Funktion dividiere(a, b) ergänzen (B0)",
+  "body": "## Aufgabe\n\nErgänze in `src/rechne.js` die neue Funktion `dividiere(a, b)`. Sie gibt exakt das Ergebnis des JavaScript-Ausdrucks `a / b` zurück, ohne Typprüfung, ohne Rundung und ohne Sonderbehandlung von 0.\n\nExportiere `dividiere` zusätzlich über `module.exports`. Die vorhandenen Funktionen und Exporte bleiben unverändert.\n\n## Tests\n\nErgänze in `test/rechne.test.js` Tests mit `node:test` und `assert.strictEqual`, mindestens für `dividiere(10, 4)`, `dividiere(1, 0)`, `dividiere(-1, 0)` und `dividiere(0, -5)` (ergibt -0). Prüfe `dividiere(0, 0)` mit `assert.strictEqual(Number.isNaN(dividiere(0, 0)), true)`.\n\n## Grenzen\n\nNur `src/rechne.js` und `test/rechne.test.js` ändern. Beide Dateien müssen geändert werden.\n"
+}

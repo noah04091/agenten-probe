@@ -24,6 +24,27 @@ export const PRO_SEITE = 100;
 const PFAD = /^\/[A-Za-z0-9_.\/-]{1,300}(\?[A-Za-z0-9_.=&%-]{0,300})?$/;
 const LOG_HOST = /^productionresultssa\d{1,3}\.blob\.core\.windows\.net$/;
 
+// B2.1 GET-Wache: nur diese Pfade (ohne Abfrage) gehen ins Netz. Genau die Pfade aus zentrale.mjs und echtprobe.mjs;
+// neu ist nur die Laufliste des Pruefers (agent-pruefer.yml). Jeder andere Pfad ist "unbekannt", ohne Abruf.
+export const ERLAUBTE_PFADE = Object.freeze([
+  /^\/repos\/noah04091\/agenten-probe$/,
+  /^\/rate_limit$/,
+  /^\/repos\/noah04091\/gibt-es-nicht-b1-zentrale$/,
+  /^\/repos\/noah04091\/agenten-probe\/branches\/wp\/[A-Za-z0-9._-]{1,100}$/,
+  /^\/repos\/noah04091\/agenten-probe\/issues$/,
+  /^\/repos\/noah04091\/agenten-probe\/issues\/[1-9]\d{0,7}\/events$/,
+  /^\/repos\/noah04091\/agenten-probe\/contents\/agent-acceptance\/issue-[1-9]\d{0,7}\.mjs$/,
+  /^\/repos\/noah04091\/agenten-probe\/actions\/workflows\/(?:agent-auftrag|agent-pruefer)\.yml\/runs$/,
+  /^\/repos\/noah04091\/agenten-probe\/actions\/runs\/[1-9]\d{0,15}\/(?:jobs|pending_deployments)$/,
+  /^\/repos\/noah04091\/agenten-probe\/actions\/jobs\/[1-9]\d{0,15}\/logs$/,
+  /^\/repos\/noah04091\/agenten-probe\/pulls$/,
+  /^\/repos\/noah04091\/agenten-probe\/commits\/[0-9a-f]{40}\/check-runs$/,
+]);
+
+export function pfadErlaubt(pfad) {
+  return typeof pfad === 'string' && ERLAUBTE_PFADE.some(re => re.test(pfad.split('?')[0]));
+}
+
 const unbekannt = grund => ({ klasse: 'unbekannt', grund });
 const ABLAUF_KOPF = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) UTC$/;
 
@@ -86,7 +107,7 @@ export function erzeugeLeser({ token, fetchImpl = globalThis.fetch, zeitlimitMs 
   });
 
   async function abruf(pfad) {
-    if (typeof pfad !== 'string' || !PFAD.test(pfad) || pfad.includes('..') || pfad.includes('//')) {
+    if (typeof pfad !== 'string' || !PFAD.test(pfad) || pfad.includes('..') || pfad.includes('//') || !pfadErlaubt(pfad)) {
       return { fehler: unbekannt('ungültiger Pfad') };
     }
 

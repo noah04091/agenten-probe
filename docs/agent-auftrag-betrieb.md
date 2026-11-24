@@ -106,6 +106,11 @@ gh run list -R noah04091/agenten-probe --workflow agent-auftrag.yml --status que
 | **Job 3 läuft bereits** | Lauf abbrechen, dann Branches und PRs `wp/<ISSUE>-*` prüfen | Ein schon angelegter Branch oder Draft-PR bleibt bestehen; nichts wird gemergt. Von Hand schließen und löschen |
 | **Alle neuen Aufträge sofort sperren** | Workflow deaktivieren: `gh workflow disable agent-auftrag.yml -R noah04091/agenten-probe` (Workflow-ID `421414131`). Vorher laufende und wartende Läufe wie oben abbrechen oder ablehnen | Verhindert neue Läufe, beendet aber **keinen** laufenden. Nebenwirkung: Auf PRs fehlt dann der Pflichtcheck `agent-auftrag-sammel`, PRs gegen `main` lassen sich bis zur Wiedereinschaltung nicht mergen |
 
+**Vorprüfung abschalten (B2.1):** `gh workflow disable agent-pruefer.yml -R noah04091/agenten-probe`. Danach startet
+nach einem Auftrag keine Vorprüfung mehr; der Auftrag selbst und die Pflichtchecks bleiben unberührt (die Vorprüfung
+ist kein Pflichtcheck). Ein laufender Prüflauf wird mit `gh run cancel <LAUF> -R noah04091/agenten-probe` beendet.
+Details in Abschnitt 8.
+
 **Nicht mehr gültig:** `CODE_PILOT_ENABLED` steuert diese Pipeline nicht. Die Variable bleibt ungesetzt;
 sie zu setzen oder zu löschen hat keine Wirkung auf `agent-auftrag.yml`.
 
@@ -133,7 +138,48 @@ Nur in dieser Reihenfolge, nie automatisch:
 | Bot-Token | Token von `noah04091-agent` läuft am **09.12.2026** ab (R7) |
 | App | GitHub-App `noah04091-agenten-probe-cloud-bot`; ihren privaten Schlüssel im Environment nur der Eigentümer |
 | Profile und Abnahmen | nur per PR auf `main`; Profiländerungen getrennt von anderen Änderungen (Trennregel in `schutz.yml`) |
-| CI und Wachen | alle vier Pflichtchecks; die Wache `test/a8-einziger-agentenpfad.test.mjs` erlaubt genau vier Workflows und nur einen Agentenpfad. Wachen nie abschwächen, um rote Checks zu beseitigen |
+| CI und Wachen | alle vier Pflichtchecks; die Wache `test/a8-einziger-agentenpfad.test.mjs` erlaubt genau fünf Workflows (seit B2.1 dazu `agent-pruefer.yml` mit eigenen Regeln) und nur einen Agentenpfad. Wachen nie abschwächen, um rote Checks zu beseitigen |
 | Gleichzeitigkeit | immer nur ein Lauf aus Issue-Ereignissen (Gruppe `agent-auftrag-live`, ohne Abbruch); dazu zählt **jedes** `labeled`-Ereignis im Repository. Ein weiterer Lauf wartet; GitHub ersetzt dabei einen schon wartenden durch den neueren. Ein so verdrängter `bot-auftrag`-Lauf hat seine Startfreigabe trotzdem verbraucht (aus dem Verhalten von GitHub abgeleitet, nicht live erprobt). Deshalb während eines Laufs keine Labels setzen |
 | Historische Workflow-Einträge | GitHub führt `code-pilot-start-diagnose.yml` noch als Eintrag, ohne Datei auf einem Zweig; nicht ausführbar. Alte Workflow-Dateien liegen noch auf `wp/28-…`, `wp/35-…` und dem Zweig von PR #96, ohne greifenden Auslöser |
 | Regelmäßige Prüfung | monatlich: `gh run list -R noah04091/agenten-probe --limit 20`, offene Draft-PRs, Zweige `wp/*`, Ablaufdaten oben, dass `CODE_PILOT_ENABLED` nicht gesetzt ist |
+
+## 8. Vorprüfung ohne KI (B2.1)
+
+Nach jedem erfolgreich abgeschlossenen Auftrag startet `.github/workflows/agent-pruefer.yml` (Job „Vorpruefung
+Agenten-PR“) von selbst und prüft den erzeugten Draft-PR **nur lesend und deterministisch**. Kein Claude, kein
+Anthropic-Schlüssel, kein Environment, keine Secrets, nur Leserechte. Der Bericht ist **nie eine Freigabe**; über
+den Merge entscheidet Noah. Ein grüner Prüflauf heißt nur „Prüfung ausgeführt“.
+
+| Ergebnis | Bedeutung |
+|---|---|
+| `auffaelligkeiten` | mindestens ein Befund oder Hinweis im geprüften Umfang |
+| `keine-auffaelligkeiten` | im geprüften Umfang nichts gefunden; ausdrücklich keine Freigabe |
+| `ausstehend` | Pflichtchecks am PR-Kopf nach 12 Wiederholungen im Abstand von 30 s noch nicht fertig |
+| `nicht-pruefbar` | Herkunft, Zuordnung, Auftragsbindung oder Daten fehlen, sind mehrdeutig oder widersprüchlich (fester Code im Bericht) |
+
+Was geprüft wird, jeweils über die API und nie aus Titel oder Text des PR:
+- **Herkunft:** Lauf aus `agent-auftrag.yml`, Ereignis `issues`, Zweig `main`, Versuch 1, Job 0 bis 3 erfolgreich.
+- **Zuordnung:** genau ein PR nach `main` vom Zweig `wp/<ISSUE>-agent-<LAUF>-1`, offen, Draft, vom Bot, aus diesem
+  Repository, genau ein Commit auf dem Ausgangsstand des Laufs; Kopf am Anfang und unmittelbar vor dem Bericht gleich.
+- **Auftragsbindung:** Titel und Text des Issues gleich den Hashzeilen `A6-NUTZLAST` aus dem Log von Job 0; Startlabel
+  von `noah04091` höchstens 60 s vor dem Laufstart.
+- **Gate:** genau die Profildateien, kein gesperrter Pfad, Abnahmedatei vorhanden, Testdatei mit mehr `test(`-Aufrufen,
+  Muster in der Quelldatei als Hinweis, Größen- und Inhaltsgrenzen, Pflichtchecks nur von GitHub Actions.
+
+**Wo das Ergebnis steht:** genau eine Logzeile
+`A6-PRUEFER repo noah04091/agenten-probe pr <n> kopf <sha> basis <sha> lauf <id> ergebnis <wert> befunde <n> hinweise <n>`
+und der Bericht in der Zusammenfassung des Prüflaufs. Die Zentrale zeigt je Agenten-PR die Spalte „Vorprüfung“, nur
+zum aktuellen Kopf; ein älterer Kopf heißt „veraltet“, kein Lauf „nicht geprüft“.
+
+**Von Hand erneut prüfen** (nur `noah04091`, nur auf `main`):
+`gh workflow run agent-pruefer.yml -R noah04091/agenten-probe -f lauf=<LAUF>`
+
+**Container:** festes Node-Image, zuerst der äußere Anker und der Integritätsprüfer für alle Skripte unter
+`scripts/`, erst danach das Prüfskript. Scheitert die Integrität, endet der Lauf rot mit `nicht-pruefbar` (Grund
+`integritaet`), bevor etwas bewertet wird. Root-Dateisystem und Checkout nur lesbar, genau eine beschreibbare
+Ergebnisdatei, keine Rechte, eigener Nutzer, nur die Variablen Token, Lauf-ID, Repository und ein fester `PATH`.
+
+**Generalprobe:** Auf jedem PR läuft der Job „Generalprobe Vorpruefung gegen nachgebautes GitHub“ ohne Netz mit je
+einem Fall für alle vier Ergebnisse. Er ist kein Pflichtcheck.
+
+**Notabschaltung:** `gh workflow disable agent-pruefer.yml -R noah04091/agenten-probe` (Abschnitt 5).
