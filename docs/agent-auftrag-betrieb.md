@@ -262,6 +262,9 @@ geprüft, ein erneuter Dispatch ist möglich. Ablehnen gibt die Gruppe frei.
 
 **Grenzen:** Zwischen Vorjob und Freigabe kann sich etwas ändern (PR-Kopf, Environment). In B2.3a ist das folgenlos, weil
 nur eine Logzeile läuft. Vor B2.3b ist dieselbe Prüfung nach der Freigabe Pflicht. Ab mehr als 100 Läufen oder 400
-Abrufen stoppt die Schranke grundsätzlich (fail-closed); dann braucht es eine neue Entscheidung.
+Abrufen stoppt die Schranke grundsätzlich (fail-closed); dann braucht es eine neue Entscheidung. Nach „nur einzelne Jobs
+wiederholen“ stoppt die Doppelsperre später dauerhaft mit `verlauf-widerspruch` (fail-closed). Löschen des Laufs würde
+auch seinen Freigabe-Nachweis entfernen und ist deshalb nur nach gesonderter Prüfung und ausdrücklichem GO zulässig,
+nie automatisch.
 
 **Notabschaltung:** Abschnitt 5, „KI-Prüfer abschalten“.

@@ -193,7 +193,13 @@ const KI_B_KLAUSELN = [
   "github.event_name == 'workflow_dispatch'", "github.actor == 'noah04091'", "github.triggering_actor == 'noah04091'",
 ];
 
-const KI_CLAUDE_ZEILEN = ['          UMGEBUNG=claude-pruefer', '      name: claude-pruefer'];
+// Schrankenjob: B, Erfolg des Vorjobs und derselbe Versuch wie der bestandene Vorjob (Re-run nur des Schrankenjobs
+// uebernimmt den alten Vorjob samt altem Versuch und wird vor der Freigabeanfrage uebersprungen).
+const KI_SCHRANKE_ZUSATZ = " && needs.schranke_vorpruefung.result == 'success'"
+  + " && needs.schranke_vorpruefung.outputs.versuch == format('{0}', github.run_attempt)";
+const KI_VORJOB_AUSGABEN = ['quelle', 'auftrag', 'pr', 'kopf', 'versuch'].map(n => `${n}: \${{ steps.pruefung.outputs.${n} }}`);
+
+const KI_CLAUDE_ZEILEN =['          UMGEBUNG=claude-pruefer', '      name: claude-pruefer'];
 
 function kiJobs(text) {
   const teil = text.split('\njobs:\n');
@@ -231,7 +237,9 @@ function regelnKi(text) {
   if ((text.match(/^\s*environment:/gm) ?? []).length !== 1 || !sch.includes('\n    environment:\n      name: claude-pruefer\n') || /environment:/.test(vor)) v.push('environment');
   if (!sch.includes('\n    needs: schranke_vorpruefung\n') || (text.match(/needs:/g) ?? []).length !== 1) v.push('needs');
   const bedingung = b => /\n {4}if: >-\n((?: {6}.*\n)+)/.exec(b)?.[1].replace(/\s+/g, ' ').trim();
-  if (bedingung(vor) !== KI_B || bedingung(sch) !== `${KI_B} && needs.schranke_vorpruefung.result == 'success'`) v.push('bedingung');
+  if (bedingung(vor) !== KI_B || bedingung(sch) !== `${KI_B}${KI_SCHRANKE_ZUSATZ}`) v.push('bedingung');
+  const ausgaben = /\n {4}outputs:\n((?: {6}.*\n)+)/.exec(vor)?.[1].trim().split('\n').map(z => z.trim());
+  if (JSON.stringify(ausgaben) !== JSON.stringify(KI_VORJOB_AUSGABEN) || (text.match(/^\s*outputs:/gm) ?? []).length !== 1) v.push('ausgaben');
   if (/\buses:/.test(text)) v.push('uses');
   for (const m of text.matchAll(/\n {8}run: \|\n((?:(?: {10}.*)?\n)+)/g)) {
     if (m[1].includes('${{')) v.push('ausdruck-im-run');
@@ -308,6 +316,14 @@ test('A8 (B2.3a): agent-pruefer-ki.yml haelt alle eigenen Regeln ein; jede Regel
     ['needs entfernt', text.replace('    needs: schranke_vorpruefung\n', ''), 'needs'],
     ['Erfolgsbedingung entfernt', text.replace(" &&\n      needs.schranke_vorpruefung.result == 'success'", ''), 'bedingung'],
     ['Erfolgsbedingung gelockert', text.replace("needs.schranke_vorpruefung.result == 'success'", "needs.schranke_vorpruefung.result != 'failure'"), 'bedingung'],
+    ['Versuchsbindung entfernt', text.replace(" &&\n      needs.schranke_vorpruefung.outputs.versuch == format('{0}', github.run_attempt)", ''), 'bedingung'],
+    ['Versuchsbindung ohne format', text.replace("format('{0}', github.run_attempt)", 'github.run_attempt'), 'bedingung'],
+    ['Versuchsbindung gegen run_id', text.replace("format('{0}', github.run_attempt)", "format('{0}', github.run_id)"), 'bedingung'],
+    ['Versuchsbindung gelockert', text.replace("outputs.versuch == format(", "outputs.versuch != format("), 'bedingung'],
+    ['Versuchsbindung mit oder', text.replace(" &&\n      needs.schranke_vorpruefung.outputs.versuch ==", " ||\n      needs.schranke_vorpruefung.outputs.versuch =="), 'bedingung'],
+    ['Ausgabe versuch fehlt', text.replace('      versuch: ${{ steps.pruefung.outputs.versuch }}\n', ''), 'ausgaben'],
+    ['Ausgabe versuch aus anderem Schritt', text.replace('      versuch: ${{ steps.pruefung.outputs.versuch }}\n', '      versuch: ${{ github.run_attempt }}\n'), 'ausgaben'],
+    ['Ausgaben im Schrankenjob', text.replace('    timeout-minutes: 2\n', '    timeout-minutes: 2\n    outputs:\n      x: y\n'), 'ausgaben'],
     ['branches entfernt', text.replace('    branches: [main]\n', ''), 'ausloeser-block'],
     ['anderer Quellworkflow', text.replace('workflows: [Agent-Vorpruefung]', 'workflows: [Agent-Auftrag]'), 'ausloeser-block'],
     ['Eingabe versuch entfernt', text.replace('      versuch:\n        description: Versuch (run_attempt) dieses Laufs\n        required: true\n        type: string\n', ''), 'ausloeser-block'],

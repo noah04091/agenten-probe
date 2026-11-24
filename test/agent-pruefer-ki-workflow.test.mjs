@@ -20,7 +20,7 @@ const WF_PFAD = join(ROOT, '.github', 'workflows', 'agent-pruefer-ki.yml');
 const FIXTURE = join(ROOT, 'test', 'fixtures', 'pruefer-ki', 'job-138457104840-lauf-45397511852.log');
 const sha256 = b => createHash('sha256').update(b).digest('hex');
 // SHA-256 des genehmigten agent-pruefer-ki.yml (Zeilenenden LF). Jede andere Fassung ist rot.
-const A6_PRUEFER_KI_WORKFLOW_SHA256 = 'aed43d68b65e2a0682dd182970428348e9cd6792dce3b3f968fd0f46efbffc0c';
+const A6_PRUEFER_KI_WORKFLOW_SHA256 = '1c2cbd19e315d88c3d495a3e4d496425a2118361ff879752e676171d36f52a38';
 // SHA-256 des echten Logs (von Terminal 1 gelesen, Token maskiert).
 const FIXTURE_SHA256 = '5301f65865867d9259be674635e6103a8769c8a51155f8bec27e0df13fdd89a8';
 
@@ -261,12 +261,14 @@ function ausfuehren(skript, umgebung, antworten, { ohneJq = false } = {}) {
   });
 }
 
-function vorjob(sz, optionen) {
+// Ergebnis traegt den eigenen Versuch aus der Eingabe (nicht aus dem Skript), damit istGruen die Ausgabe versuch prueft.
+async function vorjob(sz, optionen) {
   const j = jobs(WF()).schranke_vorpruefung;
-  return ausfuehren(runBlock(j), {
+  const r = await ausfuehren(runBlock(j), {
     GH_TOKEN: 'attrappe-ohne-geheimnis', A6_KI_EREIGNIS: sz.ereignis, A6_KI_LAUF: sz.lauf, A6_KI_VERSUCH: sz.versuch,
     GITHUB_RUN_ID: sz.runId, GITHUB_RUN_ATTEMPT: sz.runAttempt, GITHUB_SHA: sz.sha, GITHUB_REPOSITORY: REPO,
   }, sz.antworten, optionen);
+  return { ...r, eigenerVersuch: sz.runAttempt };
 }
 
 function schranke(werte) {
@@ -314,11 +316,12 @@ async function pruefeFaelle(faelle) {
   faelle.forEach(([was, , grund, quelle], k) => istRot(ergebnisse[k], grund, was, quelle));
 }
 
-const gruenAusgabe = (quelle = `${LAUF}-1`, pr = PR, kopf = KOPF) => `quelle=${quelle}\nauftrag=${AUFTRAG}\npr=${pr}\nkopf=${kopf}\n`;
+const gruenAusgabe = (quelle, pr, kopf, versuch) => `quelle=${quelle}\nauftrag=${AUFTRAG}\npr=${pr}\nkopf=${kopf}\nversuch=${versuch}\n`;
 function istGruen(r, was, { quelle = `${LAUF}-1`, pr = PR, kopf = KOPF } = {}) {
   assert.equal(r.stdout, `A6-PRUEFER-SCHRANKE repo ${REPO} quelle ${quelle} auftrag ${AUFTRAG} pr ${pr} kopf ${kopf} ergebnis anfrage\n`, `${was}: ${r.stdout}${r.stderr}`.slice(0, 600));
   assert.equal(r.status, 0, `${was}: Exitcode`);
-  assert.equal(r.ausgabe, gruenAusgabe(quelle, pr, kopf), `${was}: Ausgaben`);
+  assert.match(r.eigenerVersuch, /^[1-9][0-9]{0,2}$/, `${was}: Muss-Treffer eigener Versuch`);
+  assert.equal(r.ausgabe, gruenAusgabe(quelle, pr, kopf, r.eigenerVersuch), `${was}: Ausgaben`);
   nurGet(r, was);
 }
 
@@ -347,8 +350,10 @@ test('KI-Schranke: Schritt-Umgebung fest, GH_TOKEN nur im Vorjob, kein Ausdruck 
     'A6_KI_AUFTRAG: ${{ needs.schranke_vorpruefung.outputs.auftrag }}',
     'A6_KI_PR: ${{ needs.schranke_vorpruefung.outputs.pr }}',
     'A6_KI_KOPF: ${{ needs.schranke_vorpruefung.outputs.kopf }}',
+    'A6_KI_VORJOB_VERSUCH: ${{ needs.schranke_vorpruefung.outputs.versuch }}',
   ]);
-  assert.match(j.schranke_vorpruefung, /\n {4}outputs:\n {6}quelle: \$\{\{ steps\.pruefung\.outputs\.quelle \}\}\n {6}auftrag: \$\{\{ steps\.pruefung\.outputs\.auftrag \}\}\n {6}pr: \$\{\{ steps\.pruefung\.outputs\.pr \}\}\n {6}kopf: \$\{\{ steps\.pruefung\.outputs\.kopf \}\}\n/);
+  assert.match(j.schranke_vorpruefung, /\n {4}outputs:\n {6}quelle: \$\{\{ steps\.pruefung\.outputs\.quelle \}\}\n {6}auftrag: \$\{\{ steps\.pruefung\.outputs\.auftrag \}\}\n {6}pr: \$\{\{ steps\.pruefung\.outputs\.pr \}\}\n {6}kopf: \$\{\{ steps\.pruefung\.outputs\.kopf \}\}\n {6}versuch: \$\{\{ steps\.pruefung\.outputs\.versuch \}\}\n {4}steps:\n/);
+  assert.ok(!/outputs:/.test(j.schranke), 'Schrankenjob ohne Ausgaben');
   assert.equal([...WF().matchAll(/GH_TOKEN/g)].length, 1, 'GH_TOKEN genau einmal');
   assert.equal([...WF().matchAll(/github\.token/g)].length, 1, 'github.token genau einmal');
   assert.ok(!j.schranke.includes('GH_TOKEN') && !j.schranke.includes('github.token'), 'kein Token im Schrankenjob');
@@ -392,7 +397,7 @@ test('KI-Schranke gruen (Muss-Treffer): workflow_run und Dispatch setzen alle Au
     ]);
     assert.ok(r.protokoll[4].includes('--allow-escape-sequences'));
 
-    const s = await schranke({ A6_KI_EREIGNIS: ereignis, A6_KI_QUELLE: `${LAUF}-1`, A6_KI_AUFTRAG: String(AUFTRAG), A6_KI_PR: String(PR), A6_KI_KOPF: KOPF, GITHUB_SHA: WFSHA });
+    const s = await schranke({ A6_KI_EREIGNIS: ereignis, A6_KI_QUELLE: `${LAUF}-1`, A6_KI_AUFTRAG: String(AUFTRAG), A6_KI_PR: String(PR), A6_KI_KOPF: KOPF, A6_KI_VORJOB_VERSUCH: '1', GITHUB_RUN_ATTEMPT: '1', GITHUB_SHA: WFSHA });
     assert.equal(s.status, 0, s.stderr);
     assert.equal(s.stdout, `A6-PRUEFER-SCHRANKE repo ${REPO} quelle ${LAUF}-1 auftrag ${AUFTRAG} pr ${PR} kopf ${KOPF} workflow-sha ${WFSHA} ereignis ${ereignis} freigegeben\n`);
     assert.deepEqual(s.protokoll, [], 'Schrankenjob ruft nichts ab');
@@ -411,7 +416,7 @@ test('KI-Schranke Bindung: kopf kommt aus Vorpruefungszeile und PR, workflow-sha
   const r2 = await vorjob({ ...grundfall(), sha: KOPF2 });
   assert.equal(r2.ausgabe, r.ausgabe);
 
-  const s = await schranke({ A6_KI_EREIGNIS: 'workflow_dispatch', A6_KI_QUELLE: aus.quelle, A6_KI_AUFTRAG: aus.auftrag, A6_KI_PR: aus.pr, A6_KI_KOPF: aus.kopf, GITHUB_SHA: WFSHA });
+  const s = await schranke({ A6_KI_EREIGNIS: 'workflow_dispatch', A6_KI_QUELLE: aus.quelle, A6_KI_AUFTRAG: aus.auftrag, A6_KI_PR: aus.pr, A6_KI_KOPF: aus.kopf, A6_KI_VORJOB_VERSUCH: aus.versuch, GITHUB_RUN_ATTEMPT: '1', GITHUB_SHA: WFSHA });
   const m = /^A6-PRUEFER-SCHRANKE repo \S+ quelle (\S+) auftrag (\S+) pr (\S+) kopf (\S+) workflow-sha (\S+) ereignis (\S+) freigegeben\n$/.exec(s.stdout);
   assert.ok(m, s.stdout);
   assert.deepEqual(m.slice(1), [`${LAUF}-1`, String(AUFTRAG), String(PR), KOPF, WFSHA, 'workflow_dispatch']);
@@ -426,7 +431,7 @@ test('KI-Schranke ohne jq: der Vorjob stoppt ohne Freigabeanfrage und ohne Ausga
 });
 
 test('KI-Schranke Schrankenjob: jede Ausgabe wird erneut gegen ihr Format geprueft', { skip: OHNE_LAUF }, async () => {
-  const gut = { A6_KI_EREIGNIS: 'workflow_run', A6_KI_QUELLE: `${LAUF}-1`, A6_KI_AUFTRAG: String(AUFTRAG), A6_KI_PR: String(PR), A6_KI_KOPF: KOPF, GITHUB_SHA: WFSHA };
+  const gut = { A6_KI_EREIGNIS: 'workflow_run', A6_KI_QUELLE: `${LAUF}-1`, A6_KI_AUFTRAG: String(AUFTRAG), A6_KI_PR: String(PR), A6_KI_KOPF: KOPF, A6_KI_VORJOB_VERSUCH: '1', GITHUB_RUN_ATTEMPT: '1', GITHUB_SHA: WFSHA };
   const faelle = [
     ['Quelle leer', { A6_KI_QUELLE: '' }, 'quelle'], ['Quelle ohne Versuch', { A6_KI_QUELLE: String(LAUF) }, 'quelle'],
     ['Auftrag leer', { A6_KI_AUFTRAG: '' }, 'auftrag'], ['PR unbekannt', { A6_KI_PR: 'unbekannt' }, 'pr'],
@@ -440,6 +445,143 @@ test('KI-Schranke Schrankenjob: jede Ausgabe wird erneut gegen ihr Format geprue
     assert.equal(ergebnisse[k].stdout, '', was);
     assert.equal(ergebnisse[k].stderr, `A6-START ${code}\n`, was);
   });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Versuchsbindung (Nachbesserung nach T1-Abnahme): Der Schrankenjob laeuft nur im selben Versuch wie ein bestandener
+// Vorjob. Wird nur der Schrankenjob (oder nur fehlgeschlagene Jobs) erneut gestartet, uebernimmt GitHub den Vorjob samt
+// seinen Ausgaben aus dem frueheren Versuch; versuch ist dann kleiner als github.run_attempt.
+// ---------------------------------------------------------------------------------------------------------------
+
+const VERSUCH_KLAUSEL = "needs.schranke_vorpruefung.outputs.versuch == format('{0}', github.run_attempt)";
+
+// Modell der dokumentierten GitHub-Regeln fuer == (Expressions, Operators): gleiche Typen direkt vergleichen, Strings
+// ohne Gross- und Kleinschreibung; verschiedene Typen werden zu Zahlen (null 0, leerer String 0, sonst die Zahl,
+// nicht numerisch NaN). format('{0}', x) liefert x als String, null als leeren String. Fehlende Ausgaben sind null.
+// Das ist ein Modell der Doku, keine Auswertung durch GitHub; die bleibt Live-Nachweis.
+const ghZahl = x => (x === null ? 0 : typeof x === 'boolean' ? Number(x) : typeof x === 'number' ? x : x.trim() === '' ? 0 : Number(x));
+function ghGleich(a, b) {
+  if (a === null && b === null) return true;
+  if (a !== null && b !== null && typeof a === typeof b) return typeof a === 'string' ? a.toLowerCase() === b.toLowerCase() : a === b;
+  const x = ghZahl(a);
+  const y = ghZahl(b);
+  return !Number.isNaN(x) && !Number.isNaN(y) && x === y;
+}
+const ghFormat = x => (x === null || x === undefined ? '' : String(x));
+// Die Klausel aus dem Workflow lesen und nur diese feste Form auswerten (alles andere ist ein Testfehler).
+function versuchsBindung(text) {
+  const bed = /\n {4}if: >-\n((?: {6}.*\n)+)/.exec(jobs(text).schranke)[1].replace(/\s+/g, ' ').trim();
+  const teile = bed.split(' && ');
+  assert.equal(teile.at(-1), VERSUCH_KLAUSEL, 'letzte Klausel des Schrankenjobs ist die Versuchsbindung');
+  assert.equal(teile.at(-2), "needs.schranke_vorpruefung.result == 'success'");
+  assert.equal(bed.split(VERSUCH_KLAUSEL).length, 2, 'Versuchsbindung genau einmal');
+  assert.ok(!/\|\|/.test(teile.slice(-2).join(' ')), 'kein oder in den Zusatzklauseln');
+  return ({ ausgabe, runAttempt }) => ghGleich(ausgabe === undefined ? null : ausgabe, ghFormat(runAttempt));
+}
+
+test('KI-Schranke Versuchsbindung: Bedingung statisch und im Ausdrucksmodell; Ausgabe versuch nur nach bestandener Pruefung', { skip: OHNE_PATCH }, () => {
+  const text = WF();
+  const j = jobs(text);
+  // Statisch: Ausgabe versuch nur aus dem Pruefschritt, im run-Text genau einmal und nur im Ausgabeblock am Ende.
+  const run = runBlock(j.schranke_vorpruefung);
+  assert.equal(run.split('echo "versuch=$GITHUB_RUN_ATTEMPT"').length, 2, 'Muss-Treffer: versuch genau einmal geschrieben');
+  const block = /\n\{\n((?: {2}echo "[a-z]+=\$[A-Z_]+"\n)+)\} >> "\$GITHUB_OUTPUT"\n/.exec(run);
+  assert.ok(block, 'Ausgabeblock');
+  assert.deepEqual(block[1].trim().split('\n').map(z => z.trim()), ['echo "quelle=$QUELLE"', 'echo "auftrag=$AUFTRAG"', 'echo "pr=$PR"', 'echo "kopf=$KOPF"', 'echo "versuch=$GITHUB_RUN_ATTEMPT"']);
+  assert.equal(run.split('GITHUB_OUTPUT').length, 2, 'GITHUB_OUTPUT nur im Ausgabeblock');
+  assert.ok(run.indexOf('} >> "$GITHUB_OUTPUT"') > run.lastIndexOf('stopp '), 'Ausgaben erst nach dem letzten moeglichen Stopp');
+  // Der eigene Versuch ist vor jedem Abruf auf sein Format geprueft.
+  assert.ok(run.indexOf('"${GITHUB_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]{0,2}$') < run.indexOf('api "$API/environments/$UMGEBUNG"'));
+
+  const bindung = versuchsBindung(text);
+  const faelle = [
+    ['erster vollstaendiger Versuch', { ausgabe: '1', runAttempt: '1' }, true],
+    ['vollstaendiger Re-run, Vorjob neu', { ausgabe: '2', runAttempt: '2' }, true],
+    ['nur Schrankenjob erneut, alter Vorjob', { ausgabe: '1', runAttempt: '2' }, false],
+    ['fehlgeschlagene Jobs erneut, Vorjob nicht wiederholt', { ausgabe: '2', runAttempt: '3' }, false],
+    ['Ausgabe fehlt (null)', { ausgabe: undefined, runAttempt: '1' }, false],
+    ['Ausgabe leer', { ausgabe: '', runAttempt: '1' }, false],
+    ['Ausgabe ungueltig', { ausgabe: 'x', runAttempt: '1' }, false],
+    ['Ausgabe mit fuehrender Null', { ausgabe: '01', runAttempt: '1' }, false],
+    ['Ausgabe mit Leerzeichen', { ausgabe: ' 1', runAttempt: '1' }, false],
+    ['Ausgabe als Dezimalzahl', { ausgabe: '1.0', runAttempt: '1' }, false],
+    ['Ausgabe groesser als Versuch (widerspruechlich)', { ausgabe: '2', runAttempt: '1' }, false],
+  ];
+  for (const [was, ctx, soll] of faelle) assert.equal(bindung(ctx), soll, was);
+  // Eichprobe des Modells: ohne format waere '01' gegen die Zahl 1 gleich (Typumwandlung), mit format nicht.
+  assert.equal(ghGleich('01', 1), true);
+  assert.equal(ghGleich('01', ghFormat(1)), false);
+});
+
+test('KI-Schranke Versuchsbindung: Schrankenjob bricht ohne Logzeile ab, wenn der Vorjob-Versuch nicht der eigene ist', { skip: OHNE_LAUF }, async () => {
+  const gut = { A6_KI_EREIGNIS: 'workflow_run', A6_KI_QUELLE: `${LAUF}-1`, A6_KI_AUFTRAG: String(AUFTRAG), A6_KI_PR: String(PR), A6_KI_KOPF: KOPF, A6_KI_VORJOB_VERSUCH: '1', GITHUB_RUN_ATTEMPT: '1', GITHUB_SHA: WFSHA };
+  const faelle = [
+    ['nur Schrankenjob erneut', { A6_KI_VORJOB_VERSUCH: '1', GITHUB_RUN_ATTEMPT: '2' }],
+    ['Vorjob-Versuch groesser', { A6_KI_VORJOB_VERSUCH: '2', GITHUB_RUN_ATTEMPT: '1' }],
+    ['Ausgabe fehlt', { A6_KI_VORJOB_VERSUCH: undefined }],
+    ['Ausgabe leer', { A6_KI_VORJOB_VERSUCH: '' }],
+    ['Ausgabe ungueltig', { A6_KI_VORJOB_VERSUCH: 'x' }],
+    ['Ausgabe 0', { A6_KI_VORJOB_VERSUCH: '0', GITHUB_RUN_ATTEMPT: '0' }],
+    ['fuehrende Null', { A6_KI_VORJOB_VERSUCH: '01' }],
+    ['Leerzeichen', { A6_KI_VORJOB_VERSUCH: '1 ' }],
+    ['Zeilenumbruch', { A6_KI_VORJOB_VERSUCH: '1\n1', GITHUB_RUN_ATTEMPT: '1\n1' }],
+    ['vierstellig', { A6_KI_VORJOB_VERSUCH: '1000', GITHUB_RUN_ATTEMPT: '1000' }],
+    ['GITHUB_RUN_ATTEMPT fehlt', { GITHUB_RUN_ATTEMPT: undefined }],
+    ['GITHUB_RUN_ATTEMPT leer', { GITHUB_RUN_ATTEMPT: '' }],
+  ];
+  const ergebnisse = await alle(faelle, ([, w]) => schranke({ ...gut, ...w }));
+  faelle.forEach(([was], k) => {
+    assert.equal(ergebnisse[k].status, 1, was);
+    assert.equal(ergebnisse[k].stdout, '', was);
+    assert.equal(ergebnisse[k].stderr, 'A6-START versuch\n', was);
+  });
+  // Gegenprobe (Muss-Treffer): gleicher Versuch 2 schreibt die Zeile.
+  const s = await schranke({ ...gut, A6_KI_VORJOB_VERSUCH: '2', GITHUB_RUN_ATTEMPT: '2' });
+  assert.equal(s.status, 0, s.stderr);
+  assert.match(s.stdout, / freigegeben\n$/);
+});
+
+test('KI-Schranke Versuchsbindung: Ablauf erster Versuch, Re-run nur Schranke, Re-run fehlgeschlagener Jobs, vollstaendiger Re-run', { skip: OHNE_LAUF }, async () => {
+  const bindung = versuchsBindung(WF());
+  const aus = r => Object.fromEntries(r.ausgabe.trim().split('\n').filter(Boolean).map(z => z.split('=')));
+  const zeilenwerte = a => ({ A6_KI_EREIGNIS: 'workflow_run', A6_KI_QUELLE: a.quelle, A6_KI_AUFTRAG: a.auftrag, A6_KI_PR: a.pr, A6_KI_KOPF: a.kopf, A6_KI_VORJOB_VERSUCH: a.versuch, GITHUB_SHA: WFSHA });
+
+  // Versuch 1: Vorjob bestanden, Schrankenjob zulaessig.
+  const v1 = await vorjob(grundfall());
+  istGruen(v1, 'Versuch 1');
+  const a1 = aus(v1);
+  assert.equal(a1.versuch, '1');
+  assert.equal(bindung({ ausgabe: a1.versuch, runAttempt: '1' }), true, 'Versuch 1 zulaessig');
+  const s1 = await schranke({ ...zeilenwerte(a1), GITHUB_RUN_ATTEMPT: '1' });
+  assert.equal(s1.status, 0, s1.stderr);
+
+  // Versuch 2 nur Schrankenjob, und Versuch 2 nach abgelehnter Freigabe (fehlgeschlagene Jobs): Vorjob uebernommen,
+  // Ausgaben aus Versuch 1. Keine Freigabeanfrage; laeuft der Job trotzdem, bricht er ohne Zeile ab.
+  for (const was of ['nur Schrankenjob erneut', 'fehlgeschlagene Jobs erneut']) {
+    assert.equal(bindung({ ausgabe: a1.versuch, runAttempt: '2' }), false, `${was}: keine Freigabeanfrage`);
+    const s = await schranke({ ...zeilenwerte(a1), GITHUB_RUN_ATTEMPT: '2' });
+    assert.equal(s.status, 1, was);
+    assert.equal(s.stdout, '', was);
+    assert.equal(s.stderr, 'A6-START versuch\n', was);
+  }
+
+  // Versuch 2 vollstaendig: der Vorjob laeuft erneut. Wurde Versuch 1 freigegeben, sperrt die Doppelsperre; der rote
+  // Vorjob setzt keine Ausgabe, die Bindung ist dann ebenfalls falsch.
+  const frei = grundfall();
+  verlauf(frei, [], { eigeneVersuche: [[VJ, S_OK()]] });
+  const v2 = await vorjob(frei);
+  istRot(v2, 'bereits-freigegeben', 'vollstaendiger Re-run nach Freigabe');
+  assert.equal(v2.eigenerVersuch, '2');
+  assert.equal(bindung({ ausgabe: aus(v2).versuch, runAttempt: '2' }), false);
+  // Wurde Versuch 1 abgelehnt, ist Versuch 2 zulaessig und an Versuch 2 gebunden.
+  const abgelehnt = grundfall();
+  verlauf(abgelehnt, [], { eigeneVersuche: [[VJ, S_ABGELEHNT]] });
+  const v3 = await vorjob(abgelehnt);
+  istGruen(v3, 'vollstaendiger Re-run nach Ablehnung');
+  assert.equal(aus(v3).versuch, '2');
+  assert.equal(bindung({ ausgabe: aus(v3).versuch, runAttempt: '2' }), true);
+  const s3 = await schranke({ ...zeilenwerte(aus(v3)), GITHUB_RUN_ATTEMPT: '2' });
+  assert.equal(s3.status, 0, s3.stderr);
 });
 
 // ---------------------------------------------------------------------------------------------------------------
