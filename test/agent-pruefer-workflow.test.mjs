@@ -159,7 +159,9 @@ test('Workflow: Funktionsdatei erst nach dem Hashvergleich, Image mit Digest, In
     const schritte = ["printf '%s  %s\\n' \"$A6_FUNKTIONEN_SHA256\" .github/agent/a6-funktionen.sh | sha256sum -c --status", 'source .github/agent/a6-funktionen.sh', 'a6_image_laden "$A6_NODE_IMAGE"', 'docker run '];
     const pos = schritte.map(s => b.indexOf(s));
     assert.ok(pos.every((p, i) => p >= 0 && (i === 0 || p > pos[i - 1])), `Reihenfolge ${pos}`);
-    assert.ok(b.indexOf('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"') < pos[0]);
+    // B2.1 Nachbesserung: Muss-Treffer, die Pruefung des Checkouts steht in jedem Job und vor dem Hashvergleich.
+    const revParse = b.indexOf('\n          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"\n');
+    assert.ok(revParse >= 0 && revParse < pos[0], 'Checkout-Pruefung fehlt oder steht zu spaet');
   }
 
   assert.ok(j.vorpruefung.includes(`if [[ "$rc" == "4" ]]; then`));

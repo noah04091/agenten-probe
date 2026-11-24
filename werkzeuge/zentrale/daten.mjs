@@ -661,9 +661,13 @@ export function prueferZeile(text) {
   });
 }
 
-// Vorpruefung zu einem PR. pruefungen: [{ laufId, url, start, zeile }] mit zeile aus prueferZeile oder null (Log nicht
-// lesbar). Nur ein Ergebnis zum aktuellen Kopf gilt; sonst "veraltet". Mehrere zum selben Kopf: der juengste, mit
-// Anzahl. Unvollstaendige Laufliste oder ein nicht lesbares Log: unbekannt, nie "nicht geprueft".
+// Vorpruefung zu einem PR. pruefungen: [{ laufId, url, start, zeile }]. zeile ist 'keine', 'ungueltig', null (Log nicht
+// lesbar), ein Ergebnis eines erfolgreichen Laufs (erfolg: true) oder ein fehlgeschlagener Lauf ({ fehlgeschlagen, pr,
+// kopf }, nur Zuordnung). Massgeblich ist der juengste eindeutig zugeordnete Lauf zum aktuellen Kopf (Startzeit, dann
+// Lauf-ID). Ist er fehlgeschlagen: "unbekannt (Prüflauf fehlgeschlagen)", nie ein aelteres positives Ergebnis. Ein
+// fehlgeschlagener Lauf ohne Zuordnung, der juenger ist als das gezeigte Ergebnis, macht es ebenfalls unbekannt. Ein
+// Ergebnis gilt nur mit erfolg: true. Unvollstaendige Laufliste oder ein nicht lesbares Log: unbekannt, nie "nicht
+// geprueft".
 export function vorpruefungFuerPr(pr, pruefungen, vollstaendig) {
   if (!istObjekt(pr) || !Number.isInteger(pr.nummer)) {
     return null;
@@ -673,17 +677,35 @@ export function vorpruefungFuerPr(pr, pruefungen, vollstaendig) {
     return { status: 'unbekannt', grund: 'Prüfläufe nicht vollständig lesbar' };
   }
 
-  const zuPr = pruefungen.filter(p => istObjekt(p.zeile) && p.zeile.pr === pr.nummer);
-  const gleich = zuPr.filter(p => typeof pr.sha === 'string' && p.zeile.kopf === pr.sha).sort((a, b) => (b.start ?? 0) - (a.start ?? 0));
   const offen = pruefungen.some(p => p.zeile === null || p.zeile === 'ungueltig');
 
   if (offen) {
     return { status: 'unbekannt', grund: 'Log eines Prüflaufs nicht lesbar oder ungültig' };
   }
 
+  const neuerZuerst = (a, b) => ((b.start ?? 0) - (a.start ?? 0)) || ((b.laufId ?? 0) - (a.laufId ?? 0));
+  const zugeordnet = p => istObjekt(p.zeile) && Number.isInteger(p.zeile.pr) && typeof p.zeile.kopf === 'string';
+  const ohneZuordnung = pruefungen.filter(p => istObjekt(p.zeile) && p.zeile.fehlgeschlagen === true && !zugeordnet(p)).sort(neuerZuerst);
+  const zuPr = pruefungen.filter(p => zugeordnet(p) && p.zeile.pr === pr.nummer);
+  const gleich = zuPr.filter(p => typeof pr.sha === 'string' && p.zeile.kopf === pr.sha).sort(neuerZuerst);
+  const fehlerOhneZuordnung = { status: 'unbekannt', grund: 'Prüflauf fehlgeschlagen, Zuordnung unbekannt' };
+
   if (gleich.length > 0) {
     const j = gleich[0];
+
+    if (ohneZuordnung.length > 0 && neuerZuerst(ohneZuordnung[0], j) < 0) {
+      return fehlerOhneZuordnung;
+    }
+
+    if (j.zeile.erfolg !== true) {
+      return { status: 'unbekannt', grund: 'Prüflauf fehlgeschlagen' };
+    }
+
     return { status: 'aktuell', ergebnis: j.zeile.ergebnis, befunde: j.zeile.befunde, hinweise: j.zeile.hinweise, url: j.url, anzahl: gleich.length };
+  }
+
+  if (ohneZuordnung.length > 0) {
+    return fehlerOhneZuordnung;
   }
 
   return zuPr.length > 0 ? { status: 'veraltet', anzahl: zuPr.length } : { status: 'nicht-geprueft' };

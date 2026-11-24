@@ -168,6 +168,9 @@ test('Zuordnung: kein PR, zwei PRs, fremder Autor, fremde Quelle, nicht Draft, n
     [d => { d.pulls.push({ ...structuredClone(pr(d)), number: 114, head: { ...pr(d).head, ref: `wp/112-agent-${LAUF}-1` } }); }, 'zuordnung-mehrdeutig'],
     [d => { pr(d).user = { login: 'noah04091', type: 'User' }; }, 'pr-autor'],
     [d => { pr(d).user = { login: 'noah04091-agenten-probe-cloud-bot', type: 'Bot' }; }, 'pr-autor'],
+    // B2.1 Nachbesserung: Bot-Login richtig, aber kein Bot-Konto.
+    [d => { pr(d).user = { login: A.BOT, type: 'User' }; }, 'pr-autor'],
+    [d => { pr(d).user = { login: A.BOT }; }, 'pr-autor'],
     [d => { pr(d).head.repo = { full_name: 'fremd/agenten-probe' }; }, 'pr-quelle'],
     [d => { pr(d).head.repo = null; }, 'pr-quelle'],
     [d => { pr(d).draft = false; }, 'pr-kein-draft'],
@@ -275,6 +278,9 @@ test('Gate: zusaetzliche Datei, fehlende Datei, gesperrter Pfad, Abnahmedatei fe
     [d => { d.dateien.push(datei('.github/workflows/tests.yml')); }, ['datei-zusaetzlich', 'richtlinie-gesperrt']],
     [d => { d.dateien.push(datei('package.json')); }, ['datei-zusaetzlich', 'richtlinie-gesperrt']],
     [d => { d.dateien.push(datei('src/CLAUDE.md')); }, ['datei-zusaetzlich', 'richtlinie-gesperrt']],
+    // B2.1 Nachbesserung: verschachtelter gesperrter Praefix.
+    [d => { d.dateien.push(datei('src/.github/x')); }, ['datei-zusaetzlich', 'richtlinie-gesperrt']],
+    [d => { d.dateien.push(datei('test/a/scripts/x.mjs')); }, ['datei-zusaetzlich', 'richtlinie-gesperrt']],
     [d => { d.dateien[0] = { ...d.dateien[0], status: 'renamed', previous_filename: 'scripts/agent-profile.mjs' }; }, ['datei-zusaetzlich', 'richtlinie-gesperrt', 'datei-status']],
     [d => { d.dateien.splice(0, 1); }, ['datei-fehlt']],
     [d => { d.dateien[0].status = 'removed'; }, ['datei-status']],
@@ -572,6 +578,24 @@ test('Ergebnisdatei: nur eine vorhandene, leere, gewoehnliche Datei; Schreibfehl
   assert.equal(aus.length, 2);
   assert.match(aus[0], / ergebnis keine-auffaelligkeiten befunde 0 hinweise 0$/);
   assert.equal(aus[1], '::warning title=A6-PRUEFER::bericht-nicht-geschrieben');
+});
+
+test('Geheimnis-Filter: ein Treffer in Logzeile oder Bericht ergibt Exitcode 1, keine Ergebniszeile, keinen Bericht', async () => {
+  // Der Tokenwert stuende sonst in der Logzeile: als Token dient genau der Kopf-SHA (40 Hex, gueltige Tokenform).
+  for (const token of [A.KOPF, A.BASIS]) {
+    const aus = [];
+    let geschrieben = null;
+    const rc = await main({ ...ENV, A6_LESE_TOKEN: token }, {
+      fetchImpl: A.erzeugeGithub(A.daten(LAUF)).f, schlafe: async () => {},
+      ausgabe: t => aus.push(t), fehlerAusgabe: t => aus.push(t), schreiben: t => { geschrieben = t; },
+    });
+    assert.deepEqual([rc, aus, geschrieben], [1, ['A6-FEHLER pruefer-geheimnis'], null], token);
+  }
+
+  // Gegenprobe: ein anderer Token ergibt die Zeile.
+  const aus = [];
+  assert.equal(await main(ENV, { fetchImpl: A.erzeugeGithub(A.daten(LAUF)).f, schlafe: async () => {}, ausgabe: t => aus.push(t), fehlerAusgabe: t => aus.push(t), schreiben: () => {} }), 0);
+  assert.match(aus[0], /^A6-PRUEFER repo /);
 });
 
 test('Logzeile: genau das feste Format; unbekannte Teile heissen unbekannt; kein anderer Ergebniswert', async () => {

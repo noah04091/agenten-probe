@@ -43,20 +43,33 @@ const ZEIT_MIN = Date.UTC(2000, 0, 1);
 const ZEIT_MAX = Date.UTC(2200, 0, 1);
 const zeitpunkt = x => Number.isInteger(x) && x >= ZEIT_MIN && x < ZEIT_MAX;
 
-// B2.1: Zeile eines Pruefers im Cache: 'keine', 'ungueltig' oder genau die fuenf Felder aus prueferZeile.
+// B2.1: eine Ergebniszeile aus prueferZeile; positiv gilt sie nur mit erfolg (Lauf und Pruefjob success).
+const istZeile = z => typeof z === 'object' && z !== null && PRUEFER_ERGEBNISSE.includes(z.ergebnis);
+const istErfolg = z => istZeile(z) && z.erfolg === true;
+// Fehlgeschlagener Pruefer-Lauf: nur die Zuordnung (PR und Kopf), nie ein Ergebnis.
+const fehlgeschlagen = z => ({ fehlgeschlagen: true, pr: z?.pr ?? null, kopf: z?.kopf ?? null });
+
+// B2.1: Eintrag eines Pruefer-Laufs im Cache, nur in drei Formen: 'keine' oder 'ungueltig'; ein Ergebnis eines
+// erfolgreichen Laufs mit genau den fuenf Feldern aus prueferZeile und erfolg: true; ein fehlgeschlagener Lauf mit genau
+// fehlgeschlagen, pr und kopf. Alles andere (auch Eintraege ohne erfolg aus aelteren Staenden) wird verworfen.
 function prueferEintrag(w) {
   if (w === 'keine' || w === 'ungueltig') {
     return w;
   }
 
-  if (typeof w !== 'object' || w === null || Array.isArray(w) || Object.keys(w).length !== 5) {
+  if (typeof w !== 'object' || w === null || Array.isArray(w)) {
     return undefined;
   }
 
   const zahl = x => Number.isInteger(x) && x >= 0 && x < 10000;
-  const ok = (w.pr === null || (Number.isInteger(w.pr) && w.pr > 0 && w.pr < 1e8)) && (w.kopf === null || (typeof w.kopf === 'string' && /^[0-9a-f]{40}$/.test(w.kopf)))
-    && PRUEFER_ERGEBNISSE.includes(w.ergebnis) && zahl(w.befunde) && zahl(w.hinweise);
-  return ok ? { pr: w.pr, kopf: w.kopf, ergebnis: w.ergebnis, befunde: w.befunde, hinweise: w.hinweise } : undefined;
+  const zuordnung = (w.pr === null || (Number.isInteger(w.pr) && w.pr > 0 && w.pr < 1e8)) && (w.kopf === null || (typeof w.kopf === 'string' && /^[0-9a-f]{40}$/.test(w.kopf)));
+
+  if (Object.keys(w).length === 3 && w.fehlgeschlagen === true && zuordnung) {
+    return { fehlgeschlagen: true, pr: w.pr, kopf: w.kopf };
+  }
+
+  const ok = Object.keys(w).length === 6 && w.erfolg === true && zuordnung && PRUEFER_ERGEBNISSE.includes(w.ergebnis) && zahl(w.befunde) && zahl(w.hinweise);
+  return ok ? { pr: w.pr, kopf: w.kopf, ergebnis: w.ergebnis, befunde: w.befunde, hinweise: w.hinweise, erfolg: true } : undefined;
 }
 
 // Cache: nur { jobId: { code, runden, kosten } } mit festen Formen; alles andere wird verworfen.
@@ -131,10 +144,19 @@ async function vorpruefungen(leser, seit, cache) {
     }
 
     const basis = { laufId: r.id, url: typeof r.html_url === 'string' ? r.html_url : null, start: Number.isFinite(Date.parse(r.created_at)) ? Date.parse(r.created_at) : null };
+
+    // Ein uebersprungener Lauf hat keine Ergebniszeile.
+    if (r.conclusion === 'skipped') {
+      liste.push({ ...basis, zeile: 'keine' });
+      continue;
+    }
+
+    const laufOk = r.conclusion === 'success';
     const alt = cache.vorpruefung[String(r.id)];
 
     if (alt !== undefined) {
-      liste.push({ ...basis, zeile: alt });
+      // Auch aus dem Cache: ein positives Ergebnis nur bei erfolgreichem Lauf; sonst nur noch die Zuordnung.
+      liste.push({ ...basis, zeile: istErfolg(alt) && !laufOk ? fehlgeschlagen(alt) : alt });
       continue;
     }
 
@@ -147,8 +169,25 @@ async function vorpruefungen(leser, seit, cache) {
         zeile = 'keine';
       } else {
         const log = await leser.holeLog(jobs[0].id);
-        zeile = log.klasse === 'ok' ? prueferZeile(log.text) : null;
+        const gelesen = log.klasse === 'ok' ? prueferZeile(log.text) : null;
+
+        if (laufOk && jobs[0].conclusion === 'success') {
+          zeile = gelesen === null ? null : istZeile(gelesen) ? { ...gelesen, erfolg: true } : gelesen;
+        } else {
+          // B2.1 Nachbesserung: Lauf oder Job nicht erfolgreich (failure, cancelled, timed_out, neutral, stale,
+          // action_required, null, unbekannt). Die Zeile dient hoechstens der Zuordnung, nie ihr Ergebnis. Ein nicht
+          // lesbares Log ergibt einen fehlgeschlagenen Lauf ohne Zuordnung, der nicht gecacht wird.
+          zeile = fehlgeschlagen(istZeile(gelesen) ? gelesen : null);
+
+          if (gelesen === null) {
+            liste.push({ ...basis, zeile });
+            continue;
+          }
+        }
       }
+    } else if (!laufOk && jr.klasse === 'ok' && jr.vollstaendig === true) {
+      // Fehlgeschlagener Lauf ohne eindeutigen Pruefjob: fehlgeschlagen, ohne Zuordnung.
+      zeile = fehlgeschlagen(null);
     }
 
     if (zeile !== null) {
