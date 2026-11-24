@@ -75,7 +75,7 @@ melden einen Fehler als genau eine Zeile `A6-FEHLER <code>`, die Shell-Schritte 
 
 | Symptom | Wo nachsehen | Typische Codes |
 |---|---|---|
-| Auftrag nicht angenommen (Job 0 rot) | Log Job 0, Schritt „Auftrag pruefen“ | `auftrag-label-profil-fehlt`, `auftrag-profil-inaktiv`, `auftrag-freigabe-fremd`, `auftrag-freigaben-grenze`, `auftrag-issue-pr`, `auftrag-abnahme` |
+| Auftrag nicht angenommen (Job 0 rot) | Log Job 0, Schritt „Auftrag pruefen“ | `auftrag-label-profil-fehlt`, `auftrag-profil-inaktiv`, `auftrag-freigabe-fremd`, `auftrag-freigaben-grenze`, `auftrag-issue-pr`, `auftrag-abnahme`, `auftrag-issue-geschlossen` (Issue geschlossen) |
 | Lauf ohne Live-Jobs | Lauf in der Liste: `gh run list -R noah04091/agenten-probe --workflow agent-auftrag.yml` | anderes Label als `bot-auftrag` gesetzt: alle Jobs übersprungen, `agent-auftrag-sammel` rot, das ist erwartet |
 | Kein Lauf zu sehen | Liste der Läufe wie oben | Workflow deaktiviert; Lauf wartet in der Gruppe `agent-auftrag-live` oder wurde dort durch einen neueren ersetzt (Abschnitt 7) |
 | Claude nicht gestartet (Job 1 rot in 1a) | Log Job 1, Schritt „Job 1a“ | `auftrag-label-start-fehlt` (Startlabel entzogen), `auftrag-freigabe-entzogen`, `auftrag-freigabe-abgelaufen`, `auftrag-issue-geaendert`, `live-main-geaendert`, `live-branch-vorhanden`, `live-pr-vorhanden`, `job-live-bindung` |

@@ -442,3 +442,183 @@ export function fristenModell({ jetzt, leseToken, letzteMeldung = null, datei })
 
   return { erzeugt: jetzt, datei: datei?.status ?? 'ungueltig', eintraege };
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// B1.3c Laufwarnungen. Rein, ohne Netz, ohne Dateien. Nur Daten, die die Zentrale ohnehin liest: Laeufe mit Status,
+// Issue-Ereignisse der zugeordneten Issues, alle PRs. Fehlende oder widerspruechliche Daten sind nie eine Entwarnung,
+// sondern ein Eintrag "nicht pruefbar". Die Zentrale vergleicht keinen main-Stand mit dem Ausgangscommit eines Laufs.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const LAUFEND = Object.freeze(['queued', 'in_progress', 'waiting', 'requested', 'pending']);
+export const LABEL_MUSTER = /^[a-z0-9:_-]{1,50}$/;
+const ISO_ZEIT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+
+// Zeitpunkt aus einem GitHub-Zeitstempel (nur ISO 8601 in UTC, Jahr 2000 bis 2199), sonst null.
+export function strengeZeit(x) {
+  if (typeof x !== 'string' || !ISO_ZEIT.test(x)) {
+    return null;
+  }
+
+  const ms = Date.parse(x);
+  return Number.isFinite(ms) && ms >= Date.UTC(2000, 0, 1) && ms < Date.UTC(2200, 0, 1) ? ms : null;
+}
+
+const gueltigerStart = ms => Number.isFinite(ms) && ms >= Date.UTC(2000, 0, 1) && ms < Date.UTC(2200, 0, 1);
+
+// P1: Labelaenderungen (labeled, unlabeled) strikt nach dem Laufstart, aufsteigend. Name nur nach LABEL_MUSTER, sonst
+// null ("ein Label"). null, wenn die Ereignisliste fehlt, ein Eintrag unbrauchbar ist oder ein Labelereignis keine
+// gueltige Zeit hat.
+export function labelAenderungen(ereignisse, start) {
+  if (!Array.isArray(ereignisse) || !gueltigerStart(start)) {
+    return null;
+  }
+
+  const r = [];
+
+  for (const e of ereignisse) {
+    if (!istObjekt(e) || typeof e.event !== 'string') {
+      return null;
+    }
+
+    if (e.event !== 'labeled' && e.event !== 'unlabeled') {
+      continue;
+    }
+
+    const ms = strengeZeit(e.created_at);
+
+    if (ms === null) {
+      return null;
+    }
+
+    if (ms > start) {
+      const name = istObjekt(e.label) && typeof e.label.name === 'string' && LABEL_MUSTER.test(e.label.name) ? e.label.name : null;
+      r.push({ zeit: ms, label: name });
+    }
+  }
+
+  return r.sort((a, b) => a.zeit - b.zeit);
+}
+
+// P2: PRs mit Basis main. { ok: false }, wenn die Liste fehlt oder unvollstaendig ist oder ein PR keine verlaessliche
+// Basis, Nummer, keinen verlaesslichen Zustand oder kein verlaessliches merged_at hat (null oder gueltige Zeit, nicht
+// null nur bei Zustand closed).
+// Sonst { ok: true, offen: [Nummern], gemergt: [{ nummer, zeit }] }.
+export function prsNachMain(pulls, vollstaendig) {
+  if (!Array.isArray(pulls) || vollstaendig !== true) {
+    return { ok: false };
+  }
+
+  const offen = [];
+  const gemergt = [];
+
+  for (const p of pulls) {
+    if (!istObjekt(p) || !Number.isInteger(p.number) || p.number < 1 || !istObjekt(p.base) || typeof p.base.ref !== 'string') {
+      return { ok: false };
+    }
+
+    if (p.base.ref !== 'main') {
+      continue;
+    }
+
+    if (p.merged_at !== null) {
+      // Gemergt nur geschlossen und mit gueltiger Zeit; ein offener oder unbekannter Zustand mit merged_at widerspricht
+      // sich und ist nicht pruefbar.
+      const ms = strengeZeit(p.merged_at);
+
+      if (ms === null || p.state !== 'closed') {
+        return { ok: false };
+      }
+
+      gemergt.push({ nummer: p.number, zeit: ms });
+    } else if (p.state === 'open') {
+      offen.push(p.number);
+    } else if (p.state !== 'closed') {
+      return { ok: false };
+    }
+  }
+
+  return { ok: true, offen: offen.sort((a, b) => a - b), gemergt };
+}
+
+// Laufwarnungen fuer die Seite. laeufe: [{ lauf, issue }] mit lauf aus laeufeAus und issue als eindeutig zugeordnetem
+// Issue ({ nummer, ereignisse }, ereignisse null, wenn nicht vollstaendig gelesen) oder null; null fuer laeufe heisst
+// "Laufliste nicht gelesen". Ergebnis: Liste von Eintraegen
+//   { art: 'label', laufId, issue, zeit, label, weitere }       P1, Risikohinweis
+//   { art: 'gemergt', laufId, issue, prs }                      P2 eingetreten, hat Vorrang vor 'offen'
+//   { art: 'offen', laufId, issue, prs }                        P2 moeglicher Konflikt
+//   { art: 'nicht-pruefbar', laufId?, quelle }                  Daten fehlen oder widersprechen sich
+// Kein laufender Lauf und alles gelesen: leere Liste.
+export function laufwarnungen({ laeufe, laeufeVollstaendig, pulls, pullsVollstaendig }) {
+  const nicht = (quelle, laufId = null) => ({ art: 'nicht-pruefbar', laufId, quelle });
+
+  if (!Array.isArray(laeufe)) {
+    return [nicht('Läufe nicht gelesen')];
+  }
+
+  const w = [];
+
+  if (laeufeVollstaendig !== true) {
+    w.push(nicht('Laufliste unvollständig'));
+  }
+
+  const laufend = [];
+
+  for (const k of laeufe) {
+    const l = k?.lauf;
+
+    if (!istObjekt(l) || l.status === 'completed') {
+      continue;
+    }
+
+    if (!LAUFEND.includes(l.status)) {
+      w.push(nicht(`Status von Lauf ${l.id} unbekannt`, l.id));
+      continue;
+    }
+
+    laufend.push({ lauf: l, issue: istObjekt(k.issue) ? k.issue : null });
+  }
+
+  if (laufend.length === 0) {
+    return w;
+  }
+
+  const prs = prsNachMain(pulls, pullsVollstaendig);
+
+  for (const { lauf: l, issue } of laufend) {
+    const nummer = issue && Number.isInteger(issue.nummer) ? issue.nummer : null;
+
+    if (!gueltigerStart(l.start)) {
+      w.push(nicht(`Laufstart von Lauf ${l.id} fehlt oder ist ungültig`, l.id));
+      continue;
+    }
+
+    // P1 nur bei eindeutiger Zuordnung und vollstaendig gelesenen Ereignissen.
+    if (nummer === null) {
+      w.push(nicht(`Lauf ${l.id} keinem Issue eindeutig zugeordnet`, l.id));
+    } else {
+      const aenderungen = labelAenderungen(issue.ereignisse, l.start);
+
+      if (aenderungen === null) {
+        w.push(nicht(`Ereignisse von #${nummer} nicht vollständig lesbar`, l.id));
+      } else if (aenderungen.length > 0) {
+        w.push({ art: 'label', laufId: l.id, issue: nummer, zeit: aenderungen[0].zeit, label: aenderungen[0].label, weitere: aenderungen.length - 1 });
+      }
+    }
+
+    // P2
+    if (!prs.ok) {
+      w.push(nicht('PRs nicht vollständig lesbar', l.id));
+      continue;
+    }
+
+    const danach = prs.gemergt.filter(p => p.zeit > l.start).map(p => p.nummer).sort((a, b) => a - b);
+
+    if (danach.length > 0) {
+      w.push({ art: 'gemergt', laufId: l.id, issue: nummer, prs: danach });
+    } else if (prs.offen.length > 0) {
+      w.push({ art: 'offen', laufId: l.id, issue: nummer, prs: [...prs.offen] });
+    }
+  }
+
+  return w;
+}

@@ -8,6 +8,9 @@
    "ref": "wp/79-agent-44765669207-1",
    "sha": "32e7691ba585e4a2d74cc975f6117971f2933a9b"
   },
+  "base": {
+   "ref": "main"
+  },
   "user": {
    "login": "noah04091-agenten-probe-cloud-bot[bot]"
   },
@@ -22,6 +25,9 @@
   "head": {
    "ref": "wp/26-a6-js-text-12-runden",
    "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "base": {
+   "ref": "main"
   },
   "user": {
    "login": "noah04091-agent"
