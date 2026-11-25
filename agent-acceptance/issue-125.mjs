@@ -69,6 +69,9 @@ function generator(start) {
   };
 }
 
+// Obere Bits des Generators: die unteren Bits dieses Generators haben kurze Perioden.
+const oben = (n, m) => Math.floor(n() / 65536) % m;
+
 // Pflichtfaelle aus Issue #125 mit ausdruecklich erwartetem Wert, zusaetzlich zum Vergleich mit a ** b.
 const pflicht = [
   [[2, 10], 1024],
@@ -121,7 +124,13 @@ const grenz = [
   [['abc', 2], NaN],
 ];
 
-const festPotenz = [...pflicht, ...grenz];
+// Feste Praezisionsfaelle: nichttriviale Gleitkommawerte, Soll ist exakt a ** b. Ausgewaehlt nach Messung
+// unter Node 24.22.2: jeder Fall ausser 1.1 ** 10 trennt sowohl naive wiederholte Multiplikation als auch
+// Quadrieren mit gewoehnlicher Multiplikation von a ** b (1.1 ** 10 trennt nur das Quadrieren).
+const praezision = [
+  [0.1, 7], [0.1, -7], [1.0000001, 1000000], [1.0000001, -1000000], [1.1, 10], [1.1, 20], [1.1, -20],
+  [0.3, 5], [0.9, 27], [1 / 3, 9], [1.001, 1000], [0.99, 365],
+];
 
 // 200 reproduzierbare Paare: Basis -12 bis 12, jede zweite als Bruch mit Achteln, jede siebte als -0;
 // Exponent ganzzahlig von -8 bis 8, jeder fuenfte als Bruch mit Vierteln. Sollwert jeweils a ** b.
@@ -147,12 +156,39 @@ for (let i = 0; i < 100; i += 1) {
   bestandZusatz.push([(naechsterBestand() % 2001) - 1000, (naechsterBestand() % 41) - 20]);
 }
 
-const potenzAlle = [...festPotenz.map(([p]) => p), ...potenzZusatz];
+// Zweiter Zufallsraum mit festem Seed: nichtdyadische Basen k / 10 und k / 3 (k von -40 bis 40),
+// ganzzahlige Exponenten von -30 bis 30. Getrennt davon gebrochene Exponenten und feste Sonderfaelle.
+const naechsterRaum = generator(0x0125e125);
+const raumGanz = [];
+
+for (let i = 0; i < 300; i += 1) {
+  const k = oben(naechsterRaum, 81) - 40;
+  raumGanz.push([i % 2 === 0 ? k / 10 : k / 3, oben(naechsterRaum, 61) - 30]);
+}
+
+const NENNER = [2, 3, 4, 5, 10];
+const raumBruch = [];
+
+for (let i = 0; i < 100; i += 1) {
+  const k = oben(naechsterRaum, 81) - 40;
+  raumBruch.push([i % 2 === 0 ? k / 10 : k / 3, (oben(naechsterRaum, 61) - 30) / NENNER[i % NENNER.length]]);
+}
+
+const raumSonder = [
+  [0.1, 30], [0.1, -30], [1 / 3, 30], [-1 / 3, 29], [-0.1, -29], [1, 30], [-1, -29], [10 / 3, 0], [-0.7, 1], [-0.7, -1],
+  [0.1, 0.5], [-0.1, 0.5], [1e-10, 30], [1e10, 31], [-1e10, -31], [2 / 3, -1 / 3],
+];
+
+const gruppe = (art, faelle, mitSoll) => faelle.map((fall, k) => (mitSoll
+  ? { art: `${art} ${k + 1}`, a: fall[0][0], b: fall[0][1], fest: fall[1] }
+  : { art: `${art} ${k + 1}`, a: fall[0], b: fall[1] }));
+
+const potenzFaelle = [...gruppe('Pflichtfall', pflicht, true), ...gruppe('Grenzfall', grenz, true), ...gruppe('Praezisionsfall', praezision, false), ...gruppe('Zusatzfall', potenzZusatz, false), ...gruppe('Raum ganzzahlig', raumGanz, false), ...gruppe('Raum gebrochen', raumBruch, false), ...gruppe('Raum Sonderfall', raumSonder, false)];
 const bestandAlle = [...bestandFest, ...bestandZusatz];
 const aufrufe = [];
 
 // potenz und hoch bekommen dieselben Faelle: hoch bleibt unveraendert a ** b.
-for (const [a, b] of potenzAlle) {
+for (const { a, b } of potenzFaelle) {
   aufrufe.push(['potenz', [a, b]], ['hoch', [a, b]]);
 }
 
@@ -175,16 +211,15 @@ assert.strictEqual(antwort.ergebnisse.length, aufrufe.length, 'Sonde lieferte ni
 
 let i = 0;
 
-for (const [k, [a, b]] of potenzAlle.entries()) {
-  const art = k < pflicht.length ? 'Pflichtfall' : (k < festPotenz.length ? 'Grenzfall' : `Zusatzfall ${k + 1 - festPotenz.length}`);
+for (const { art, a, b, fest } of potenzFaelle) {
   const soll = a ** b;
   const istPotenz = wert(antwort.ergebnisse[i], `${art}: potenz(${zeige(a)}, ${zeige(b)})`);
   const istHoch = wert(antwort.ergebnisse[i + 1], `${art}: hoch(${zeige(a)}, ${zeige(b)})`);
   assert.strictEqual(istPotenz, soll, `${art}: potenz(${zeige(a)}, ${zeige(b)}) liefert nicht exakt a ** b`);
   assert.strictEqual(istHoch, soll, `${art}: hoch(${zeige(a)}, ${zeige(b)}) wurde beeintraechtigt`);
 
-  if (k < festPotenz.length) {
-    assert.strictEqual(istPotenz, festPotenz[k][1], `${art}: potenz(${zeige(a)}, ${zeige(b)}) muss ${zeige(festPotenz[k][1])} liefern`);
+  if (fest !== undefined) {
+    assert.strictEqual(istPotenz, fest, `${art}: potenz(${zeige(a)}, ${zeige(b)}) muss ${zeige(fest)} liefern`);
   }
 
   i += 2;
