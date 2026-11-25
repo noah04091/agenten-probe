@@ -111,6 +111,19 @@ nach einem Auftrag keine Vorprüfung mehr; der Auftrag selbst und die Pflichtche
 ist kein Pflichtcheck). Ein laufender Prüflauf wird mit `gh run cancel <LAUF> -R noah04091/agenten-probe` beendet.
 Details in Abschnitt 8.
 
+**KI-Prüfer abschalten (B2.3a), genau in dieser Reihenfolge:**
+1. Workflow deaktivieren: `gh workflow disable agent-pruefer-ki.yml -R noah04091/agenten-probe`. Danach startet nach
+   einer Vorprüfung keine Freigabeanfrage mehr.
+2. Wartende Freigaben ablehnen: `gh run list -R noah04091/agenten-probe --workflow agent-pruefer-ki.yml --status waiting`,
+   dann je Lauf
+   `gh api --method POST repos/noah04091/agenten-probe/actions/runs/<LAUF>/pending_deployments -F "environment_ids[]=28418332669" -f state=rejected -f comment="Notabschaltung"`.
+3. Ab B2.3b zusätzlich: den Schlüssel im Environment `claude-pruefer` löschen und im Anthropic-Workspace widerrufen.
+
+⚠️ **Löschen des Environments allein ist keine Notabschaltung.** Ein Lauf, der `claude-pruefer` nennt, legt das
+Environment neu an, dann ohne Pflichtprüfer und ohne Branch-Regel (Hinweis H6 aus dem Plan, nicht gemessen; eine Probe
+würde das Environment ändern). Der Vorjob erkennt eine solche Neuanlage an der abweichenden ID und Konfiguration und
+stoppt (`konfig-abweichung`), das ersetzt aber nicht das Abschalten des Workflows in Schritt 1.
+
 **Nicht mehr gültig:** `CODE_PILOT_ENABLED` steuert diese Pipeline nicht. Die Variable bleibt ungesetzt;
 sie zu setzen oder zu löschen hat keine Wirkung auf `agent-auftrag.yml`.
 
@@ -138,7 +151,7 @@ Nur in dieser Reihenfolge, nie automatisch:
 | Bot-Token | Token von `noah04091-agent` läuft am **09.12.2026** ab (R7) |
 | App | GitHub-App `noah04091-agenten-probe-cloud-bot`; ihren privaten Schlüssel im Environment nur der Eigentümer |
 | Profile und Abnahmen | nur per PR auf `main`; Profiländerungen getrennt von anderen Änderungen (Trennregel in `schutz.yml`) |
-| CI und Wachen | alle vier Pflichtchecks; die Wache `test/a8-einziger-agentenpfad.test.mjs` erlaubt genau fünf Workflows (seit B2.1 dazu `agent-pruefer.yml` mit eigenen Regeln) und nur einen Agentenpfad. Wachen nie abschwächen, um rote Checks zu beseitigen |
+| CI und Wachen | alle vier Pflichtchecks; die Wache `test/a8-einziger-agentenpfad.test.mjs` erlaubt genau sechs Workflows (seit B2.1 dazu `agent-pruefer.yml`, seit B2.3a `agent-pruefer-ki.yml`, beide mit eigenen Regeln) und nur einen Agentenpfad. Wachen nie abschwächen, um rote Checks zu beseitigen |
 | Gleichzeitigkeit | immer nur ein Lauf aus Issue-Ereignissen (Gruppe `agent-auftrag-live`, ohne Abbruch); dazu zählt **jedes** `labeled`-Ereignis im Repository. Ein weiterer Lauf wartet; GitHub ersetzt dabei einen schon wartenden durch den neueren. Ein so verdrängter `bot-auftrag`-Lauf hat seine Startfreigabe trotzdem verbraucht (aus dem Verhalten von GitHub abgeleitet, nicht live erprobt). Deshalb während eines Laufs keine Labels setzen |
 | Historische Workflow-Einträge | GitHub führt `code-pilot-start-diagnose.yml` noch als Eintrag, ohne Datei auf einem Zweig; nicht ausführbar. Alte Workflow-Dateien liegen noch auf `wp/28-…`, `wp/35-…` und dem Zweig von PR #96, ohne greifenden Auslöser |
 | Regelmäßige Prüfung | monatlich: `gh run list -R noah04091/agenten-probe --limit 20`, offene Draft-PRs, Zweige `wp/*`, Ablaufdaten oben, dass `CODE_PILOT_ENABLED` nicht gesetzt ist |
@@ -183,3 +196,75 @@ Ergebnisdatei, keine Rechte, eigener Nutzer, nur die Variablen Token, Lauf-ID, R
 einem Fall für alle vier Ergebnisse. Er ist kein Pflichtcheck.
 
 **Notabschaltung:** `gh workflow disable agent-pruefer.yml -R noah04091/agenten-probe` (Abschnitt 5).
+
+## 9. KI-Prüfer: Freigabeschranke (B2.3a)
+
+> **Gebaut, nicht aktiv.** In B2.3a läuft nach der Freigabe kein KI-Aufruf, kein Schlüssel und kein Checkout, nur eine
+> Logzeile. Die Live-Proben (Plan B2.3a, L0 bis L8) stehen aus; nichts davon ist live belegt.
+
+**Zweck:** Bevor ab B2.3b ein KI-Prüfer Geld kostet, fragt GitHub Noah um Freigabe, und zwar nur für einen fachlich
+prüfbaren Gegenstand. Ein nicht prüfbares Ergebnis der Vorprüfung erzeugt **keine** Freigabeanfrage.
+
+**Ablauf:** Nach jeder erfolgreichen Vorprüfung (Workflow `Agent-Vorpruefung` auf `main`) startet
+`.github/workflows/agent-pruefer-ki.yml` (Workflow `Agent-Pruefer-KI`), oder Noah startet ihn von Hand.
+1. Job `schranke_vorpruefung` (nur `actions: read` und `pull-requests: read`, kein Environment, kein Checkout) prüft in
+   fester Reihenfolge; der erste Fehler entscheidet:
+   1. Quelle: Ereignis, Lauf-ID und Versuch im festen Format.
+   2. Environment `claude-pruefer` gegen das vollständige Soll: ID `28418332669`, genau ein Pflichtprüfer
+      (`noah04091`), keine Admin-Umgehung, genau eine Branch-Regel `main`, keine weitere Regel.
+   3. Quelllauf: Workflow `agent-pruefer.yml` (ID `429024670`), Zweig `main`, dieses Repository, Ereignis
+      `workflow_run` oder `workflow_dispatch` (dann nur durch `noah04091`), abgeschlossen und erfolgreich, und der
+      genannte Versuch ist der jüngste.
+   4. Job „Vorpruefung Agenten-PR“ genau dieses Versuchs erfolgreich.
+   5. Logzeile `A6-PRUEFER` nach denselben Regeln wie die Zentrale (Zeitstempel ab, nur Zeilen, die danach direkt mit
+      `A6-PRUEFER ` beginnen, genau eine, strenges Muster). Nur `auffaelligkeiten` oder `keine-auffaelligkeiten` mit
+      bekanntem PR und Kopf gehen weiter.
+   6. PR: offen, Kopf gleich der Logzeile, Basis `main`, Autor die App `noah04091-agenten-probe-cloud-bot[bot]`
+      (Typ `Bot`), Zweig `wp/<ISSUE>-agent-<AUFTRAG>-1` mit dem Auftragslauf aus der Logzeile.
+   7. Doppelsperre: Derselbe Prüfumfang (PR und Kopf) wurde in keinem Versuch keines Laufs dieses Workflows schon
+      freigegeben, frühere Versuche des eigenen Laufs eingeschlossen. Gegenprobe über `filter=all`; jede nicht lesbare
+      oder widersprüchliche Antwort stoppt.
+2. Nur wenn alles stimmt: Job `schranke` mit Environment `claude-pruefer`, ohne Rechte und ohne Token. Er wartet auf
+   Noahs Freigabe, prüft die übergebenen Werte erneut gegen ihr Format und schreibt genau eine Zeile.
+
+**Logzeilen** (genau eine je Job):
+- Vorjob, Stopp: `A6-PRUEFER-SCHRANKE repo noah04091/agenten-probe quelle <lauf>-<versuch> ergebnis keine-anfrage grund <code>`
+  (vor bestandener Formatprüfung `quelle unbekannt`), Lauf rot, keine Anfrage.
+- Vorjob, bestanden: `A6-PRUEFER-SCHRANKE repo noah04091/agenten-probe quelle <lauf>-<versuch> auftrag <id> pr <n> kopf <sha> ergebnis anfrage`
+- Schrankenjob nach der Freigabe: `A6-PRUEFER-SCHRANKE repo noah04091/agenten-probe quelle <lauf>-<versuch> auftrag <id> pr <n> kopf <sha> workflow-sha <sha> ereignis <workflow_run|workflow_dispatch> freigegeben`
+
+`kopf` ist immer der PR-Kopf (aus Vorprüfungszeile und PR). `workflow-sha` ist nur der Stand des KI-Workflows. Beide
+werden nie gleichgesetzt.
+
+**Gründe:**
+
+| Gruppe | Codes |
+|---|---|
+| Environment | `konfig-fehlt` (404), `konfig-nicht-lesbar`, `konfig-abweichung` |
+| Quelle | `quelle-format`, `quelle-nicht-lesbar`, `quelle-herkunft`, `quelle-nicht-erfolgreich`, `veralteter-versuch` |
+| Job und Log | `job-fehlt`, `job-mehrdeutig`, `job-nicht-erfolgreich`, `log-nicht-lesbar`, `zeile-fehlt`, `zeile-mehrdeutig`, `zeile-ungueltig`, `kein-auftrag` |
+| Ergebnis | `nicht-pruefbar`, `ausstehend`, `pr-unbekannt` |
+| PR | `pr-nicht-lesbar`, `pr-nicht-offen`, `kopf-geaendert`, `pr-herkunft` |
+| Doppelsperre | `verlauf-nicht-lesbar`, `verlauf-unvollstaendig`, `verlauf-widerspruch`, `zu-viele-laeufe` (mehr als 100 Läufe), `zu-viele-abfragen` (mehr als 400 Abrufe), `parallel-lauf`, `bereits-freigegeben` |
+
+**Freigeben oder ablehnen:** in der Lauf-Ansicht „Review deployments“, `claude-pruefer`, oder:
+`gh api --method POST repos/noah04091/agenten-probe/actions/runs/<LAUF>/pending_deployments -F "environment_ids[]=28418332669" -f state=approved -f comment="<Grund>"`
+(ablehnen mit `state=rejected`). Vor der Freigabe Gegenstand und Vorprüfungsergebnis ansehen. Eine Anfrage, die du
+nicht erwartet hast, wird abgelehnt.
+
+**Von Hand anstoßen** (nur `noah04091`, nur auf `main`):
+`gh workflow run agent-pruefer-ki.yml -R noah04091/agenten-probe --ref main -f lauf=<LAUF der Vorprüfung> -f versuch=<VERSUCH>`
+
+**Gleichzeitigkeit:** eine Gruppe für den ganzen Workflow (`agent-pruefer-ki`, ohne Abbruch). Ein Lauf, der auf die
+Freigabe wartet, hält die Gruppe; ein zweiter wartet dahinter. **Hinweis H8** (nicht gemessen): GitHub hält je Gruppe
+nur einen wartenden Lauf, ein dritter verdrängt den zweiten. Das ist kein Verlust: nicht freigegeben heißt nicht
+geprüft, ein erneuter Dispatch ist möglich. Ablehnen gibt die Gruppe frei.
+
+**Grenzen:** Zwischen Vorjob und Freigabe kann sich etwas ändern (PR-Kopf, Environment). In B2.3a ist das folgenlos, weil
+nur eine Logzeile läuft. Vor B2.3b ist dieselbe Prüfung nach der Freigabe Pflicht. Ab mehr als 100 Läufen oder 400
+Abrufen stoppt die Schranke grundsätzlich (fail-closed); dann braucht es eine neue Entscheidung. Nach „nur einzelne Jobs
+wiederholen“ stoppt die Doppelsperre später dauerhaft mit `verlauf-widerspruch` (fail-closed). Löschen des Laufs würde
+auch seinen Freigabe-Nachweis entfernen und ist deshalb nur nach gesonderter Prüfung und ausdrücklichem GO zulässig,
+nie automatisch.
+
+**Notabschaltung:** Abschnitt 5, „KI-Prüfer abschalten“.

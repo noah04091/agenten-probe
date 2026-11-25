@@ -1,0 +1,249 @@
+﻿2026-11-24T12:51:10.7729432Z Current runner version: '2.338.2'
+2026-11-24T12:51:10.7746028Z ##[group]Runner Image Provisioner
+2026-11-24T12:51:10.7746692Z Hosted Compute Agent
+2026-11-24T12:51:10.7747139Z Version: 20261111.635
+2026-11-24T12:51:10.7747620Z Commit: b8a594ea514ff44cadb5342986c68b1eac6e22ed
+2026-11-24T12:51:10.7748399Z Build Date: 2026-11-11T01:49:01Z
+2026-11-24T12:51:10.7749013Z Worker ID: {8c390448-9630-441c-9cff-5398d4bafc0e}
+2026-11-24T12:51:10.7749547Z Region: us-west-2
+2026-11-24T12:51:10.7749994Z Cloud: AWS
+2026-11-24T12:51:10.7750371Z ##[endgroup]
+2026-11-24T12:51:10.7751340Z ##[group]Operating System
+2026-11-24T12:51:10.7751786Z Ubuntu
+2026-11-24T12:51:10.7752163Z 24.04.5
+2026-11-24T12:51:10.7752512Z LTS
+2026-11-24T12:51:10.7752922Z ##[endgroup]
+2026-11-24T12:51:10.7753308Z ##[group]Runner Image
+2026-11-24T12:51:10.7753741Z Image: ubuntu-24.04
+2026-11-24T12:51:10.7754155Z Version: 20261116.133.1
+2026-11-24T12:51:10.7755239Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261116.133/images/ubuntu/Ubuntu2404-Readme.md
+2026-11-24T12:51:10.7756331Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261116.133
+2026-11-24T12:51:10.7757022Z ##[endgroup]
+2026-11-24T12:51:10.7758276Z ##[group]GITHUB_TOKEN Permissions
+2026-11-24T12:51:10.7760003Z Actions: read
+2026-11-24T12:51:10.7760447Z Checks: read
+2026-11-24T12:51:10.7760847Z Contents: read
+2026-11-24T12:51:10.7761251Z Issues: read
+2026-11-24T12:51:10.7761620Z Metadata: read
+2026-11-24T12:51:10.7762054Z PullRequests: read
+2026-11-24T12:51:10.7762446Z ##[endgroup]
+2026-11-24T12:51:10.7763940Z Secret source: Actions
+2026-11-24T12:51:10.7764576Z Cache mode: write
+2026-11-24T12:51:10.7765131Z Prepare workflow directory
+2026-11-24T12:51:10.8035010Z Prepare all required actions
+2026-11-24T12:51:10.8070461Z Getting action download info
+2026-11-24T12:51:11.1521813Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-11-24T12:51:13.4916147Z Complete job name: Vorpruefung Agenten-PR
+2026-11-24T12:51:13.5621220Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+2026-11-24T12:51:13.5622704Z with:
+2026-11-24T12:51:13.5623512Z   persist-credentials: false
+2026-11-24T12:51:13.5624480Z   ref: 70dff873bfe9186680eef552e33e1e1d01f4a4dd
+2026-11-24T12:51:13.5625570Z   repository: noah04091/agenten-probe
+2026-11-24T12:51:13.5632787Z   token: ***
+2026-11-24T12:51:13.5633586Z   ssh-strict: true
+2026-11-24T12:51:13.5634403Z   ssh-user: git
+2026-11-24T12:51:13.5635140Z   clean: true
+2026-11-24T12:51:13.5635953Z   sparse-checkout-cone-mode: true
+2026-11-24T12:51:13.5636885Z   fetch-depth: 1
+2026-11-24T12:51:13.5637653Z   fetch-tags: false
+2026-11-24T12:51:13.5638645Z   show-progress: true
+2026-11-24T12:51:13.5639459Z   lfs: false
+2026-11-24T12:51:13.5640222Z   submodules: false
+2026-11-24T12:51:13.5641015Z   set-safe-directory: true
+2026-11-24T12:51:13.5641912Z   allow-unsafe-pr-checkout: false
+2026-11-24T12:51:13.5643076Z env:
+2026-11-24T12:51:13.5644283Z   A6_FUNKTIONEN_SHA256: 3d6011bc293643dedd81c26201a8f6a925520c31650c4895e7ee4856074673a3
+2026-11-24T12:51:13.5646165Z   A6_INTEGRITAET_SHA256: f345b7c75cd24670073d7462419290fae3f139e3c3e2fd8390a241a9c1ab003f
+2026-11-24T12:51:13.5648342Z   A6_PRUEFER_ATTRAPPE_SHA256: 7293424f8178dd94e5ac19e0efca924b8143f02e93a14e9008dd36fb9b6af78b
+2026-11-24T12:51:13.5650321Z   A6_NODE_IMAGE: node@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40
+2026-11-24T12:51:13.5651768Z   A6_NODE_VERSION: v24.22.2
+2026-11-24T12:51:13.5652589Z ##[endgroup]
+2026-11-24T12:51:17.2195199Z Syncing repository: noah04091/agenten-probe
+2026-11-24T12:51:17.2196408Z ##[group]Getting Git version info
+2026-11-24T12:51:17.2196861Z Working directory is '/home/runner/work/agenten-probe/agenten-probe'
+2026-11-24T12:51:17.2197458Z [command]/usr/bin/git version
+2026-11-24T12:51:17.5804619Z git version 2.56.1
+2026-11-24T12:51:17.5819803Z ##[endgroup]
+2026-11-24T12:51:17.5826826Z Temporarily overriding HOME='/home/runner/work/_temp/9602c396-073a-4d3c-801e-4a230de17369' before making global git config changes
+2026-11-24T12:51:17.5827776Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-24T12:51:17.5831563Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agenten-probe/agenten-probe
+2026-11-24T12:51:17.6339391Z Deleting the contents of '/home/runner/work/agenten-probe/agenten-probe'
+2026-11-24T12:51:17.6341561Z ##[group]Determining repository object format
+2026-11-24T12:51:17.6342813Z ##[endgroup]
+2026-11-24T12:51:17.6343601Z ##[group]Initializing the repository
+2026-11-24T12:51:17.6345781Z [command]/usr/bin/git init /home/runner/work/agenten-probe/agenten-probe
+2026-11-24T12:51:17.6908396Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-24T12:51:17.6909140Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-24T12:51:17.6909615Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-24T12:51:17.6910083Z hint: call:
+2026-11-24T12:51:17.6910336Z hint:
+2026-11-24T12:51:17.6910662Z hint: 	git config --global init.defaultBranch <name>
+2026-11-24T12:51:17.6911010Z hint:
+2026-11-24T12:51:17.6911365Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-24T12:51:17.6911822Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-24T12:51:17.6912217Z hint:
+2026-11-24T12:51:17.6912485Z hint: 	git branch -m <name>
+2026-11-24T12:51:17.6912763Z hint:
+2026-11-24T12:51:17.6919274Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-24T12:51:17.6920039Z Initialized empty Git repository in /home/runner/work/agenten-probe/agenten-probe/.git/
+2026-11-24T12:51:17.6925941Z [command]/usr/bin/git remote add origin https://github.com/noah04091/agenten-probe
+2026-11-24T12:51:17.6974383Z ##[endgroup]
+2026-11-24T12:51:17.6975194Z ##[group]Disabling automatic garbage collection
+2026-11-24T12:51:17.6977340Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-24T12:51:17.7000729Z ##[endgroup]
+2026-11-24T12:51:17.7001271Z ##[group]Setting up auth
+2026-11-24T12:51:17.7001632Z Removing SSH command configuration
+2026-11-24T12:51:17.7005442Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-24T12:51:17.7032399Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-24T12:51:18.0835686Z Removing HTTP extra header
+2026-11-24T12:51:18.0840360Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-24T12:51:18.0864507Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-24T12:51:18.1007747Z Removing includeIf entries pointing to credentials config files
+2026-11-24T12:51:18.1012577Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-24T12:51:18.1038687Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-24T12:51:18.1186898Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-bb012921-f83a-4f26-a0b6-f2d791ed27b7.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-24T12:51:18.1213595Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/agenten-probe/agenten-probe/.git.path /home/runner/work/_temp/git-credentials-bb012921-f83a-4f26-a0b6-f2d791ed27b7.config
+2026-11-24T12:51:18.1235224Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/agenten-probe/agenten-probe/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-bb012921-f83a-4f26-a0b6-f2d791ed27b7.config
+2026-11-24T12:51:18.1257070Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-bb012921-f83a-4f26-a0b6-f2d791ed27b7.config
+2026-11-24T12:51:18.1280501Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-bb012921-f83a-4f26-a0b6-f2d791ed27b7.config
+2026-11-24T12:51:18.1301554Z ##[endgroup]
+2026-11-24T12:51:18.1301952Z ##[group]Fetching the repository
+2026-11-24T12:51:18.1307529Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin 70dff873bfe9186680eef552e33e1e1d01f4a4dd
+2026-11-24T12:51:18.8801884Z From https://github.com/noah04091/agenten-probe
+2026-11-24T12:51:18.8802439Z  * branch            70dff873bfe9186680eef552e33e1e1d01f4a4dd -> FETCH_HEAD
+2026-11-24T12:51:18.8810311Z [command]/usr/bin/git rev-parse --verify --quiet 70dff873bfe9186680eef552e33e1e1d01f4a4dd^{object}
+2026-11-24T12:51:18.8831517Z 70dff873bfe9186680eef552e33e1e1d01f4a4dd
+2026-11-24T12:51:18.8833837Z ##[endgroup]
+2026-11-24T12:51:18.8834384Z ##[group]Determining the checkout info
+2026-11-24T12:51:18.8835022Z ##[endgroup]
+2026-11-24T12:51:18.8838678Z [command]/usr/bin/git sparse-checkout disable
+2026-11-24T12:51:18.8895040Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-24T12:51:18.8917694Z ##[group]Checking out the ref
+2026-11-24T12:51:18.8921570Z [command]/usr/bin/git checkout --progress --force 70dff873bfe9186680eef552e33e1e1d01f4a4dd
+2026-11-24T12:51:18.9085561Z Note: switching to '70dff873bfe9186680eef552e33e1e1d01f4a4dd'.
+2026-11-24T12:51:18.9085986Z 
+2026-11-24T12:51:18.9086476Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-11-24T12:51:18.9087033Z changes and commit them, and you can discard any commits you make in this
+2026-11-24T12:51:18.9087577Z state without impacting any branches by switching back to a branch.
+2026-11-24T12:51:18.9087934Z 
+2026-11-24T12:51:18.9088373Z If you want to create a new branch to retain commits you create, you may
+2026-11-24T12:51:18.9089207Z do so (now or later) by using -c with the switch command. Example:
+2026-11-24T12:51:18.9089472Z 
+2026-11-24T12:51:18.9089665Z   git switch -c <new-branch-name>
+2026-11-24T12:51:18.9089882Z 
+2026-11-24T12:51:18.9090042Z Or undo this operation with:
+2026-11-24T12:51:18.9090281Z 
+2026-11-24T12:51:18.9090390Z   git switch -
+2026-11-24T12:51:18.9090571Z 
+2026-11-24T12:51:18.9090888Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-11-24T12:51:18.9091265Z 
+2026-11-24T12:51:18.9091805Z HEAD is now at 70dff87 Merge pull request #122 from noah04091/owner/b2-1-vorpruefung
+2026-11-24T12:51:18.9094438Z ##[endgroup]
+2026-11-24T12:51:18.9129013Z [command]/usr/bin/git log -1 --format=%H
+2026-11-24T12:51:18.9146122Z 70dff873bfe9186680eef552e33e1e1d01f4a4dd
+2026-11-24T12:51:18.9151901Z ##[group]Removing auth
+2026-11-24T12:51:18.9152452Z Removing SSH command configuration
+2026-11-24T12:51:18.9154188Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-24T12:51:18.9176584Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-24T12:51:18.9322588Z Removing HTTP extra header
+2026-11-24T12:51:18.9325557Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-24T12:51:18.9350167Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-24T12:51:18.9495276Z Removing includeIf entries pointing to credentials config files
+2026-11-24T12:51:18.9497477Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-24T12:51:18.9520310Z includeif.gitdir:/home/runner/work/agenten-probe/agenten-probe/.git.path
+2026-11-24T12:51:18.9521270Z includeif.gitdir:/home/runner/work/agenten-probe/agenten-probe/.git/worktrees/*.path
+2026-11-24T12:51:18.9528931Z includeif.gitdir:/github/workspace/.git.path
+2026-11-24T12:51:18.9529476Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-11-24T12:51:18.9530433Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/agenten-probe/agenten-probe/.git.path
+2026-11-24T12:51:18.9543832Z /home/runner/work/_temp/git-credentials-bb012921-f83a-4f26-a0b6-f2d791ed27b7.config
+2026-11-24T12:51:18.9550481Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/agenten-probe/agenten-probe/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-bb012921\-f83a\-4f26\-a0b6\-f2d791ed27b7\.config
+2026-11-24T12:51:18.9574925Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/agenten-probe/agenten-probe/.git/worktrees/*.path
+2026-11-24T12:51:18.9592264Z /home/runner/work/_temp/git-credentials-bb012921-f83a-4f26-a0b6-f2d791ed27b7.config
+2026-11-24T12:51:18.9597819Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/agenten-probe/agenten-probe/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-bb012921\-f83a\-4f26\-a0b6\-f2d791ed27b7\.config
+2026-11-24T12:51:18.9622109Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-11-24T12:51:18.9639985Z /github/runner_temp/git-credentials-bb012921-f83a-4f26-a0b6-f2d791ed27b7.config
+2026-11-24T12:51:18.9644314Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-bb012921\-f83a\-4f26\-a0b6\-f2d791ed27b7\.config
+2026-11-24T12:51:18.9668701Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-11-24T12:51:18.9684792Z /github/runner_temp/git-credentials-bb012921-f83a-4f26-a0b6-f2d791ed27b7.config
+2026-11-24T12:51:18.9689608Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-bb012921\-f83a\-4f26\-a0b6\-f2d791ed27b7\.config
+2026-11-24T12:51:18.9714501Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-24T12:51:18.9854431Z Removing credentials config '/home/runner/work/_temp/git-credentials-bb012921-f83a-4f26-a0b6-f2d791ed27b7.config'
+2026-11-24T12:51:18.9860640Z ##[endgroup]
+2026-11-24T12:51:19.0031422Z ##[group]Run set -euo pipefail
+2026-11-24T12:51:19.0031794Z [36;1mset -euo pipefail[0m
+2026-11-24T12:51:19.0032181Z [36;1mtest "$(git rev-parse HEAD)" = "$GITHUB_SHA"[0m
+2026-11-24T12:51:19.0032558Z [36;1m[[ "$A6_PRUEFER_LAUF" =~ ^[1-9][0-9]{0,15}$ ]] || { echo "A6-START lauf" >&2; exit 1; }[0m
+2026-11-24T12:51:19.0033020Z [36;1mprintf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status[0m
+2026-11-24T12:51:19.0033415Z [36;1msource .github/agent/a6-funktionen.sh[0m
+2026-11-24T12:51:19.0033705Z [36;1ma6_image_laden "$A6_NODE_IMAGE"[0m
+2026-11-24T12:51:19.0034045Z [36;1mordner="$RUNNER_TEMP/a6-pruefer"[0m
+2026-11-24T12:51:19.0034302Z [36;1mergebnis="$ordner/ergebnis.md"[0m
+2026-11-24T12:51:19.0034579Z [36;1mmkdir -m 700 "$ordner"[0m
+2026-11-24T12:51:19.0034835Z [36;1minstall -m 600 /dev/null "$ergebnis"[0m
+2026-11-24T12:51:19.0035092Z [36;1mrc=0[0m
+2026-11-24T12:51:19.0035525Z [36;1mdocker run --rm --pull=never --network bridge --read-only --cap-drop ALL \[0m
+2026-11-24T12:51:19.0036006Z [36;1m  --security-opt no-new-privileges --pids-limit 64 --memory 512m --cpus 1 \[0m
+2026-11-24T12:51:19.0036457Z [36;1m  --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777 \[0m
+2026-11-24T12:51:19.0036888Z [36;1m  --mount "type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE,readonly" \[0m
+2026-11-24T12:51:19.0037329Z [36;1m  --mount "type=bind,src=$ergebnis,dst=/a6/ergebnis.md" \[0m
+2026-11-24T12:51:19.0037732Z [36;1m  --workdir "$GITHUB_WORKSPACE" --env PATH=/usr/local/bin:/usr/bin:/bin \[0m
+2026-11-24T12:51:19.0038466Z [36;1m  --env A6_LESE_TOKEN --env A6_PRUEFER_LAUF --env GITHUB_REPOSITORY \[0m
+2026-11-24T12:51:19.0038819Z [36;1m  "$A6_NODE_IMAGE" /bin/sh -euc '[0m
+2026-11-24T12:51:19.0039142Z [36;1m    unset NODE_VERSION YARN_VERSION[0m
+2026-11-24T12:51:19.0039512Z [36;1m    if env | grep -q "^NODE_"; then echo "A6-START node-umgebung" >&2; exit 3; fi[0m
+2026-11-24T12:51:19.0039986Z [36;1m    [ "$(node --version)" = "$1" ] || { echo "A6-START node-version" >&2; exit 3; }[0m
+2026-11-24T12:51:19.0040500Z [36;1m    printf "%s  %s\n" "$2" scripts/agent-code-integritaet.mjs | sha256sum -c --status || { echo "A6-START anker" >&2; exit 4; }[0m
+2026-11-24T12:51:19.0040988Z [36;1m    node scripts/agent-code-integritaet.mjs || exit 4[0m
+2026-11-24T12:51:19.0041339Z [36;1m    exec node scripts/agent-pruefer-vorpruefung.mjs[0m
+2026-11-24T12:51:19.0041746Z [36;1m  ' a6 "$A6_NODE_VERSION" "$A6_INTEGRITAET_SHA256" || rc=$?[0m
+2026-11-24T12:51:19.0042073Z [36;1mif [[ "$rc" == "4" ]]; then[0m
+2026-11-24T12:51:19.0042404Z [36;1m  # Integritaet nicht belegt: nicht pruefbar, vor jeder Bewertung, Lauf rot.[0m
+2026-11-24T12:51:19.0043044Z [36;1m  echo "A6-PRUEFER repo noah04091/agenten-probe pr unbekannt kopf unbekannt basis unbekannt lauf $A6_PRUEFER_LAUF ergebnis nicht-pruefbar befunde 0 hinweise 0"[0m
+2026-11-24T12:51:19.0043587Z [36;1m  echo "A6-FEHLER integritaet"[0m
+2026-11-24T12:51:19.0044327Z [36;1m  printf '%s\n' '## Vorprüfung Agenten-PR (ohne Claude)' '' 'Ergebnis: nicht-pruefbar. Grund: integritaet. Der Prüfcode ist nicht belegt; es wurde nichts bewertet.' '' 'Dieser Bericht ist keine Freigabe. Über den Merge entscheidet Noah.' > "$ergebnis"[0m
+2026-11-24T12:51:19.0045046Z [36;1m  exit 1[0m
+2026-11-24T12:51:19.0045252Z [36;1mfi[0m
+2026-11-24T12:51:19.0045453Z [36;1mexit "$rc"[0m
+2026-11-24T12:51:19.3097525Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-24T12:51:19.3097934Z env:
+2026-11-24T12:51:19.3098500Z   A6_FUNKTIONEN_SHA256: 3d6011bc293643dedd81c26201a8f6a925520c31650c4895e7ee4856074673a3
+2026-11-24T12:51:19.3098977Z   A6_INTEGRITAET_SHA256: f345b7c75cd24670073d7462419290fae3f139e3c3e2fd8390a241a9c1ab003f
+2026-11-24T12:51:19.3099534Z   A6_PRUEFER_ATTRAPPE_SHA256: 7293424f8178dd94e5ac19e0efca924b8143f02e93a14e9008dd36fb9b6af78b
+2026-11-24T12:51:19.3100012Z   A6_NODE_IMAGE: node@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40
+2026-11-24T12:51:19.3100528Z   A6_NODE_VERSION: v24.22.2
+2026-11-24T12:51:19.3102616Z   A6_LESE_TOKEN: ***
+2026-11-24T12:51:19.3102883Z   A6_PRUEFER_LAUF: 45061471286
+2026-11-24T12:51:19.3103136Z ##[endgroup]
+2026-11-24T12:51:37.2077048Z A6-PRUEFER repo noah04091/agenten-probe pr unbekannt kopf unbekannt basis 6fbebf1ee853996878cc4876d216538eae50e85d lauf 45061471286 ergebnis nicht-pruefbar befunde 0 hinweise 0
+2026-11-24T12:51:37.2676976Z ##[group]Run set -euo pipefail
+2026-11-24T12:51:37.2677316Z [36;1mset -euo pipefail[0m
+2026-11-24T12:51:37.2677865Z [36;1mprintf '%s  %s\n' "$A6_FUNKTIONEN_SHA256" .github/agent/a6-funktionen.sh | sha256sum -c --status || { echo "::warning title=A6-PRUEFER::funktionen-hash"; exit 1; }[0m
+2026-11-24T12:51:37.2678687Z [36;1msource .github/agent/a6-funktionen.sh[0m
+2026-11-24T12:51:37.2679001Z [36;1mdatei="$RUNNER_TEMP/a6-pruefer/ergebnis.md"[0m
+2026-11-24T12:51:37.2679445Z [36;1ma6_bericht_ziel "${GITHUB_STEP_SUMMARY:-}" || { echo "::warning title=A6-PRUEFER::ziel-ungueltig"; exit 1; }[0m
+2026-11-24T12:51:37.2679974Z [36;1m[[ -f "$datei" && ! -L "$datei" && -s "$datei" ]] || { echo "::warning title=A6-PRUEFER::kein-bericht"; exit 1; }[0m
+2026-11-24T12:51:37.2680456Z [36;1mhead -c 65536 -- "$datei" >> "$GITHUB_STEP_SUMMARY"[0m
+2026-11-24T12:51:37.2706328Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-24T12:51:37.2706654Z env:
+2026-11-24T12:51:37.2707383Z   A6_FUNKTIONEN_SHA256: 3d6011bc293643dedd81c26201a8f6a925520c31650c4895e7ee4856074673a3
+2026-11-24T12:51:37.2707969Z   A6_INTEGRITAET_SHA256: f345b7c75cd24670073d7462419290fae3f139e3c3e2fd8390a241a9c1ab003f
+2026-11-24T12:51:37.2708595Z   A6_PRUEFER_ATTRAPPE_SHA256: 7293424f8178dd94e5ac19e0efca924b8143f02e93a14e9008dd36fb9b6af78b
+2026-11-24T12:51:37.2709173Z   A6_NODE_IMAGE: node@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40
+2026-11-24T12:51:37.2709556Z   A6_NODE_VERSION: v24.22.2
+2026-11-24T12:51:37.2709827Z ##[endgroup]
+2026-11-24T12:51:37.2910341Z Post job cleanup.
+2026-11-24T12:51:37.3555238Z [command]/usr/bin/git version
+2026-11-24T12:51:37.3583364Z git version 2.56.1
+2026-11-24T12:51:37.3607938Z Temporarily overriding HOME='/home/runner/work/_temp/873e0a42-3530-4cf8-aa05-17fb7c5e1b9e' before making global git config changes
+2026-11-24T12:51:37.3609055Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-24T12:51:37.3610728Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agenten-probe/agenten-probe
+2026-11-24T12:51:37.3635782Z Removing SSH command configuration
+2026-11-24T12:51:37.3643068Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-24T12:51:37.3666744Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-24T12:51:37.3834066Z Removing HTTP extra header
+2026-11-24T12:51:37.3837912Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-24T12:51:37.3860565Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-24T12:51:37.4014914Z Removing includeIf entries pointing to credentials config files
+2026-11-24T12:51:37.4019880Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-24T12:51:37.4040634Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-24T12:51:37.4320060Z Cleaning up orphan processes
