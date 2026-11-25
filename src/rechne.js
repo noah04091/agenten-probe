@@ -24,7 +24,11 @@ function dividiere(a, b) {
   return a / b;
 }
 
-module.exports = { addiere, subtrahiere, multipliziere, hoch, dividiere };
+function potenz(a, b) {
+  return a ** b;
+}
+
+module.exports = { addiere, subtrahiere, multipliziere, hoch, dividiere, potenz };
 
 // T14
 // T16 a
